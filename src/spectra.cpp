@@ -36,12 +36,14 @@ Spectrum Spectra::fetch(std::size_t index)
   // FIXME: Throw an error if data_ is a nullptr.
   // FIXME: Write a better way of getting the spectrum index
   auto array_index(data_->array_index());
-  auto spectra_index_column = array_index.columns()[0];
+  auto spectra_index_column =
+      data_->columns_to_fields({array_index.columns()[0]})[0];
 
   using enum Schema::PSI::DataType;
   Query query = Query::Predicate<Int64>::equal_to(spectra_index_column, index);
 
-  auto map = data_->read_arrays(query, array_index.columns());
+  auto map =
+      data_->read_arrays(query, data_->columns_to_fields(array_index.columns()));
   return Spectrum(array_index, std::move(map));
 }
 

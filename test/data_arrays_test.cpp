@@ -16,6 +16,8 @@ directory of this repository.
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(can_read_mz_array)
 {
+  // FIXME: Use proper field access.
+
   using namespace MzPeak;
 
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
@@ -25,11 +27,12 @@ BOOST_AUTO_TEST_CASE(can_read_mz_array)
   BOOST_TEST((entry != mzpeak.files().end()));
 
   auto parquet = mzpeak.parquet(*entry);
+  auto point = *parquet->structs().find("point")->second;
   Data::Arrays data(std::move(parquet));
 
   auto array_index = data.array_index();
-  auto spectra_index_column = array_index.columns()[0];
-  auto mz_column = array_index.columns()[1];
+  auto spectra_index_column = point.field("spectrum_index")->get();
+  auto mz_column = point.field("mz")->get();
 
   using enum Schema::PSI::DataType;
   Query query = Query::Predicate<Int64>::equal_to(spectra_index_column, 0);

@@ -26,33 +26,23 @@ using rec_batch_t = std::shared_ptr<arrow::RecordBatch>;
 
 /******************************************************************************/
 /// Try to get an array out of a batch.
-std::shared_ptr<arrow::Array>
-array_from_batch(arrow::RecordBatch& batch,
-                 const Schema::ArrayIndex& index,
-                 const Schema::ArrayIndex::Column& column)
+std::shared_ptr<arrow::Array> array_from_batch(arrow::RecordBatch& batch,
+                                               const Util::Struct& index,
+                                               const Util::Struct::Field& column)
 {
-  std::shared_ptr<arrow::Array> col;
-  std::optional<int> i = index.column_index(column);
+  std::shared_ptr<arrow::Array> col(batch.column(index.index()));
 
-  // Could it be in a struct?
-  if (col = batch.GetColumnByName(index.prefix()); col && i) {
-    if (col->type_id() == arrow::Type::STRUCT) {
-      auto sa = std::static_pointer_cast<arrow::StructArray>(col);
-      return sa->field(*i);
-    }
+  if (col && col->type_id() == arrow::Type::STRUCT) {
+    auto sa = std::static_pointer_cast<arrow::StructArray>(col);
+    return sa->field(column.index());
   }
 
-  // What if I can access it it directly?
-  if (col = batch.GetColumnByName(column.path); col) {
-    return col;
-  }
-
-  throw ParquetError("column not in batch: " + column.path);
+  throw ParquetError("column not in batch: " + column.name());
 }
 
 /******************************************************************************/
 struct Batch {
-  Batch(std::shared_ptr<arrow::RecordBatch> batch, Schema::ArrayIndex& index)
+  Batch(std::shared_ptr<arrow::RecordBatch> batch, const Util::Struct& index)
       : batch_(std::move(batch))
       , array_index_(index)
       , slice_offset_(0)
@@ -61,8 +51,7 @@ struct Batch {
   }
 
   // Return an array with caching.
-  std::shared_ptr<arrow::Array>
-  cached_array(const Schema::ArrayIndex::Column& column);
+  std::shared_ptr<arrow::Array> cached_array(const Util::Struct::Field& column);
 
   // Returned a sliced batch.
   std::shared_ptr<arrow::RecordBatch> slice_batch(const Query&);
@@ -71,7 +60,7 @@ struct Batch {
   void query_batch(const Query&);
 
   std::shared_ptr<arrow::RecordBatch> batch_;
-  Schema::ArrayIndex& array_index_;
+  const Util::Struct& array_index_;
   std::map<int, std::shared_ptr<arrow::Array>> cache_;
   int64_t slice_offset_;
   int64_t slice_length_;
@@ -90,23 +79,15 @@ struct Arrays::Impl {
 };
 
 /******************************************************************************/
-std::shared_ptr<arrow::Array>
-Batch::cached_array(const Schema::ArrayIndex::Column& column)
+std::shared_ptr<arrow::Array> Batch::cached_array(const Util::Struct::Field& column)
 {
-  std::optional<int> index(array_index_.column_index(column));
-
-  if (!index.has_value()) {
-    std::string msg("column doesn't appear in the schema: " + column.path);
-    throw ParquetError(msg);
-  }
-
-  auto it = cache_.find(*index);
+  auto it = cache_.find(column.index());
 
   if (it != cache_.end()) {
     return it->second;
   } else {
     auto v = array_from_batch(*batch_, array_index_, column);
-    cache_[*index] = v;
+    cache_[column.index()] = v;
     return v;
   }
 }
@@ -126,8 +107,7 @@ std::shared_ptr<arrow::RecordBatch> Batch::slice_batch(const Query& query)
 /******************************************************************************/
 struct ArrayValueHelper {
   template <psi::DataType T>
-  std::optional<Query::value_t>
-  operator()(const Schema::ArrayIndex::Column& column) const
+  std::optional<Query::value_t> operator()(const Util::Struct::Field& column) const
   {
     auto raw = batch_.cached_array(column);
     auto data = Util::parquet_array_cast<T>(raw);
@@ -140,7 +120,7 @@ struct ArrayValueHelper {
 
 template <> // Specialized since we don't support ASCII types.
 std::optional<Query::value_t> ArrayValueHelper::operator()<psi::DataType::ASCII>(
-    const Schema::ArrayIndex::Column& _) const
+    const Util::Struct::Field& _) const
 {
   return {};
 }
@@ -148,10 +128,14 @@ std::optional<Query::value_t> ArrayValueHelper::operator()<psi::DataType::ASCII>
 /******************************************************************************/
 void Batch::query_batch(const Query& query)
 {
-  auto get_value = [&](ArrayValueHelper& helper,
-                       const Schema::ArrayIndex::Column& column)
-      -> std::optional<Query::value_t> {
-    return psi::dispatch(column.data_type, helper, column);
+  auto get_value =
+      [&](ArrayValueHelper& helper,
+          const Util::Struct::Field& column) -> std::optional<Query::value_t> {
+    if (column.data_type().has_value()) {
+      return psi::dispatch(column.data_type().value(), helper, column);
+    } else {
+      return std::nullopt;
+    }
   };
 
   { // Find the first "row" that matches the query.
@@ -234,10 +218,37 @@ std::size_t Arrays::record_count() const
 }
 
 /******************************************************************************/
+std::vector<Util::Struct::Field>
+Arrays::columns_to_fields(const std::vector<Schema::ArrayIndex::Column>& cols) const
+{
+  auto structs = impl_->parquet_->structs();
+  auto prefix_struct = structs.find(impl_->array_index_.prefix());
+  if (prefix_struct == structs.end()) return {};
+
+  std::vector<Util::Struct::Field> res;
+  res.reserve(cols.size());
+
+  for (const auto& col : cols) {
+    std::string name = col.path.substr(impl_->array_index_.prefix().size() + 1);
+    auto field = prefix_struct->second->field(name);
+
+    if (field.has_value()) {
+      res.push_back(field.value().get());
+    }
+  }
+
+  return res;
+}
+
+/******************************************************************************/
 std::unique_ptr<array_map_type>
 Arrays::read_arrays(const Query& query,
-                    const std::vector<Schema::ArrayIndex::Column>& columns)
+
+                    const std::vector<Util::Struct::Field>& columns)
 {
+  auto array_struct = impl_->parquet_->structs().find(impl_->array_index_.prefix());
+  auto layout = *array_struct->second; // FIXME: Not check if this can be derefed
+
   std::unique_ptr<array_map_type> map = std::make_unique<array_map_type>();
 
   std::vector<int> indices(impl_->parquet_->find_row_groups(query));
@@ -261,25 +272,23 @@ Arrays::read_arrays(const Query& query,
     std::shared_ptr<arrow::RecordBatch> batch;
 
     {
-      auto helper = Batch(batch_r.ValueOrDie(), impl_->array_index_);
+      auto helper = Batch(batch_r.ValueOrDie(), layout);
       batch = helper.slice_batch(query);
     }
 
     for (auto& column : columns) {
-      std::optional<int> index(impl_->array_index_.column_index(column));
-
       std::optional<std::shared_ptr<arrow::Array>> data =
-          array_from_batch(*batch, impl_->array_index_, column);
+          array_from_batch(*batch, layout, column);
 
-      if (index.has_value() && data.has_value()) {
-        auto existing = map->find(*index);
+      if (data.has_value()) {
+        auto existing = map->find(column.index());
 
         if (existing != map->end()) {
           existing->second->push_back(*data);
         } else {
           std::shared_ptr<raw_array_type> vec = std::make_shared<raw_array_type>();
           vec->push_back(*data);
-          (*map)[*index] = vec;
+          (*map)[column.index()] = vec;
         }
       }
     }

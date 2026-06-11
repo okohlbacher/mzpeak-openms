@@ -210,19 +210,18 @@ std::vector<int> Parquet::Impl::run_query(const Query& query)
 {
   auto fmd(reader_->parquet_reader()->metadata());
 
-  auto get_range = [&](const std::shared_ptr<parquet::RowGroupMetaData>& rg,
-                       const Schema::ArrayIndex::Column& column)
-      -> std::optional<Query::range_t> {
-    const std::string& path(column.path);
-
-    int column_index = rg->schema()->ColumnIndex(path);
-    if (column_index < 0) error("invalid path: " + path);
-
-    std::optional<Stats> stats(statistics(rg, column_index));
+  auto get_range =
+      [&](const std::shared_ptr<parquet::RowGroupMetaData>& rg,
+          const Util::Struct::Field& column) -> std::optional<Query::range_t> {
+    std::optional<Stats> stats(statistics(rg, column.index()));
     if (!stats.has_value()) return {};
 
-    return psi::dispatch(column.data_type,
-                         MinMaxForType{*stats->column, *stats->stats});
+    if (column.data_type().has_value()) {
+      return psi::dispatch(column.data_type().value(),
+                           MinMaxForType{*stats->column, *stats->stats});
+    } else {
+      return std::nullopt;
+    }
   };
 
   std::vector<int> res;

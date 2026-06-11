@@ -6,8 +6,8 @@ top-level directory of this repository.
 
 */
 
-#include "mzpeak/query.h"
 #include "mzpeak/exception.h"
+#include "mzpeak/query.h"
 #include "mzpeak/schema/psi/data_type.h"
 #include <type_traits>
 
@@ -105,7 +105,6 @@ bool EvalHelper<Fn, V>::dispatch_value(const Query::Predicate<T>& p, Fn fn) cons
           return p.match(v);
         } else {
           std::string msg("predicate and value mismatch: ");
-          msg += Schema::PSI::data_type_to_string(p.column().data_type);
           throw TypeError(msg);
           return false; // clang is too stupid to see the throw
         }

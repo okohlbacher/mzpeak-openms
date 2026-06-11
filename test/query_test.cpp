@@ -15,6 +15,8 @@ in the LICENSE file found in the top-level directory of this project.
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(can_find_spectrum)
 {
+  // FIXME: Use proper field access.
+
   using namespace MzPeak;
   using DataType = Schema::PSI::DataType;
 
@@ -26,8 +28,8 @@ BOOST_AUTO_TEST_CASE(can_find_spectrum)
   BOOST_TEST((entry != index.files().end()));
 
   auto parquet = index.parquet(*entry);
-  auto array_index = parquet->array_index();
-  auto spectra_index_column = array_index.columns()[0];
+  auto point = parquet->structs().find("point")->second;
+  auto spectra_index_column = point->field("spectrum_index")->get();
 
   Query query = Query::Predicate<DataType::Int64>::equal_to(spectra_index_column, 1);
   auto indices = parquet->find_row_groups(query);

@@ -9,9 +9,11 @@ top-level directory of this repository.
 #pragma once
 
 #include <any>
+#include <functional>
+#include <variant>
 
-#include "mzpeak/schema/array_index.h"
 #include "mzpeak/schema/psi/data_type.h"
+#include "mzpeak/util/struct.h"
 
 namespace MzPeak {
 
@@ -35,7 +37,7 @@ public:
     using value_type = typename Schema::PSI::data_type_traits<T>::value_type;
 
     /// The schema array type.
-    using column_type = Schema::ArrayIndex::Column;
+    using column_type = Util::Struct::Field;
 
     /**
      * Queried value must be exactly equal to the given value.
@@ -164,12 +166,12 @@ public:
   /// A function that when given an column type, should return a single value.
   /// If this isn't possible it should return nullopt.
   using eval_callback_t =
-      std::function<std::optional<value_t>(const Schema::ArrayIndex::Column&)>;
+      std::function<std::optional<value_t>(const Util::Struct::Field&)>;
 
   /// A function that when given an column type should return a min and
   /// max.  If this isn't possible it should return nullopt.
   using eval_range_callback_t =
-      std::function<std::optional<range_t>(const Schema::ArrayIndex::Column&)>;
+      std::function<std::optional<range_t>(const Util::Struct::Field&)>;
   /**
    * Evaluate a query.
    */
