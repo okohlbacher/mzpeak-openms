@@ -43,6 +43,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 - **Done when:** spectrum sources are resolved from the index `files[]` by `entity_type==spectrum` + `data_kind` (the `EntityType`/`DataKind` enums already exist); a spectrum's **representation is metadata-driven** — read `MS_1000525_spectrum_representation` (profile `MS:1000128` / centroid `MS:1000127`) and the `MS_1003060_number_of_data_points` / `MS_1003059_number_of_peaks` counts, pulling profile from `spectra_data` and centroid from `spectra_peaks` (a spectrum may have both); absent rows return empty, never throw. **Do not silently merge tables.**
 - **Validate:** `small.mzpeak` → all 48 spectra return non-empty m/z+intensity matching pyarrow ground truth from both tables; 0 throws.
 - **Depends on:** independent. Unblocks the largest coverage gain.
+- **Reference parity note:** the Rust reader exposes a profile/centroid loading policy (`SignalLoadingPreference`, `hupo-mzpeak/src/reader.rs:86-104,1523-1532`) and supports mixed profile+peak loading per spectrum (`reader.rs:1239-1305`); consider modelling the same preference rather than always returning one representation.
 
 ### RDR-4 — Type system: unsigned, list, string, byte-array  ·  P1 · G16
 - **Symptom:** `uint64` entity-index reads "work" only by reinterpreting signed bits; `large_list`/`large_string`/`large_list<u8>` columns can't be modeled.
@@ -84,10 +85,10 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R5 — Entity & metadata breadth
 
-### RDR-8 — Chromatogram read API  ·  P2 · G7
+### RDR-8 — Chromatogram read API (incl. synthesized TIC/BPC)  ·  P2 · G7
 - **Symptom:** chromatograms (every test file has them; has_uv: 738 points) are entirely inaccessible.
 - **Root cause:** `Index` exposes only `spectra()` (`include/mzpeak/index.h:39`).
-- **Done when:** `Chromatogram`/`Chromatograms` types + `Index::chromatograms()` read `chromatograms_{metadata,data}.parquet` (point + chunked).
+- **Done when:** `Chromatogram`/`Chromatograms` types + `Index::chromatograms()` read `chromatograms_{metadata,data}.parquet` (point + chunked). Also provide the **synthesized TIC/BPC** the Rust reader builds from per-spectrum metadata when no stored chromatogram exists (`hupo-mzpeak/src/reader.rs:1395-1452,1455-1508`) — this needs the spectrum metadata of RDR-10.
 - **Validate:** TIC/SIC time+intensity match pyarrow ground truth.
 
 ### RDR-9 — Wavelength/UV spectra read API (+ correct naming)  ·  P2 · G8+G17
@@ -125,7 +126,56 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 ## Future (out of scope for the local-file reader milestone)
 
 ### RDR-14 — Remote/cloud reading  ·  P4 · G15
-HTTP-range / S3 / object_store prefix. `open()` currently rejects non-local paths (`src/open.cpp:24`); the spec allows remote prefixes. Targeted "summer 2026" per README.
+HTTP-range / S3 / object_store prefix. `open()` currently rejects non-local paths (`src/open.cpp:24`); the spec allows remote prefixes. Targeted "summer 2026" per README. The Rust async stack is `src/reader/object_store_async.rs:426`.
+
+---
+
+## Milestone R7 — Reference (Rust) capability parity
+Capability gaps vs the Rust `MzPeakReader` surfaced by [reader-rust-parity.md](reader-rust-parity.md) — features the reference reader exposes that the C++ reader lacks (beyond the spec/correctness work above).
+
+### RDR-24 — Parse & expose file-level mzML metadata blocks  ·  P2
+- **Symptom:** run, instrument configuration, software, sample, data_processing, scan_settings, file_description are unavailable. `Index::parse_index` reads only the JSON `files[]` (`src/index.cpp:84-93`); `Metadata` validates the kind but exposes **no accessors** (`src/metadata.cpp`). Rust decodes all of these from Parquet KV (`hupo-mzpeak/src/reader/metadata.rs:404-489`).
+- **Done when:** the `metadata{}` block (+ Parquet KV) parses into typed structs with accessors. Prerequisite for OpenMS `ExperimentalSettings` mapping (RDR-19). *Distinct from RDR-10, which is per-spectrum metadata.*
+
+### RDR-15 — Random access by native spectrum id  ·  P2
+- **Symptom:** spectra are reachable only by integer position (`Spectra::fetch`, `src/spectra.cpp:31`); external tools reference spectra by native id. Rust: `get_spectrum_by_id` (`reader.rs:213`), `get_spectrum_metadata_by_id` (`reader.rs:1220`) via an id→index offset index.
+- **Done when:** an id→index map is built from the metadata `id` column and `Index`/`Spectra` expose by-id lookup. **Depends on:** RDR-10.
+
+### RDR-16 — Retention-time / time-range query  ·  P2
+- **Symptom:** no way to select spectra by RT. Rust: `get_spectrum_index_range_for_time_range` (`reader.rs:524`) via a time page index.
+- **Done when:** a time index (from the metadata `time` column) backs an RT-range → spectrum-index-range API. **Depends on:** RDR-10, RDR-23.
+
+### RDR-17 — EIC / m/z–ion-mobility signal extraction pipeline  ·  P2
+- **Symptom:** a *low-level* executor exists — `Spectra::fetch` builds a `Query` and `DataArrays::read_arrays` prunes row groups + slices batches (`src/spectra.cpp:31-41`, `src/util/data_arrays.cpp:235-286`). What is missing is the **multi-dimensional extraction pipeline** the Rust reader provides: stream the data/peaks tables filtered by (time × m/z × ion mobility × ms-level) to build extracted-ion chromatograms / targeted point sets. Rust: `extract_signal` (`reader.rs:608`), `query_peaks` (`reader.rs:883`), with split-thread parallelism (`reader.rs:639`).
+- **Done when:** a range-extraction API returns points/peaks selected across those dimensions (EIC basis). **Depends on:** RDR-16, RDR-3, RDR-6.
+
+### RDR-18 — Batch / bulk read scheduling  ·  P3
+- **Symptom:** only single `fetch`; reading a scattered subset re-reads per spectrum. Rust: `get_spectra_batch` (`reader.rs:1311`) sorts indices and reads efficiently.
+- **Done when:** a batch read sorts indices and shares row-group reads. **Depends on:** RDR-21.
+
+### RDR-19 — OpenMS object integration  ·  P2
+- **Symptom:** the reader yields a bespoke `MzPeak::Spectrum` of raw mz/intensity vectors (`include/mzpeak/spectrum.h:40-65`, `// FIXME: level?`); there is no bridge to `OpenMS::MSSpectrum`/`MSExperiment`. Rust implements the full mzdata `SpectrumSource`/`MSDataFileMetadata`/`ChromatogramSource` stack (`reader.rs:129-290`).
+- **Done when:** an adapter yields OpenMS spectra/experiment objects so downstream OpenMS tools consume mzPeak. **Depends on:** RDR-10, RDR-24, RDR-3. *This is arguably the point of an OpenMS reader.*
+
+### RDR-20 — Parquet modular decryption  ·  P3
+- **Symptom:** AES-encrypted Parquet members are unreadable; no decryption path in `Util::Parquet`. Rust: `from_path_with_decryption` (`hupo-mzpeak/src/archive/sync.rs:971`), `with_file_decryption_properties` (`sync.rs:749`).
+- **Done when:** `FileDecryptionProperties` (Arrow C++) is plumbed through with a key API.
+
+### RDR-21 — Row-group / peak data cache  ·  P3
+- **Symptom:** every `fetch` re-reads and re-decodes (`src/spectra.cpp:40`); region-local access is O(n) re-reads. (There is a tiny iterator-dereference cache, `include/mzpeak/util/enumerable_proxy.h:95-108`, but it is not a decoded row-group/peak cache.) Rust: LRU `CacheBuffer` (`hupo-mzpeak/src/reader/cache.rs:266-388`), tunable (`reader.rs:318`).
+- **Done when:** an LRU cache of decoded row groups is reused across reads. Perf only.
+
+### RDR-23 — Page/offset-index random access (vs row-group pruning)  ·  P3
+- **Symptom:** random access prunes only at row-group granularity (`find_row_groups`, `include/mzpeak/util/parquet.h:82`), so a single-spectrum read pulls an entire row group. Rust uses the Parquet page/offset index (impl `hupo-mzpeak/src/reader/index.rs:88,160-223,282-349,721-744`; consumer `reader.rs:471-499`).
+- **Done when:** page-index-driven selection reads only the relevant pages. **Related:** RDR-2 (row-group pruning correctness).
+
+### RDR-22 — In-memory / memory-mapped archive reading  ·  P3
+- **Symptom:** reads always go through libzip/`File::read/seek` (`include/mzpeak/file.h`); there is no way to read from an mmap or an in-memory buffer. Rust: `memmap` and `from_buf` (`reader.rs:1986-1994`, `archive/sync.rs:1154-1186`).
+- **Done when:** the archive abstraction supports a memory-backed source (mmap'd unpacked files and/or an in-memory byte buffer), avoiding copies on large files.
+
+### RDR-25 — Detail-level (metadata-only) mode  ·  P4
+- **Symptom:** the reader always loads full arrays. Rust: `set_detail_level` (`reader.rs:209`) for metadata-only scans.
+- **Done when:** a detail-level flag skips array decode when only metadata is needed.
 
 ---
 
@@ -134,8 +184,23 @@ HTTP-range / S3 / object_store prefix. `open()` currently rejects non-local path
 RDR-1 ──► RDR-9
 RDR-2   (independent)
 RDR-3 ──► RDR-5 ──► (writer null-marking)
-RDR-3 ──► RDR-10
+RDR-3 ──► RDR-10 ──► RDR-15 (by-id), RDR-16 (RT), RDR-19 (OpenMS), RDR-24 (file metadata)
 RDR-4 ──► RDR-6 ──► RDR-7
-RDR-4 ──► RDR-10
+RDR-16 + RDR-3 + RDR-6 ──► RDR-17 (EIC)
+RDR-21 ──► RDR-18 (batch)
+RDR-23 ──► RDR-16/RDR-17 (finer selection)
+RDR-10 + RDR-24 + RDR-3 ──► RDR-19 (OpenMS integration)
 ```
-Suggested first PR: **RDR-1 + RDR-2** (small, pure correctness). Biggest coverage win: **RDR-3**.
+Suggested first PR: **RDR-1 + RDR-2** (small, pure correctness). Biggest coverage win: **RDR-3** (peaks table). Highest reference-parity value once correctness lands: **RDR-10 → RDR-24 → RDR-19** (per-spectrum + file metadata → OpenMS object integration), which is what makes mzPeak consumable by OpenMS tools.
+
+## Backlog at a glance
+- **R1 quick correctness:** RDR-1, RDR-2
+- **R2 spectrum coverage:** RDR-3, RDR-4
+- **R3 lossless:** RDR-5
+- **R4 chunked/numpress:** RDR-6, RDR-7
+- **R5 entity/metadata breadth:** RDR-8, RDR-9, RDR-10
+- **R6 hardening:** RDR-11, RDR-12, RDR-13
+- **R7 Rust capability parity:** RDR-15…RDR-25 (by-id, RT, EIC, batch, OpenMS integration, decryption, cache, page-index, mmap, detail-level, file metadata)
+- **Future:** RDR-14 (remote/cloud)
+
+Total: 25 tracked reader gaps.
