@@ -149,6 +149,7 @@ test_names = [
     'parquet_writer',
     'planner',
     'query',
+    'roundtrip',
     'spectra',
     'util',
     'writer',
