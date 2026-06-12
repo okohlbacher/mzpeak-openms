@@ -39,10 +39,8 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 - **Done when:** `write_spectra_archive` output with both profile + centroid spectra round-trips through `MzPeak::open(zip)`.
 - **Note:** exposed by RDR-3 (two-table reads) + the centroid/peaks writer split. The writer output IS valid (Rust reads it); this is a reader-side zip limitation.
 
-### RDR-27 — Cross-impl centroid read needs spectrum representation  ·  P2
-- **Symptom:** the Rust reference `get_spectrum` does not auto-load a C++-written **centroid** spectrum's peaks (panics `NotFound(MZArray)`), though the peaks table is valid (the C++ reader reads it). It loads profile spectra fine.
-- **Root cause:** the Rust reader's peak loading is gated by `SignalLoadingPreference` / `MS_1000525_spectrum_representation`, which the C++ writer's minimal metadata table omits (it sets only the counts).
-- **Done when:** the writer emits `MS_1000525_spectrum_representation` (centroid `MS:1000127` / profile `MS:1000128`) so the Rust reader loads peaks for centroid spectra (extends the Phase-1b metadata writer).
+### RDR-27 — Spectrum representation in metadata  ·  DONE / reclassified
+- **Finding:** the writer now emits `MS_1000525_spectrum_representation` (centroid `MS:1000127` / profile `MS:1000128`). This was originally filed because the Rust `read_spectrum` example couldn't read a C++-written centroid — but it **also can't read a Rust-written centroid** (both panic `NotFound(MZArray)`), so the C++ peaks table is cross-impl conformant; the example simply uses `get_spectrum`, which does not load peaks (you need `get_spectrum_peaks_for`). No writer bug. The representation term is kept as a conformance improvement; cross-impl centroid validation just needs a peaks-loading Rust API.
 
 ---
 

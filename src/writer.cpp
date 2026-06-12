@@ -121,7 +121,8 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
          /*id=*/"index=" + std::to_string(i),
          /*ms_level=*/uint8_t{1},
          /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
-         /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0}});
+         /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
+         /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
   }
   return rows;
 }

@@ -182,17 +182,20 @@ void write_spectra_metadata_to_sink(
   std::vector<uint8_t> ms_level;
   std::vector<uint64_t> n_points;
   std::vector<uint64_t> n_peaks;
+  std::vector<std::string> representation;
   index.reserve(rows.size());
   id.reserve(rows.size());
   ms_level.reserve(rows.size());
   n_points.reserve(rows.size());
   n_peaks.reserve(rows.size());
+  representation.reserve(rows.size());
   for (const auto& r : rows) {
     index.push_back(r.index);
     id.push_back(r.id);
     ms_level.push_back(r.ms_level);
     n_points.push_back(r.number_of_data_points);
     n_peaks.push_back(r.number_of_peaks);
+    representation.push_back(r.representation);
   }
 
   // `index` MUST be the first child: the reference reader accesses it
@@ -205,6 +208,8 @@ void write_spectra_metadata_to_sink(
                    /*nullable=*/true),
       arrow::field("MS_1003059_number_of_peaks", arrow::uint64(),
                    /*nullable=*/true),
+      arrow::field("MS_1000525_spectrum_representation", arrow::utf8(),
+                   /*nullable=*/true),
   };
 
   std::vector<std::shared_ptr<arrow::Array>> children{
@@ -213,6 +218,7 @@ void write_spectra_metadata_to_sink(
       build_array<arrow::UInt8Builder>(ms_level),
       build_array<arrow::UInt64Builder>(n_points),
       build_array<arrow::UInt64Builder>(n_peaks),
+      build_array<arrow::StringBuilder>(representation),
   };
 
   auto spectrum_result(arrow::StructArray::Make(children, spectrum_fields));

@@ -91,6 +91,9 @@ struct SpectrumMetaRow {
   uint8_t ms_level;
   uint64_t number_of_data_points;
   uint64_t number_of_peaks;
+  /// MS_1000525 spectrum representation CURIE: "MS:1000128" (profile) or
+  /// "MS:1000127" (centroid).  Lets a reader pick the data vs peaks table.
+  std::string representation;
 };
 
 /**
