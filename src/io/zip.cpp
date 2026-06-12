@@ -18,8 +18,13 @@ namespace MzPeak::IO {
  */
 class ZipFile_ final : public MzPeak::IO::File {
 public:
-  ZipFile_(zip_file_t* file, std::size_t size, fs::path path)
-      : impl_(std::make_shared<Impl>(file, size, path))
+  // Each member owns its OWN archive handle.  libzip's zip_fseek on stored
+  // members shares the underlying archive read position, so seeking one
+  // member while another member of the same handle is open fails ("unable
+  // to seek").  The reader keeps spectra_data and spectra_peaks open at the
+  // same time (RDR-3), so each gets an independent handle.
+  ZipFile_(zip_t* archive, zip_file_t* file, std::size_t size, fs::path path)
+      : impl_(std::make_shared<Impl>(archive, file, size, path))
   {
   }
 
@@ -63,8 +68,9 @@ public:
 private:
   class Impl {
   public:
-    Impl(zip_file_t* file, std::size_t size, fs::path path)
+    Impl(zip_t* archive, zip_file_t* file, std::size_t size, fs::path path)
         : size_(size)
+        , archive_(archive)
         , file_(file)
         , path_(path)
     {
@@ -77,9 +83,14 @@ private:
         zip_fclose(file_);
         file_ = nullptr;
       }
+      if (archive_ != nullptr) {
+        zip_close(archive_);
+        archive_ = nullptr;
+      }
     }
 
     std::size_t size_;
+    zip_t* archive_;
     zip_file_t* file_;
     fs::path path_;
 
@@ -97,6 +108,7 @@ struct Zip::Impl {
   /**************************************************************************/
   Impl(const fs::path& path)
       : archive(nullptr)
+      , path_(path)
   {
     int errnum{};
     archive = zip_open(path.c_str(), ZIP_RDONLY, &errnum);
@@ -143,6 +155,7 @@ struct Zip::Impl {
 
   /**************************************************************************/
   zip_t* archive;
+  fs::path path_;
 
 private:
   Impl(const Impl&) = delete;
@@ -184,22 +197,28 @@ std::vector<fs::path> Zip::list()
 /******************************************************************************/
 std::unique_ptr<MzPeak::IO::File> Zip::read_file(const fs::path& path)
 {
-  zip_stat_t stat;
-  int errnum = zip_stat(impl_->archive, path.c_str(), ZIP_FL_UNCHANGED, &stat);
-
-  if (errnum != 0) {
+  // Open a dedicated archive handle for this member so its seeks are
+  // independent of any other member the reader keeps open (RDR-26).
+  int errnum{};
+  zip_t* archive = zip_open(impl_->path_.c_str(), ZIP_RDONLY, &errnum);
+  if (archive == nullptr) {
     impl_->error_open(path, errnum);
-  } else if (!(stat.valid & ZIP_STAT_SIZE)) {
+  }
+
+  zip_stat_t stat;
+  if (zip_stat(archive, path.c_str(), ZIP_FL_UNCHANGED, &stat) != 0 ||
+      !(stat.valid & ZIP_STAT_SIZE)) {
+    zip_close(archive);
     impl_->error_open(path, {});
   }
 
-  zip_file_t* file = zip_fopen(impl_->archive, path.c_str(), 0);
-
+  zip_file_t* file = zip_fopen(archive, path.c_str(), 0);
   if (file == nullptr) {
+    zip_close(archive);
     impl_->error_open(path, {});
   }
 
-  return std::make_unique<ZipFile_>(file, stat.size, path);
+  return std::make_unique<ZipFile_>(archive, file, stat.size, path);
 }
 
 } // namespace MzPeak::IO

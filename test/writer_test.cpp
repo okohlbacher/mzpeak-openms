@@ -167,3 +167,37 @@ BOOST_AUTO_TEST_CASE(splits_profile_and_centroid_spectra)
     }
   }
 }
+
+/******************************************************************************/
+// RDR-26: reading two spectrum tables (data + peaks) from a single C++-written
+// ZIP archive works (each member gets its own archive handle, so concurrent
+// zip_fseek no longer fails).
+BOOST_AUTO_TEST_CASE(reads_data_and_peaks_from_one_zip_archive)
+{
+  using namespace MzPeak;
+
+  std::vector<SpectrumData> in{
+      {{100.0, 200.0, 300.0}, {1.0f, 2.0f, 3.0f}, /*centroid=*/false},
+      {{150.0, 250.0}, {4.0f, 5.0f}, /*centroid=*/true},
+      {{120.0, 220.0}, {6.0f, 7.0f}, /*centroid=*/false},
+      {{175.0, 275.0, 375.0}, {8.0f, 9.0f, 10.0f}, /*centroid=*/true},
+  };
+
+  TempDir dir;
+  fs::create_directories(dir.path); // TempDir only reserves the name
+  fs::path archive(dir.path / "split.mzpeak");
+  write_spectra_archive(archive, in);
+
+  Index index = MzPeak::open(archive.string());
+  auto spectra = index.spectra();
+  BOOST_TEST(spectra.size() == 4);
+
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    const auto& s = spectra[i];
+    const auto& mz = s.mz();
+    BOOST_TEST(mz.size() == in[i].mz.size());
+    for (std::size_t j = 0; j < in[i].mz.size(); ++j) {
+      BOOST_TEST(mz[j] == in[i].mz[j], boost::test_tools::tolerance(1e-9));
+    }
+  }
+}
