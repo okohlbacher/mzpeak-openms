@@ -44,11 +44,14 @@ lib_sources = [
   'src/util/arrow.cpp',
   'src/util/executor.cpp',
   'src/util/parquet.cpp',
+  'src/util/json_writer.cpp',
+  'src/util/parquet_writer.cpp',
   'src/util/planner.cpp',
   'src/util/projection.cpp',
   'src/util/query.cpp',
   'src/util/slice.cpp',
   'src/util/types.cpp',
+  'src/writer.cpp',
 ]
 
 # Header files to include in packages:
@@ -86,11 +89,14 @@ install_headers([
   'include/mzpeak/util/enumerable_proxy.h',
   'include/mzpeak/util/executor.h',
   'include/mzpeak/util/parquet.h',
+  'include/mzpeak/util/json_writer.h',
+  'include/mzpeak/util/parquet_writer.h',
   'include/mzpeak/util/planner.h',
   'include/mzpeak/util/projection.h',
   'include/mzpeak/util/query.h',
   'include/mzpeak/util/slice.h',
   'include/mzpeak/util/types.h',
+  'include/mzpeak/writer.h',
 ], subdir : 'mzpeak')
 
 # Library and executable targets:
@@ -138,10 +144,13 @@ test_names = [
     'group',
     'index',
     'parquet',
+    'json_writer',
+    'parquet_writer',
     'planner',
     'query',
     'spectra',
     'util',
+    'writer',
     'zip',
 ]
 
