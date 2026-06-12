@@ -63,6 +63,7 @@ BOOST_AUTO_TEST_CASE(round_trips_through_the_reader)
 
   // Artifacts exist.
   BOOST_TEST(fs::exists(dir.path / "spectra_data.parquet"));
+  BOOST_TEST(fs::exists(dir.path / "spectra_metadata.parquet"));
   BOOST_TEST(fs::exists(dir.path / "mzpeak_index.json"));
 
   // Read back through the real reader.

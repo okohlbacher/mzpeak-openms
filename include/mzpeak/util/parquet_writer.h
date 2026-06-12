@@ -77,4 +77,45 @@ std::string point_spectra_data_bytes(
     const std::vector<float>& intensity,
     const std::map<std::string, std::string>& file_kv);
 
+/**
+ * The minimal per-spectrum metadata row written to spectra_metadata.parquet.
+ *
+ * This is the smallest set the Rust reference reader needs to resolve a
+ * spectrum by index and load its profile points: `index` (the primary key,
+ * must match the data table) and the data-point/peak counts that gate array
+ * loading.  All other reference metadata fields are omitted for now.
+ */
+struct SpectrumMetaRow {
+  uint64_t index;
+  std::string id;
+  uint8_t ms_level;
+  uint64_t number_of_data_points;
+  uint64_t number_of_peaks;
+};
+
+/**
+ * Write the spectra metadata table to a Parquet file.
+ *
+ * The schema is a single top-level Arrow struct field named `spectrum`
+ * whose FIRST child is `index : uint64` (the Rust reader accesses it
+ * positionally and selects rows via its page index), followed by `id`
+ * (large_utf8), `MS_1000511_ms_level` (uint8),
+ * `MS_1003060_number_of_data_points` (uint64) and
+ * `MS_1003059_number_of_peaks` (uint64).
+ *
+ * Written with ZSTD, statistics, a page index and a sorting column on
+ * `spectrum.index`, and store_schema enabled — matching the data table so
+ * the reference reader's index-based row selection works.
+ *
+ * @throws ParquetError on any Arrow/Parquet error.
+ */
+void write_spectra_metadata(const std::string& path,
+                            const std::vector<SpectrumMetaRow>& rows);
+
+/**
+ * In-memory sibling of @ref write_spectra_metadata returning the Parquet
+ * bytes (used by the ZIP archive writer).
+ */
+std::string spectra_metadata_bytes(const std::vector<SpectrumMetaRow>& rows);
+
 } // namespace MzPeak::Util

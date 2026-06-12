@@ -8,6 +8,7 @@ directory of this repository.
 
 #include <algorithm>
 #include <arrow/array/array_nested.h>
+#include <arrow/array/builder_binary.h>
 #include <arrow/array/builder_primitive.h>
 #include <arrow/buffer.h>
 #include <arrow/io/file.h>
@@ -47,6 +48,80 @@ std::shared_ptr<arrow::Array> build_array(const std::vector<T>& values)
   std::shared_ptr<arrow::Array> array;
   check(builder.Finish(&array), "finish array");
   return array;
+}
+
+/******************************************************************************/
+// Write an Arrow table to a Parquet sink with the project's standard
+// properties: ZSTD, statistics, page index, store_schema, a sorting column
+// on the first leaf (the entity index), a bounded row-group size, and
+// optional file-level key/value metadata.  Shared by the data and metadata
+// table writers so their on-disk shape stays identical (the reference reader
+// selects rows via the index column's page index in both).
+void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
+                         const std::shared_ptr<arrow::Table>& table,
+                         const std::map<std::string, std::string>& file_kv)
+{
+  parquet::WriterProperties::Builder props_builder;
+  props_builder.compression(arrow::Compression::ZSTD);
+  props_builder.enable_statistics();
+  props_builder.enable_write_page_index();
+  props_builder.set_sorting_columns({parquet::SortingColumn{
+      /*column_idx=*/0, /*descending=*/false, /*nulls_first=*/false}});
+  auto writer_props(props_builder.build());
+
+  // Store the Arrow schema so the struct/types round-trip exactly.
+  auto arrow_props(
+      parquet::ArrowWriterProperties::Builder().store_schema()->build());
+
+  auto writer_result(parquet::arrow::FileWriter::Open(
+      *table->schema(), arrow::default_memory_pool(), sink, writer_props,
+      arrow_props));
+  if (!writer_result.ok()) {
+    throw ParquetError("open parquet writer: " +
+                       writer_result.status().ToString());
+  }
+  std::unique_ptr<parquet::arrow::FileWriter> writer(
+      std::move(writer_result).ValueOrDie());
+
+  // Bound the row-group size: one giant row group defeats page/row-group
+  // pruning and is memory-hungry for large files.  Keep it positive even
+  // for an empty table (WriteTable rejects a zero chunk size).
+  constexpr int64_t kMaxRowGroup = 1 << 20; // ~1M rows
+  int64_t row_group_size =
+      table->num_rows() > 0 ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
+                            : kMaxRowGroup;
+  check(writer->WriteTable(*table, row_group_size), "write table");
+
+  // Embed file-level key/value metadata after the data, before Close().
+  if (!file_kv.empty()) {
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    keys.reserve(file_kv.size());
+    values.reserve(file_kv.size());
+    for (const auto& [key, value] : file_kv) {
+      keys.push_back(key);
+      values.push_back(value);
+    }
+    auto kv(std::make_shared<arrow::KeyValueMetadata>(keys, values));
+    check(writer->AddKeyValueMetadata(kv), "add key/value metadata");
+  }
+
+  check(writer->Close(), "close parquet writer");
+}
+
+/******************************************************************************/
+// Read the bytes of an in-memory Parquet buffer sink into a string.
+std::string finish_to_string(
+    const std::shared_ptr<arrow::io::BufferOutputStream>& sink)
+{
+  auto buffer_result(sink->Finish());
+  if (!buffer_result.ok()) {
+    throw ParquetError("finish in-memory buffer sink: " +
+                       buffer_result.status().ToString());
+  }
+  std::shared_ptr<arrow::Buffer> buffer(buffer_result.ValueOrDie());
+  return std::string(reinterpret_cast<const char*>(buffer->data()),
+                     static_cast<std::size_t>(buffer->size()));
 }
 
 /******************************************************************************/
@@ -92,54 +167,66 @@ void write_point_spectra_data_to_sink(
 
   auto table(arrow::Table::Make(schema, {point_array}));
 
-  // Parquet writer properties: ZSTD, statistics, page index and a
-  // sorting column on the `point.spectrum_index` leaf (leaf index 0).
-  parquet::WriterProperties::Builder props_builder;
-  props_builder.compression(arrow::Compression::ZSTD);
-  props_builder.enable_statistics();
-  props_builder.enable_write_page_index();
-  props_builder.set_sorting_columns({parquet::SortingColumn{
-      /*column_idx=*/0, /*descending=*/false, /*nulls_first=*/false}});
-  auto writer_props(props_builder.build());
+  write_table_to_sink(sink, table, file_kv);
+}
 
-  // Store the Arrow schema so the struct/types round-trip exactly.
-  auto arrow_props(
-      parquet::ArrowWriterProperties::Builder().store_schema()->build());
-
-  auto writer_result(parquet::arrow::FileWriter::Open(
-      *schema, arrow::default_memory_pool(), sink, writer_props, arrow_props));
-  if (!writer_result.ok()) {
-    throw ParquetError("open parquet writer: " +
-                       writer_result.status().ToString());
-  }
-  std::unique_ptr<parquet::arrow::FileWriter> writer(
-      std::move(writer_result).ValueOrDie());
-
-  // Bound the row-group size: one giant row group defeats page/row-group
-  // pruning and is memory-hungry for large files.  Keep it positive even
-  // for an empty table (WriteTable rejects a zero chunk size).
-  constexpr int64_t kMaxRowGroup = 1 << 20; // ~1M rows
-  int64_t row_group_size =
-      table->num_rows() > 0 ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
-                            : kMaxRowGroup;
-  check(writer->WriteTable(*table, row_group_size), "write table");
-
-  // Embed the file-level key/value metadata.  This must be done after
-  // writing the data but before Close().
-  if (!file_kv.empty()) {
-    std::vector<std::string> keys;
-    std::vector<std::string> values;
-    keys.reserve(file_kv.size());
-    values.reserve(file_kv.size());
-    for (const auto& [key, value] : file_kv) {
-      keys.push_back(key);
-      values.push_back(value);
-    }
-    auto kv(std::make_shared<arrow::KeyValueMetadata>(keys, values));
-    check(writer->AddKeyValueMetadata(kv), "add key/value metadata");
+/******************************************************************************/
+// Build the spectra metadata table (single `spectrum` struct column whose
+// first child is the uint64 index) and write it to the given sink.
+void write_spectra_metadata_to_sink(
+    const std::shared_ptr<arrow::io::OutputStream>& sink,
+    const std::vector<SpectrumMetaRow>& rows)
+{
+  std::vector<uint64_t> index;
+  std::vector<std::string> id;
+  std::vector<uint8_t> ms_level;
+  std::vector<uint64_t> n_points;
+  std::vector<uint64_t> n_peaks;
+  index.reserve(rows.size());
+  id.reserve(rows.size());
+  ms_level.reserve(rows.size());
+  n_points.reserve(rows.size());
+  n_peaks.reserve(rows.size());
+  for (const auto& r : rows) {
+    index.push_back(r.index);
+    id.push_back(r.id);
+    ms_level.push_back(r.ms_level);
+    n_points.push_back(r.number_of_data_points);
+    n_peaks.push_back(r.number_of_peaks);
   }
 
-  check(writer->Close(), "close parquet writer");
+  // `index` MUST be the first child: the reference reader accesses it
+  // positionally and selects rows via its page index.
+  arrow::FieldVector spectrum_fields{
+      arrow::field("index", arrow::uint64(), /*nullable=*/true),
+      arrow::field("id", arrow::large_utf8(), /*nullable=*/true),
+      arrow::field("MS_1000511_ms_level", arrow::uint8(), /*nullable=*/true),
+      arrow::field("MS_1003060_number_of_data_points", arrow::uint64(),
+                   /*nullable=*/true),
+      arrow::field("MS_1003059_number_of_peaks", arrow::uint64(),
+                   /*nullable=*/true),
+  };
+
+  std::vector<std::shared_ptr<arrow::Array>> children{
+      build_array<arrow::UInt64Builder>(index),
+      build_array<arrow::LargeStringBuilder>(id),
+      build_array<arrow::UInt8Builder>(ms_level),
+      build_array<arrow::UInt64Builder>(n_points),
+      build_array<arrow::UInt64Builder>(n_peaks),
+  };
+
+  auto spectrum_result(arrow::StructArray::Make(children, spectrum_fields));
+  if (!spectrum_result.ok()) {
+    throw ParquetError("build spectrum struct: " +
+                       spectrum_result.status().ToString());
+  }
+  std::shared_ptr<arrow::Array> spectrum_array(spectrum_result.ValueOrDie());
+
+  auto schema(arrow::schema(
+      {arrow::field("spectrum", spectrum_array->type(), /*nullable=*/true)}));
+  auto table(arrow::Table::Make(schema, {spectrum_array}));
+
+  write_table_to_sink(sink, table, /*file_kv=*/{});
 }
 
 } // namespace
@@ -183,15 +270,36 @@ std::string point_spectra_data_bytes(
   write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity,
                                    file_kv);
 
-  auto buffer_result(sink->Finish());
-  if (!buffer_result.ok()) {
-    throw ParquetError("finish in-memory buffer sink: " +
-                       buffer_result.status().ToString());
-  }
-  std::shared_ptr<arrow::Buffer> buffer(buffer_result.ValueOrDie());
+  return finish_to_string(sink);
+}
 
-  return std::string(reinterpret_cast<const char*>(buffer->data()),
-                     static_cast<std::size_t>(buffer->size()));
+/******************************************************************************/
+void write_spectra_metadata(const std::string& path,
+                            const std::vector<SpectrumMetaRow>& rows)
+{
+  auto sink_result(arrow::io::FileOutputStream::Open(path));
+  if (!sink_result.ok()) {
+    throw ParquetError("open output file " + path + ": " +
+                       sink_result.status().ToString());
+  }
+  std::shared_ptr<arrow::io::FileOutputStream> sink(sink_result.ValueOrDie());
+
+  write_spectra_metadata_to_sink(sink, rows);
+}
+
+/******************************************************************************/
+std::string spectra_metadata_bytes(const std::vector<SpectrumMetaRow>& rows)
+{
+  auto sink_result(arrow::io::BufferOutputStream::Create());
+  if (!sink_result.ok()) {
+    throw ParquetError("create in-memory buffer sink: " +
+                       sink_result.status().ToString());
+  }
+  std::shared_ptr<arrow::io::BufferOutputStream> sink(sink_result.ValueOrDie());
+
+  write_spectra_metadata_to_sink(sink, rows);
+
+  return finish_to_string(sink);
 }
 
 } // namespace MzPeak::Util

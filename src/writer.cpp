@@ -82,13 +82,34 @@ PointPayload flatten_spectra(const std::vector<SpectrumData>& spectra,
 }
 
 /******************************************************************************/
-// The mzpeak_index.json describing a single point-layout spectra_data file.
+// The mzpeak_index.json describing the point-layout data table and its
+// companion metadata table.
 std::string spectra_index_json()
 {
   std::vector<Util::IndexFileEntry> files{
       {"spectra_data.parquet", "spectrum", "data arrays"},
+      {"spectra_metadata.parquet", "spectrum", "metadata"},
   };
   return Util::mzpeak_index_json(files, "0.9.0");
+}
+
+/******************************************************************************/
+// Build the per-spectrum metadata rows for spectra_metadata.parquet.  The
+// data-point count gates whether a reader loads the profile arrays, so it
+// must equal the number of points written for that spectrum.
+std::vector<Util::SpectrumMetaRow>
+build_metadata_rows(const std::vector<SpectrumData>& spectra)
+{
+  std::vector<Util::SpectrumMetaRow> rows;
+  rows.reserve(spectra.size());
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    rows.push_back({/*index=*/static_cast<uint64_t>(i),
+                    /*id=*/"index=" + std::to_string(i),
+                    /*ms_level=*/uint8_t{1},
+                    /*number_of_data_points=*/spectra[i].mz.size(),
+                    /*number_of_peaks=*/uint64_t{0}});
+  }
+  return rows;
 }
 
 /******************************************************************************/
@@ -142,6 +163,10 @@ void write_spectra_directory(const fs::path& dir,
                                  payload.spectrum_index, payload.mz,
                                  payload.intensity, payload.file_kv);
 
+  // Metadata table.
+  Util::write_spectra_metadata((dir / "spectra_metadata.parquet").string(),
+                               build_metadata_rows(spectra));
+
   // Index.
   std::string index_json(spectra_index_json());
 
@@ -169,6 +194,8 @@ void write_spectra_archive(const fs::path& zip_path,
   // sources and MUST stay alive until zip_close returns.
   std::string parquet_bytes(Util::point_spectra_data_bytes(
       payload.spectrum_index, payload.mz, payload.intensity, payload.file_kv));
+  std::string metadata_bytes(
+      Util::spectra_metadata_bytes(build_metadata_rows(spectra)));
   std::string index_json(spectra_index_json());
 
   int errnum = 0;
@@ -188,6 +215,7 @@ void write_spectra_archive(const fs::path& zip_path,
   // rethrow.
   try {
     add_stored_member(archive, "spectra_data.parquet", parquet_bytes);
+    add_stored_member(archive, "spectra_metadata.parquet", metadata_bytes);
     add_stored_member(archive, "mzpeak_index.json", index_json);
   } catch (...) {
     zip_discard(archive);

@@ -12,7 +12,7 @@ goal.
 | # | Name | Pipeline | Oracle | Validates | Status |
 |---|------|----------|--------|-----------|--------|
 | **T1** | Forward (intra) | C++ write → C++ read | input data | writer+reader agree | **DONE** — `writer_test`, `archive_writer_test` |
-| **T2** | Forward (cross) | C++ write → **Rust** read | Rust reference | C++ writer **conformance** | **HARNESS UP**; currently blocked on the metadata table (see below) |
+| **T2** | Forward (cross) | C++ write → **Rust** read | Rust reference | C++ writer **conformance** | **PASS** — Rust `MzPeakReader` reads C++ output with values matching (Phase 1b added the metadata table); run via `scripts/e2e_cross_impl.sh` |
 | **T3** | Reverse (intra) | C++ read ref → C++ write → C++ read | first read | reader↔writer idempotence on real data | **DONE** — `roundtrip_test` |
 | **T4** | Reverse (cross) | Rust write (bundled files) → C++ read | pyarrow ground truth | C++ reader **conformance** | partial — done ad hoc via pyarrow; blocked on reader gaps (chunked/peaks/null) |
 | **T5** | Full pipeline | mzML → Rust mzpeak → C++ read → C++ write → Rust read → mzML | original mzML | whole stack | future (needs writer P1+ and reader G1/G3/G4) |
@@ -34,14 +34,16 @@ target/release/examples/read_spectrum <file.mzpeak> <index>   # prints raw m/z+i
 Note: the `convert` example is mzML→mzpeak **only** (it cannot read mzpeak), so
 `read_spectrum`/`read` are the reader oracles.
 
-**Finding (2026-06-12):** feeding a C++-written `.mzpeak` to the Rust reader
-fails with `Spectrum metadata entry not found`. The Rust `get_spectrum(index)`
-resolves a `SpectrumDescription` from **`spectra_metadata.parquet`**, which the
-Phase-0/1a C++ writer does not emit. The C++ reader reads spectra straight from
-`spectra_data.parquet` and so doesn't need it — but a conformant file MUST carry
-the metadata table. **Therefore the spectra_metadata writer (Phase 1b) is the
-acceptance gate for T2**, not optional polish. Until then T2 is expected to
-fail with that exact error, which is a useful regression signal.
+**History:** the C++ writer originally emitted only `spectra_data.parquet` +
+`mzpeak_index.json`, and the Rust reader failed with `Spectrum metadata entry
+not found` — `get_spectrum(index)` resolves a `SpectrumDescription` from
+`spectra_metadata.parquet`, which the C++ reader doesn't need (it reads spectra
+straight from the data table) but a conformant file MUST carry. **Phase 1b**
+added a minimal metadata table (a `spectrum` struct whose first child is the
+`uint64 index`, plus `id`, `MS_1000511_ms_level`,
+`MS_1003060_number_of_data_points`, `MS_1003059_number_of_peaks`, written with
+the page index the Rust reader uses for index-based row selection). T2 now
+passes: Rust reads C++ output with values matching.
 
 ## T4 — the reverse cross check (C++ reads Rust output)
 
@@ -74,6 +76,6 @@ Phase 1b).
 
 ## Current coverage snapshot
 - T1 forward intra: PASS (point directory + zip archive).
+- T2 forward cross: **PASS** (Rust `MzPeakReader` reads C++ output, values match).
 - T3 reverse intra: PASS (Example_Processed.img, 9 spectra, read→write→read).
-- T2 forward cross: harness ready; blocked on Phase 1b metadata table.
 - T4 reverse cross: ad hoc pyarrow; blocked on reader gaps.
