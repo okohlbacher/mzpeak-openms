@@ -133,9 +133,12 @@ HTTP-range / S3 / object_store prefix. `open()` currently rejects non-local path
 ## Milestone R7 — Reference (Rust) capability parity
 Capability gaps vs the Rust `MzPeakReader` surfaced by [reader-rust-parity.md](reader-rust-parity.md) — features the reference reader exposes that the C++ reader lacks (beyond the spec/correctness work above).
 
-### RDR-24 — Parse & expose file-level mzML metadata blocks  ·  P2
-- **Symptom:** run, instrument configuration, software, sample, data_processing, scan_settings, file_description are unavailable. `Index::parse_index` reads only the JSON `files[]` (`src/index.cpp:84-93`); `Metadata` validates the kind but exposes **no accessors** (`src/metadata.cpp`). Rust decodes all of these from Parquet KV (`hupo-mzpeak/src/reader/metadata.rs:404-489`).
-- **Done when:** the `metadata{}` block (+ Parquet KV) parses into typed structs with accessors. Prerequisite for OpenMS `ExperimentalSettings` mapping (RDR-19). *Distinct from RDR-10, which is per-spectrum metadata.*
+### RDR-24 — Parse & expose file-level metadata blocks + format version  ·  P2
+- **Symptom:** the index `metadata{}` block is **never read** — `Index::parse_index` reads only the JSON `files[]` (`src/index.cpp:84-93`); `Metadata` validates the kind but exposes **no accessors** (`src/metadata.cpp`). Two parts are missing:
+  - **`metadata.version`** — the mzPeak format version (`"0.9.0"`). The Rust writer writes it (`MZPEAK_VERSION` / `VERSION_KEY`, `FileIndex::add_version`, commit *"JSON metadata in the index"* 29e59b2); the reader should **read and validate** it (reject/warn on an incompatible major version) instead of ignoring it. *(Our own C++ writer already emits `version`; the C++ reader does not check it.)*
+  - **The run-level blocks** — `run`, `instrument_configuration_list`, `software_list`, `sample_list`, `data_processing_method_list`, `scan_settings_list`, `file_description`, `cv_list` — written into `metadata{}` (and Parquet KV) and decoded by Rust (`hupo-mzpeak/src/reader/metadata.rs:404-489`); the reference `small.dir/mzpeak_index.json` carries all seven.
+- **Done when:** `metadata{}` (+ Parquet KV) parses into typed structs with accessors, and the format version is surfaced and version-checked. Prerequisite for OpenMS `ExperimentalSettings` mapping (RDR-19). *Distinct from RDR-10 (per-spectrum metadata).*
+- **Writer counterpart:** the C++ writer currently emits only `metadata.version` (not the run-level blocks) — writing those blocks is the writer-side dual of this item (tracked in [writer-implementation-research.md](writer-implementation-research.md) §1).
 
 ### RDR-15 — Random access by native spectrum id  ·  P2
 - **Symptom:** spectra are reachable only by integer position (`Spectra::fetch`, `src/spectra.cpp:31`); external tools reference spectra by native id. Rust: `get_spectrum_by_id` (`reader.rs:213`), `get_spectrum_metadata_by_id` (`reader.rs:1220`) via an id→index offset index.
