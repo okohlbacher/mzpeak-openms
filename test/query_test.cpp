@@ -183,3 +183,59 @@ BOOST_AUTO_TEST_CASE(less_equal_predicate_matches_correctly)
   BOOST_TEST(rng69.has_value());
   BOOST_TEST(rng69.value() == false); // min 6 <= 5 is false
 }
+
+/******************************************************************************/
+// Regression: negating a compound query was ignored because the AND/OR switch
+// returned before the not_ handling ran.  Both the AND and OR branches changed,
+// so both are exercised here.
+BOOST_AUTO_TEST_CASE(negation_applies_to_compound_queries)
+{
+  using namespace MzPeak;
+
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto entry = std::ranges::find(index.files(), Schema::EntityType::Spectrum,
+                                 &Schema::File::entity_type);
+
+  BOOST_TEST((entry != index.files().end()));
+
+  auto parquet = index.parquet(*entry);
+  auto dest = parquet->field("point", "spectrum_index");
+  BOOST_TEST(dest.has_value());
+
+  // Scalar callback: return a fixed value regardless of destination.
+  auto value = [](int64_t x) {
+    return [x](Query::destination_t) -> Query::Result<Query::value_t> {
+      return Query::Result<Query::value_t>(Query::value_t{x});
+    };
+  };
+
+  // AND branch: (x == 3) && (x >= 1)
+  Query both =
+      Query::Builder(*dest).eq<int64_t>(3) && Query::Builder(*dest).ge<int64_t>(1);
+  auto both3 = both.eval(value(3));
+  BOOST_TEST(both3.has_value());
+  BOOST_TEST(both3.value() == true); // 3 == 3 && 3 >= 1
+
+  auto notboth3 = (!both).eval(value(3));
+  BOOST_TEST(notboth3.has_value());
+  BOOST_TEST(notboth3.value() == false); // negation must invert the AND
+
+  auto notboth7 = (!both).eval(value(7));
+  BOOST_TEST(notboth7.has_value());
+  BOOST_TEST(notboth7.value() == true); // 7 != 3 -> AND false -> negated true
+
+  // OR branch: (x == 3) || (x == 5)
+  Query either =
+      Query::Builder(*dest).eq<int64_t>(3) || Query::Builder(*dest).eq<int64_t>(5);
+  auto either3 = either.eval(value(3));
+  BOOST_TEST(either3.has_value());
+  BOOST_TEST(either3.value() == true); // 3 == 3
+
+  auto noteither3 = (!either).eval(value(3));
+  BOOST_TEST(noteither3.has_value());
+  BOOST_TEST(noteither3.value() == false); // negation must invert the OR
+
+  auto noteither7 = (!either).eval(value(7));
+  BOOST_TEST(noteither7.has_value());
+  BOOST_TEST(noteither7.value() == true); // 7 in neither -> OR false -> negated true
+}
