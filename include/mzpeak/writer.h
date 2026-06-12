@@ -23,6 +23,10 @@ namespace MzPeak {
 struct SpectrumData {
   std::vector<double> mz;
   std::vector<float> intensity;
+
+  /// `true` for a centroid (peak) spectrum (written to the peaks table),
+  /// `false` for a profile spectrum (written to the data-arrays table).
+  bool centroid = false;
 };
 
 /**

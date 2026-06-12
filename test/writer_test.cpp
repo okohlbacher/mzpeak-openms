@@ -132,3 +132,38 @@ BOOST_AUTO_TEST_CASE(sorts_points_by_mz)
   BOOST_TEST(it[1] == 2.0f, boost::test_tools::tolerance(1e-6f));
   BOOST_TEST(it[2] == 3.0f, boost::test_tools::tolerance(1e-6f));
 }
+
+/******************************************************************************/
+// Profile spectra go to spectra_data.parquet, centroid spectra to
+// spectra_peaks.parquet; the reader serves both (round-trips via RDR-3).
+BOOST_AUTO_TEST_CASE(splits_profile_and_centroid_spectra)
+{
+  using namespace MzPeak;
+
+  std::vector<SpectrumData> in{
+      {{100.0, 200.0, 300.0}, {1.0f, 2.0f, 3.0f}, /*centroid=*/false},
+      {{150.0, 250.0}, {4.0f, 5.0f}, /*centroid=*/true},
+      {{120.0, 220.0, 320.0, 420.0}, {6.0f, 7.0f, 8.0f, 9.0f}, /*centroid=*/false},
+      {{175.0, 275.0}, {10.0f, 11.0f}, /*centroid=*/true},
+  };
+
+  TempDir dir;
+  write_spectra_directory(dir.path, in);
+
+  BOOST_TEST(fs::exists(dir.path / "spectra_data.parquet"));
+  BOOST_TEST(fs::exists(dir.path / "spectra_peaks.parquet")); // centroids present
+  BOOST_TEST(fs::exists(dir.path / "spectra_metadata.parquet"));
+
+  Index index = MzPeak::open(dir.path.string());
+  auto spectra = index.spectra();
+  BOOST_TEST(spectra.size() == 4);
+
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    const auto& s = spectra[i];
+    const auto& mz = s.mz();
+    BOOST_TEST(mz.size() == in[i].mz.size());
+    for (std::size_t j = 0; j < in[i].mz.size(); ++j) {
+      BOOST_TEST(mz[j] == in[i].mz[j], boost::test_tools::tolerance(1e-9));
+    }
+  }
+}

@@ -30,8 +30,19 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 ### RDR-2 — Missing row-group stats are pruned as "no match" (silent data loss)  ·  P0 · G19
 - **Symptom:** a predicate query can silently skip row groups that lack column statistics, dropping valid data.
 - **Root cause:** `run_query` returns `nullopt` when stats are absent (`src/util/parquet.cpp:186`) and `Query::eval` turns `nullopt` into `false` (`src/query.cpp:93`), so a stats-less row group is excluded.
-- **Done when:** row groups with missing stats are **conservatively included** (or resolved via the page index) rather than pruned.
+- **Done when:** row groups with missing stats are **conservatively included** (or resolved via the page index) rather than pruned. **[DONE]** — `query.cpp` range eval keeps stats-less groups.
 - **Validate:** unit test with a predicate over a file/row-group lacking stats; assert all matching rows are returned.
+
+### RDR-26 — Read multiple spectrum tables from one zip archive  ·  P1
+- **Symptom:** reading **two** spectrum tables (`spectra_data` + `spectra_peaks`) from a **C++-written** `.mzpeak` zip fails with `IOError: unable to seek`. The directory form works; multi-table **Rust-written** zips (e.g. small.mzpeak: 48/48) also read fine — so it is specific to concurrent `zip_fseek` on the members of a C++-produced archive.
+- **Root cause:** the zip reader streams members with `zip_fseek` (`src/zip.cpp` `ZipFile_::seek`); libzip's stored-member seek does not support several members of one archive open at once (which RDR-3 now does). A first attempt to buffer each member in memory caused test timeouts and was reverted — needs careful re-implementation (lazy/windowed buffer, or a per-member fresh archive handle).
+- **Done when:** `write_spectra_archive` output with both profile + centroid spectra round-trips through `MzPeak::open(zip)`.
+- **Note:** exposed by RDR-3 (two-table reads) + the centroid/peaks writer split. The writer output IS valid (Rust reads it); this is a reader-side zip limitation.
+
+### RDR-27 — Cross-impl centroid read needs spectrum representation  ·  P2
+- **Symptom:** the Rust reference `get_spectrum` does not auto-load a C++-written **centroid** spectrum's peaks (panics `NotFound(MZArray)`), though the peaks table is valid (the C++ reader reads it). It loads profile spectra fine.
+- **Root cause:** the Rust reader's peak loading is gated by `SignalLoadingPreference` / `MS_1000525_spectrum_representation`, which the C++ writer's minimal metadata table omits (it sets only the counts).
+- **Done when:** the writer emits `MS_1000525_spectrum_representation` (centroid `MS:1000127` / profile `MS:1000128`) so the Rust reader loads peaks for centroid spectra (extends the Phase-1b metadata writer).
 
 ---
 

@@ -53,5 +53,15 @@ Validate: has_uv chromatograms/wavelength vs pyarrow; reverse cross.
 - **RDR-14 (G15)** remote/cloud reading.
 - **RDR-4** full type system — implemented incrementally as phases require (unsigned index already works for small values; widen when chunked/aux need it).
 
+## Adversarial review corrections (codex)
+- **Label fix:** throw hygiene is **RDR-13**, not RDR-14 (RDR-14 = remote/cloud). The Phase-1 commit used the wrong id; the fix itself is correct.
+- **Phase 2 done as "whichever table holds the index"** (verified: small.mzpeak 48/48, centroid values match pyarrow). The *fully* correct form is representation-driven (`MS_1000525` + counts) for spectra that carry BOTH profile and centroid — a refinement to apply once the metadata reader (Phase 3) lands. Sizing uses the data table's `spectrum_count` (=48 total), which is why the collection exposes all 48.
+- **Profile m/z interiors are still `0`** where null-marked (39,968 nulls) until RDR-5 — Phase-2 tests assert only centroid values + profile endpoints, never profile interiors, so nothing passes falsely.
+- **RDR-4 (types) is not really deferrable** — uint64 indices work only for small fixture values; needed properly for Phase 5 `mz_delta_model` lists, Phase 6 nested/byte arrays, Phase 7 aux arrays. Pull it earlier.
+- **RDR-2 caveat:** including stats-less row groups is safe for the sorted contiguous `spectrum_index` equality used today, but could yield false positives for non-contiguous predicates given `query_batch`'s first→last slice. Fine for current usage; revisit with RDR-17.
+- **Phase 6 concrete blockers:** array-index paths like `chunk.mz_chunk_values` don't match the physical leaf `…list.item` (`parquet.cpp:243`); `decode_array` assumes one column (`encoding.h:74`); and `buffer_format_from_string` never parses `"chunk_transform"` → falls back to `Point` (`buffer_format.cpp:37`). Split Phase 6 into (path mapping + multi-column decode) → (delta) → (numpress).
+- **Phase 3 fixture:** `small.dir`/`has_uv` index metadata have run-level blocks but **no** top-level `metadata.version` (their "version" strings are software versions). Validate version-read against a writer-generated fixture + a synthetic unknown-major.
+- **Codex corrected order:** Phase1 → RDR-4 min types → minimal metadata reader → RDR-3 (done) → writer split → RDR-5 → RDR-24 → chunked → numpress → breadth.
+
 ## Validation invariants (every phase)
 Keep `meson test` green; add a regression test per fix; re-run T2 (`scripts/e2e_cross_impl.sh`) after any writer change; semantic compare (not byte-diff).
