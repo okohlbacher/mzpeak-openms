@@ -183,6 +183,7 @@ BOOST_AUTO_TEST_CASE(less_equal_predicate_matches_correctly)
   BOOST_TEST(rng69.has_value());
   BOOST_TEST(rng69.value() == false); // min 6 <= 5 is false
 }
+<<<<<<< HEAD
 
 /******************************************************************************/
 // Regression: negating a compound query was ignored because the AND/OR switch
