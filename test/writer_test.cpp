@@ -11,9 +11,12 @@ directory of this repository.
 
 #include <atomic>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#include "mzpeak/index.h"
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
@@ -200,4 +203,36 @@ BOOST_AUTO_TEST_CASE(reads_data_and_peaks_from_one_zip_archive)
       BOOST_TEST(mz[j] == in[i].mz[j], boost::test_tools::tolerance(1e-9));
     }
   }
+}
+
+/******************************************************************************/
+// RDR-24: the index format version is read, and an incompatible MAJOR version
+// is rejected.
+BOOST_AUTO_TEST_CASE(reads_and_validates_format_version)
+{
+  using namespace MzPeak;
+
+  TempDir dir;
+  write_spectra_directory(dir.path, {{{100.0, 200.0}, {1.0f, 2.0f}}});
+
+  BOOST_TEST(MzPeak::open(dir.path.string()).version() == "0.9.0");
+
+  // Tamper the index to a future major version -> open must reject it.
+  fs::path index_path(dir.path / "mzpeak_index.json");
+  std::string json;
+  {
+    std::ifstream in_file(index_path, std::ios::binary);
+    std::ostringstream ss;
+    ss << in_file.rdbuf();
+    json = ss.str();
+  }
+  std::size_t at = json.find("0.9.0");
+  BOOST_TEST((at != std::string::npos));
+  json.replace(at, 5, "2.0.0");
+  {
+    std::ofstream out_file(index_path, std::ios::binary);
+    out_file << json;
+  }
+
+  BOOST_CHECK_THROW(MzPeak::open(dir.path.string()), std::exception);
 }

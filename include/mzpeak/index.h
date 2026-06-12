@@ -34,6 +34,12 @@ public:
   const std::vector<Schema::File>& files() const;
 
   /**
+   * The mzPeak format version from the index `metadata.version`, or an
+   * empty string if the index does not declare one.
+   */
+  const std::string& version() const;
+
+  /**
    * Access the spectra in the file.
    */
   Spectra spectra() const;

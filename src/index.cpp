@@ -46,6 +46,9 @@ struct Index::Impl {
   // Parsed file entries.
   std::vector<Schema::File> files_;
 
+  // The mzPeak format version from metadata.version (empty if absent).
+  std::string version_;
+
   // Return an iterator to the requested file.
   std::vector<Schema::File>::const_iterator find_file(const std::string_view& name)
   {
@@ -64,6 +67,9 @@ Index::~Index() = default;
 
 /******************************************************************************/
 const std::vector<Schema::File>& Index::files() const { return impl_->files_; }
+
+/******************************************************************************/
+const std::string& Index::version() const { return impl_->version_; }
 
 /******************************************************************************/
 void Index::Impl::parse_index()
@@ -98,6 +104,25 @@ void Index::Impl::parse_index()
       if (file_obj.is_object()) {
         files_.push_back(Schema::File(file_obj.as_object()));
       }
+    }
+  }
+
+  // Format version from metadata.version (e.g. "0.9.0").
+  if (const auto it = o.find("metadata"); it != o.end() && it->value().is_object()) {
+    const json::object& meta = it->value().as_object();
+    if (const auto v = meta.find("version");
+        v != meta.end() && v->value().is_string()) {
+      version_ = v->value().as_string().c_str();
+    }
+  }
+
+  // Reject a future, potentially incompatible MAJOR version (the spec is a
+  // pre-1.0 living standard; all 0.x are accepted).
+  if (!version_.empty()) {
+    std::string major(version_.substr(0, version_.find('.')));
+    if (major != "0") {
+      throw MzPeak::JsonError("unsupported mzPeak format version '" + version_ +
+                              "' (this reader supports 0.x)");
     }
   }
 }
