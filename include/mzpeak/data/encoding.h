@@ -152,8 +152,10 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
       point<N, V>(field.value(), N{}, v);
     }
   } else {
-    throw("not implemented");
-    // return decode_chunked(arrays);
+    // RDR-14: a real, catchable exception (was `throw("not implemented")`,
+    // which throws a const char* that escapes std::exception handlers).
+    throw ParquetError("chunked array decoding is not implemented (" +
+                       Schema::PSI::array_type_to_string(array_type) + ")");
   }
 }
 
