@@ -30,8 +30,8 @@ public:
   /// The type of decoder used.
   using decoder_type = Data::Encoding::Decoder<double>;
 
-  /// Destructor.
-  ~Spectrum() = default;
+  // Special members are implicit (rule of zero): copyable AND movable, so
+  // returning a Spectrum by value moves its arrays rather than copying.
 
   /**
    * Mass-to-charge values.
