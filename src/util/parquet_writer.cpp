@@ -6,6 +6,7 @@ directory of this repository.
 
 */
 
+#include <algorithm>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/builder_primitive.h>
 #include <arrow/io/file.h>
@@ -119,7 +120,14 @@ void write_point_spectra_data(
   std::unique_ptr<parquet::arrow::FileWriter> writer(
       std::move(writer_result).ValueOrDie());
 
-  check(writer->WriteTable(*table, table->num_rows()), "write table");
+  // Bound the row-group size: one giant row group defeats page/row-group
+  // pruning and is memory-hungry for large files.  Keep it positive even
+  // for an empty table (WriteTable rejects a zero chunk size).
+  constexpr int64_t kMaxRowGroup = 1 << 20; // ~1M rows
+  int64_t row_group_size =
+      table->num_rows() > 0 ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
+                            : kMaxRowGroup;
+  check(writer->WriteTable(*table, row_group_size), "write table");
 
   // Embed the file-level key/value metadata.  This must be done after
   // writing the data but before Close().

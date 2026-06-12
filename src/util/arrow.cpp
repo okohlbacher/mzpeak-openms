@@ -26,16 +26,7 @@ public:
   /// Constructor.
   ArrowFile_(std::shared_ptr<IO::File> file)
       : file_(std::move(file))
-      , buffer_(nullptr)
   {
-    arrow::Result<std::unique_ptr<arrow::ResizableBuffer>> res(
-        arrow::AllocateResizableBuffer(parquet::kDefaultFooterReadSize));
-
-    if (res.ok()) {
-      buffer_ = std::move(res.ValueOrDie());
-    } else {
-      throw ParquetError(res.status().ToString());
-    }
   }
 
   /// Destructor.
@@ -85,35 +76,40 @@ public:
   {
     using arrow_buffer_t = std::shared_ptr<arrow::Buffer>;
 
-    if (nbytes > buffer_->capacity()) {
-      arrow::Status status = buffer_->Resize(nbytes, true);
-      if (!status.ok()) throw ParquetError(status.ToString());
-      buffer_->ZeroPadding();
+    if (nbytes < 0) {
+      return arrow::Status(arrow::StatusCode::Invalid, "negative read size");
     }
 
-    std::optional<std::size_t> n = file_->read(buffer_->mutable_data(), nbytes);
+    // Each buffer-returning read MUST own its storage.  Returning a shared
+    // scratch buffer that a later read overwrites would corrupt data Arrow
+    // still holds (e.g. a footer buffer kept while metadata is read).
+    arrow::Result<std::unique_ptr<arrow::ResizableBuffer>> alloc(
+        arrow::AllocateResizableBuffer(nbytes));
+    if (!alloc.ok()) throw ParquetError(alloc.status().ToString());
+    std::shared_ptr<arrow::ResizableBuffer> buffer(
+        std::move(alloc.ValueOrDie()));
+
+    std::optional<std::size_t> n = file_->read(buffer->mutable_data(), nbytes);
 
     if (!n.has_value()) {
       return arrow::Result<arrow_buffer_t>();
     }
 
-    // The returned buffer MUST report the number of bytes actually read,
-    // not the capacity of the reusable backing buffer.  Otherwise a short
-    // read (any file smaller than the default footer read size) hands
-    // Arrow an over-long buffer and it looks for the Parquet footer magic
-    // at the wrong offset ("magic bytes not found").  Preserve capacity so
-    // the buffer can still be reused for the next read.
-    arrow::Status status = buffer_->Resize(static_cast<int64_t>(*n), false);
+    // Report the number of bytes actually read, not the requested size.
+    // Otherwise a short read (any file smaller than the footer read size)
+    // hands Arrow an over-long buffer and it looks for the Parquet footer
+    // magic at the wrong offset ("magic bytes not found").
+    arrow::Status status = buffer->Resize(static_cast<int64_t>(*n), false);
     if (!status.ok()) throw ParquetError(status.ToString());
 
-    return arrow::Result<arrow_buffer_t>(buffer_);
+    return arrow::Result<arrow_buffer_t>(buffer);
   }
 
   /// Close the file/stream.
   arrow::Status Close() override
   {
     file_->close();
-    return buffer_->Resize(0, true);
+    return arrow::Status::OK();
   }
 
   /// Return `true` if the file/stream is closed.
@@ -121,7 +117,6 @@ public:
 
 private:
   std::shared_ptr<IO::File> file_;
-  std::shared_ptr<arrow::ResizableBuffer> buffer_;
 };
 
 /******************************************************************************/
