@@ -9,7 +9,9 @@ directory of this repository.
 #include <algorithm>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/builder_primitive.h>
+#include <arrow/buffer.h>
 #include <arrow/io/file.h>
+#include <arrow/io/memory.h>
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
@@ -47,11 +49,12 @@ std::shared_ptr<arrow::Array> build_array(const std::vector<T>& values)
   return array;
 }
 
-} // namespace
-
 /******************************************************************************/
-void write_point_spectra_data(
-    const std::string& path,
+// Build the point-layout spectra table and write it to the given Arrow
+// output sink.  Shared by the file-path and in-memory-buffer entry points
+// so the schema, writer properties and metadata handling stay identical.
+void write_point_spectra_data_to_sink(
+    const std::shared_ptr<arrow::io::OutputStream>& sink,
     const std::vector<uint64_t>& spectrum_index,
     const std::vector<double>& mz,
     const std::vector<float>& intensity,
@@ -103,14 +106,6 @@ void write_point_spectra_data(
   auto arrow_props(
       parquet::ArrowWriterProperties::Builder().store_schema()->build());
 
-  // Output sink.
-  auto sink_result(arrow::io::FileOutputStream::Open(path));
-  if (!sink_result.ok()) {
-    throw ParquetError("open output file " + path + ": " +
-                       sink_result.status().ToString());
-  }
-  std::shared_ptr<arrow::io::FileOutputStream> sink(sink_result.ValueOrDie());
-
   auto writer_result(parquet::arrow::FileWriter::Open(
       *schema, arrow::default_memory_pool(), sink, writer_props, arrow_props));
   if (!writer_result.ok()) {
@@ -145,6 +140,58 @@ void write_point_spectra_data(
   }
 
   check(writer->Close(), "close parquet writer");
+}
+
+} // namespace
+
+/******************************************************************************/
+void write_point_spectra_data(
+    const std::string& path,
+    const std::vector<uint64_t>& spectrum_index,
+    const std::vector<double>& mz,
+    const std::vector<float>& intensity,
+    const std::map<std::string, std::string>& file_kv)
+{
+  // Output sink.
+  auto sink_result(arrow::io::FileOutputStream::Open(path));
+  if (!sink_result.ok()) {
+    throw ParquetError("open output file " + path + ": " +
+                       sink_result.status().ToString());
+  }
+  std::shared_ptr<arrow::io::FileOutputStream> sink(sink_result.ValueOrDie());
+
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity,
+                                   file_kv);
+}
+
+/******************************************************************************/
+std::string point_spectra_data_bytes(
+    const std::vector<uint64_t>& spectrum_index,
+    const std::vector<double>& mz,
+    const std::vector<float>& intensity,
+    const std::map<std::string, std::string>& file_kv)
+{
+  // In-memory sink: the same table/schema/properties path as the file
+  // writer, but the bytes are returned instead of landing on disk.
+  auto sink_result(arrow::io::BufferOutputStream::Create());
+  if (!sink_result.ok()) {
+    throw ParquetError("create in-memory buffer sink: " +
+                       sink_result.status().ToString());
+  }
+  std::shared_ptr<arrow::io::BufferOutputStream> sink(sink_result.ValueOrDie());
+
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity,
+                                   file_kv);
+
+  auto buffer_result(sink->Finish());
+  if (!buffer_result.ok()) {
+    throw ParquetError("finish in-memory buffer sink: " +
+                       buffer_result.status().ToString());
+  }
+  std::shared_ptr<arrow::Buffer> buffer(buffer_result.ValueOrDie());
+
+  return std::string(reinterpret_cast<const char*>(buffer->data()),
+                     static_cast<std::size_t>(buffer->size()));
 }
 
 } // namespace MzPeak::Util

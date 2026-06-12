@@ -41,4 +41,22 @@ struct SpectrumData {
 void write_spectra_directory(const std::filesystem::path& dir,
                              const std::vector<SpectrumData>& spectra);
 
+/**
+ * Write a point-layout mzPeak file as a single ZIP ARCHIVE (`.mzpeak`).
+ *
+ * Produces an archive at `zip_path` containing `spectra_data.parquet`
+ * (point layout) and `mzpeak_index.json` as STORED (uncompressed)
+ * members, as the mzPeak spec mandates.  The result is readable by
+ * `MzPeak::open(zip_path)`.
+ *
+ * The spectra are flattened, validated and per-spectrum m/z sorted
+ * identically to @ref write_spectra_directory; only the container differs.
+ * Any existing file at `zip_path` is truncated.
+ *
+ * @throws ParquetError on I/O, encoding or libzip errors, or if any
+ *         spectrum's mz and intensity arrays differ in length.
+ */
+void write_spectra_archive(const std::filesystem::path& zip_path,
+                           const std::vector<SpectrumData>& spectra);
+
 } // namespace MzPeak
