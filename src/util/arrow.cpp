@@ -93,12 +93,20 @@ public:
 
     std::optional<std::size_t> n = file_->read(buffer_->mutable_data(), nbytes);
 
-    if (n.has_value()) {
-      auto slice = arrow::SliceBuffer(buffer_, 0, *n);
-      return arrow::Result<arrow_buffer_t>(slice);
-    } else {
+    if (!n.has_value()) {
       return arrow::Result<arrow_buffer_t>();
     }
+
+    // The returned buffer MUST report the number of bytes actually read,
+    // not the capacity of the reusable backing buffer.  Otherwise a short
+    // read (any file smaller than the default footer read size) hands
+    // Arrow an over-long buffer and it looks for the Parquet footer magic
+    // at the wrong offset ("magic bytes not found").  Preserve capacity so
+    // the buffer can still be reused for the next read.
+    arrow::Status status = buffer_->Resize(static_cast<int64_t>(*n), false);
+    if (!status.ok()) throw ParquetError(status.ToString());
+
+    return arrow::Result<arrow_buffer_t>(buffer_);
   }
 
   /// Close the file/stream.
