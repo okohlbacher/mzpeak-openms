@@ -124,3 +124,62 @@ BOOST_AUTO_TEST_CASE(valid_query_logic)
     BOOST_TEST(r == e, "! ||");
   }
 }
+
+/******************************************************************************/
+// Regression: Op::LE evaluated `v >= bound` (greater-equal logic) in BOTH the
+// scalar matcher (src/query.cpp match(value_t)) and the range matcher
+// (match(range_t)).  Both paths are exercised here.
+BOOST_AUTO_TEST_CASE(less_equal_predicate_matches_correctly)
+{
+  using namespace MzPeak;
+
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto entry = std::ranges::find(index.files(), Schema::EntityType::Spectrum,
+                                 &Schema::File::entity_type);
+
+  BOOST_TEST((entry != index.files().end()));
+
+  auto parquet = index.parquet(*entry);
+  auto dest = parquet->field("point", "spectrum_index");
+  BOOST_TEST(dest.has_value());
+
+  // Build a "spectrum_index <= 5" query.
+  Query le = Query::Builder(*dest).le<int64_t>(5);
+
+  // Scalar callback: return a fixed value regardless of destination.
+  auto value = [](int64_t x) {
+    return [x](Query::destination_t) -> Query::Result<Query::value_t> {
+      return Query::Result<Query::value_t>(Query::value_t{x});
+    };
+  };
+
+  // Range callback: return a fixed [min, max] range regardless of destination.
+  auto range = [](int64_t lo, int64_t hi) {
+    return [lo, hi](Query::destination_t) -> Query::Result<Query::range_t> {
+      return Query::Result<Query::range_t>(
+          Query::range_t{std::pair<int64_t, int64_t>{lo, hi}});
+    };
+  };
+
+  // Scalar matcher.
+  auto r3 = le.eval(value(3));
+  BOOST_TEST(r3.has_value());
+  BOOST_TEST(r3.value() == true); // 3 <= 5
+
+  auto r5 = le.eval(value(5));
+  BOOST_TEST(r5.has_value());
+  BOOST_TEST(r5.value() == true); // boundary inclusive
+
+  auto r9 = le.eval(value(9));
+  BOOST_TEST(r9.has_value());
+  BOOST_TEST(r9.value() == false); // 9 <= 5 is false
+
+  // Range matcher: a [min,max] range can satisfy "<= 5" iff min <= 5.
+  auto rng34 = le.eval(range(3, 4));
+  BOOST_TEST(rng34.has_value());
+  BOOST_TEST(rng34.value() == true); // min 3 <= 5
+
+  auto rng69 = le.eval(range(6, 9));
+  BOOST_TEST(rng69.has_value());
+  BOOST_TEST(rng69.value() == false); // min 6 <= 5 is false
+}
