@@ -153,6 +153,7 @@ test_names = [
     'archive_writer',
     'arrow',
     'chromatograms',
+    'chunked',
     'data_arrays',
     'directory',
     'executor',
