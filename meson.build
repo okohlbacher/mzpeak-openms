@@ -60,7 +60,6 @@ lib_sources = [
   'src/util/slice.cpp',
   'src/util/types.cpp',
   'src/util/vendor/MSNumpress.cpp',
-  'src/run_metadata.cpp',
   'src/writer.cpp',
 ]
 
@@ -179,6 +178,7 @@ test_names = [
     'query',
     'roundtrip',
     'spectra',
+    'spectra_query',
     'util',
     'wavelength_spectra',
     'writer',
