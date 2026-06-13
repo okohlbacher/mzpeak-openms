@@ -164,6 +164,7 @@ test_names = [
     'chunked',
     'data_arrays',
     'directory',
+    'eic',
     'executor',
     'group',
     'index',
