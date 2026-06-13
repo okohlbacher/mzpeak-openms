@@ -91,6 +91,7 @@ install_headers([
   'include/mzpeak/schema/psi/transform.h',
   'include/mzpeak/spectra.h',
   'include/mzpeak/spectrum.h',
+  'include/mzpeak/spectrum_metadata.h',
   'include/mzpeak/wavelength_spectrum.h',
   'include/mzpeak/wavelength_spectra.h',
   'include/mzpeak/util/algorithm.h',
