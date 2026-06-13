@@ -47,12 +47,14 @@ lib_sources = [
   'src/util/json_writer.cpp',
   'src/util/metadata_model.cpp',
   'src/util/null_fill.cpp',
+  'src/util/numpress.cpp',
   'src/util/parquet_writer.cpp',
   'src/util/planner.cpp',
   'src/util/projection.cpp',
   'src/util/query.cpp',
   'src/util/slice.cpp',
   'src/util/types.cpp',
+  'src/util/vendor/MSNumpress.cpp',
   'src/writer.cpp',
 ]
 
@@ -94,12 +96,14 @@ install_headers([
   'include/mzpeak/util/json_writer.h',
   'include/mzpeak/util/metadata_model.h',
   'include/mzpeak/util/null_fill.h',
+  'include/mzpeak/util/numpress.h',
   'include/mzpeak/util/parquet_writer.h',
   'include/mzpeak/util/planner.h',
   'include/mzpeak/util/projection.h',
   'include/mzpeak/util/query.h',
   'include/mzpeak/util/slice.h',
   'include/mzpeak/util/types.h',
+  'include/mzpeak/util/vendor/MSNumpress.hpp',
   'include/mzpeak/writer.h',
 ], subdir : 'mzpeak')
 
@@ -151,6 +155,7 @@ test_names = [
     'parquet',
     'json_writer',
     'null_fill',
+    'numpress',
     'parquet_writer',
     'planner',
     'query',
