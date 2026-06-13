@@ -149,6 +149,46 @@ Spectra Index::spectra() const
 }
 
 /******************************************************************************/
+WavelengthSpectra Index::wavelength_spectra() const
+{
+  // Resolve the wavelength spectrum tables by entity_type + data_kind (not by
+  // file name): the wavelength/intensity points live in the `data arrays`
+  // table.  The count lives in the metadata table's `wavelength_spectrum_count`
+  // key (the data table does not carry it).
+  using enum Schema::DataKind;
+
+  const Schema::File* data = nullptr;
+  const Schema::File* metadata = nullptr;
+  for (const auto& file : impl_->files_) {
+    if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
+    if (file.data_kind == DataArray) data = &file;
+    else if (file.data_kind == Metadata) metadata = &file;
+  }
+
+  if (!data) return WavelengthSpectra();
+
+  // Read the wavelength spectrum count from the metadata table if present.
+  std::optional<std::size_t> count;
+  if (metadata) {
+    auto md(parquet(*metadata));
+    auto fmd(md->file_metadata());
+    if (fmd) {
+      if (auto kv = fmd->key_value_metadata()) {
+        auto result(kv->Get("wavelength_spectrum_count"));
+        if (result.ok()) {
+          std::size_t r{};
+          const std::string& s(result.ValueOrDie());
+          auto [ptr, ec]{std::from_chars(s.data(), s.data() + s.size(), r)};
+          if (ec == std::errc()) count = r;
+        }
+      }
+    }
+  }
+
+  return WavelengthSpectra(parquet(*data), count);
+}
+
+/******************************************************************************/
 std::unique_ptr<Util::Parquet> Index::parquet(const Schema::File& file) const
 {
   std::unique_ptr<IO::File> data(impl_->archive_->read_file(file.file_name));
