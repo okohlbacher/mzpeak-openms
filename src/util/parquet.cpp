@@ -44,7 +44,10 @@ std::optional<std::size_t> get_kv_uint(const Parquet::file_metadata_t& fmd,
         std::size_t r{};
         auto [ptr, ec]{std::from_chars(s.data(), s.data() + s.size(), r)};
 
-        if (ec == std::errc()) {
+        // Require a clean, FULL parse: a partial match like "0junk" must not
+        // be accepted as a present 0 (that would suppress the record_count
+        // statistics fallback and report a wrong count -- RDR-11).
+        if (ec == std::errc() && ptr == s.data() + s.size()) {
           return r;
         } else {
           return std::nullopt;
