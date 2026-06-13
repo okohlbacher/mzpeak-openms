@@ -107,7 +107,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 - **Validate:** `has_uv.mzpeak` wavelength arrays read back equal to ground truth (requires RDR-1).
 - **Depends on:** RDR-1.
 
-### RDR-10 — Expose spectrum metadata, secondary & auxiliary arrays  ·  P2 · G9+G10
+### RDR-10 — Expose spectrum metadata, secondary & auxiliary arrays  ·  P2 · G9+G10 — ✅ DONE (033e874; per-spectrum scalar metadata via Spectrum::metadata())
 - **Symptom:** only `mz()`/`intensity()` are exposed; ms_level, scan, precursor, selected_ion, isolation window, activation, CV params, polarity, base-peak/TIC, etc. are dropped, as are secondary arrays (charge, ion mobility, S/N) and auxiliary arrays.
 - **Root cause:** `Spectrum` exposes only m/z, intensity, raw arrays, array index (`include/mzpeak/spectrum.h:37`); `Metadata` validates kind and reads nothing (`src/metadata.cpp:36`).
 - **Done when:** the metadata facets are parsed onto a spectrum-metadata model; generic per-array access keyed by `ArrayType`; **auxiliary arrays** decoded from the metadata rows (gated by `number_of_auxiliary_arrays`; mirror Rust `reader.rs:1034`) — these are a *metadata* concern, distinct from data-table arrays.
@@ -118,15 +118,15 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R6 — Robustness hardening
 
-### RDR-11 — Fix record_count fallback  ·  P3 · G11 (Bug I)
+### RDR-11 — Fix record_count fallback  ·  P3 · G11 (Bug I) — ✅ DONE (5c7b1c2, hardened 5f53496)
 - **Root cause:** missing count metadata becomes `0` (`src/util/parquet.cpp:129`) so the stats fallback never runs; the fallback then returns **max index, not count** (`src/util/data_arrays.cpp:209`).
 - **Done when:** absent `*_count` KV falls through to a correct count (row count or max-index+1), not 0/off-by-one.
 
-### RDR-12 — Null-check nullable columns in query evaluation  ·  P3 · G12 (Bug J)
+### RDR-12 — Null-check nullable columns in query evaluation  ·  P3 · G12 (Bug J) — ✅ DONE (data_arrays.cpp ArrayValueHelper IsNull guard)
 - **Root cause:** `Value(i_)` is read on nullable columns without an `IsNull` check (`src/util/data_arrays.cpp:127`).
 - **Done when:** predicate evaluation skips/handles nulls correctly. (Latent today — index column is non-nullable.)
 
-### RDR-13 — Throw hygiene  ·  P3 · G14
+### RDR-13 — Throw hygiene  ·  P3 · G14 — ✅ DONE (encoding.h chunked throw → ParquetError)
 - **Root cause:** `throw("not implemented")` throws a `const char*` (uncatchable as `std::exception`) (`include/mzpeak/util/encoding.h:87`); inconsistent error types.
 - **Done when:** all error paths throw a `MzPeak` exception type; no bare-literal throws.
 
@@ -142,26 +142,26 @@ HTTP-range / S3 / object_store prefix. `open()` currently rejects non-local path
 ## Milestone R7 — Reference (Rust) capability parity
 Capability gaps vs the Rust `MzPeakReader` surfaced by [reader-rust-parity.md](reader-rust-parity.md) — features the reference reader exposes that the C++ reader lacks (beyond the spec/correctness work above).
 
-### RDR-24 — Parse & expose file-level metadata blocks + format version  ·  P2
+### RDR-24 — Parse & expose file-level metadata blocks + format version  ·  P2 — ✅ DONE (version 950a76c; run-level blocks 5c7b1c2)
 - **Symptom:** the index `metadata{}` block is **never read** — `Index::parse_index` reads only the JSON `files[]` (`src/index.cpp:84-93`); `Metadata` validates the kind but exposes **no accessors** (`src/metadata.cpp`). Two parts are missing:
   - **`metadata.version`** — the mzPeak format version (`"0.9.0"`). The Rust writer writes it (`MZPEAK_VERSION` / `VERSION_KEY`, `FileIndex::add_version`, commit *"JSON metadata in the index"* 29e59b2); the reader should **read and validate** it (reject/warn on an incompatible major version) instead of ignoring it. *(Our own C++ writer already emits `version`; the C++ reader does not check it.)*
   - **The run-level blocks** — `run`, `instrument_configuration_list`, `software_list`, `sample_list`, `data_processing_method_list`, `scan_settings_list`, `file_description`, `cv_list` — written into `metadata{}` (and Parquet KV) and decoded by Rust (`hupo-mzpeak/src/reader/metadata.rs:404-489`); the reference `small.dir/mzpeak_index.json` carries all seven.
 - **Done when:** `metadata{}` (+ Parquet KV) parses into typed structs with accessors, and the format version is surfaced and version-checked. Prerequisite for OpenMS `ExperimentalSettings` mapping (RDR-19). *Distinct from RDR-10 (per-spectrum metadata).*
 - **Writer counterpart:** the C++ writer currently emits only `metadata.version` (not the run-level blocks) — writing those blocks is the writer-side dual of this item (tracked in [writer-implementation-research.md](writer-implementation-research.md) §1).
 
-### RDR-15 — Random access by native spectrum id  ·  P2
+### RDR-15 — Random access by native spectrum id  ·  P2 — ✅ DONE (f2847f7)
 - **Symptom:** spectra are reachable only by integer position (`Spectra::fetch`, `src/spectra.cpp:31`); external tools reference spectra by native id. Rust: `get_spectrum_by_id` (`reader.rs:213`), `get_spectrum_metadata_by_id` (`reader.rs:1220`) via an id→index offset index.
 - **Done when:** an id→index map is built from the metadata `id` column and `Index`/`Spectra` expose by-id lookup. **Depends on:** RDR-10.
 
-### RDR-16 — Retention-time / time-range query  ·  P2
+### RDR-16 — Retention-time / time-range query  ·  P2 — ✅ DONE (f2847f7)
 - **Symptom:** no way to select spectra by RT. Rust: `get_spectrum_index_range_for_time_range` (`reader.rs:524`) via a time page index.
 - **Done when:** a time index (from the metadata `time` column) backs an RT-range → spectrum-index-range API. **Depends on:** RDR-10, RDR-23.
 
-### RDR-17 — EIC / m/z–ion-mobility signal extraction pipeline  ·  P2
+### RDR-17 — EIC / m/z–ion-mobility signal extraction pipeline  ·  P2 — ✅ DONE (a933537, hardened 5f53496; m/z×RT×ms-level EIC. Ion-mobility dimension N/A for current fixtures)
 - **Symptom:** a *low-level* executor exists — `Spectra::fetch` builds a `Query` and `DataArrays::read_arrays` prunes row groups + slices batches (`src/spectra.cpp:31-41`, `src/util/data_arrays.cpp:235-286`). What is missing is the **multi-dimensional extraction pipeline** the Rust reader provides: stream the data/peaks tables filtered by (time × m/z × ion mobility × ms-level) to build extracted-ion chromatograms / targeted point sets. Rust: `extract_signal` (`reader.rs:608`), `query_peaks` (`reader.rs:883`), with split-thread parallelism (`reader.rs:639`).
 - **Done when:** a range-extraction API returns points/peaks selected across those dimensions (EIC basis). **Depends on:** RDR-16, RDR-3, RDR-6.
 
-### RDR-18 — Batch / bulk read scheduling  ·  P3
+### RDR-18 — Batch / bulk read scheduling  ·  P3 — ✅ DONE (a933537; sort-before-read. Shared row-group reads deferred to RDR-21)
 - **Symptom:** only single `fetch`; reading a scattered subset re-reads per spectrum. Rust: `get_spectra_batch` (`reader.rs:1311`) sorts indices and reads efficiently.
 - **Done when:** a batch read sorts indices and shares row-group reads. **Depends on:** RDR-21.
 
