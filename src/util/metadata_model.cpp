@@ -393,7 +393,8 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
         // Read number_of_auxiliary_arrays (uint32) for the count-consistency
         // assert (T-03-02 mitigation).  Absent/null counts as 0.
         uint64_t declared_count = 0;
-        if (auto cnt = opt_int<uint64_t>(spectrum, "number_of_auxiliary_arrays", r)) {
+        if (auto cnt =
+                opt_int<uint64_t>(spectrum, "number_of_auxiliary_arrays", r)) {
           declared_count = *cnt;
         }
 
@@ -494,10 +495,10 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
                                 float fv = 0.0f;
                                 std::uint8_t buf[4];
                                 for (std::size_t bi = 0; bi < 4; ++bi) {
-                                  buf[bi] = static_cast<std::uint8_t>(
-                                      data_values->Value(d_begin +
-                                                         static_cast<int64_t>(
-                                                             ei * 4 + bi)));
+                                  buf[bi] =
+                                      static_cast<std::uint8_t>(data_values->Value(
+                                          d_begin +
+                                          static_cast<int64_t>(ei * 4 + bi)));
                                 }
                                 std::memcpy(&fv, buf, 4);
                                 aa.values.push_back(fv);
@@ -505,10 +506,10 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
                                 std::int32_t iv = 0;
                                 std::uint8_t buf[4];
                                 for (std::size_t bi = 0; bi < 4; ++bi) {
-                                  buf[bi] = static_cast<std::uint8_t>(
-                                      data_values->Value(d_begin +
-                                                         static_cast<int64_t>(
-                                                             ei * 4 + bi)));
+                                  buf[bi] =
+                                      static_cast<std::uint8_t>(data_values->Value(
+                                          d_begin +
+                                          static_cast<int64_t>(ei * 4 + bi)));
                                 }
                                 std::memcpy(&iv, buf, 4);
                                 aa.values.push_back(static_cast<float>(iv));
@@ -516,10 +517,10 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
                                 double dv = 0.0;
                                 std::uint8_t buf[8];
                                 for (std::size_t bi = 0; bi < 8; ++bi) {
-                                  buf[bi] = static_cast<std::uint8_t>(
-                                      data_values->Value(d_begin +
-                                                         static_cast<int64_t>(
-                                                             ei * 8 + bi)));
+                                  buf[bi] =
+                                      static_cast<std::uint8_t>(data_values->Value(
+                                          d_begin +
+                                          static_cast<int64_t>(ei * 8 + bi)));
                                 }
                                 std::memcpy(&dv, buf, 8);
                                 aa.values.push_back(static_cast<float>(dv));
