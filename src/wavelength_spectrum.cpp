@@ -1,13 +1,15 @@
 /*
 
-This file is part of the mzpeak.h project.  It is subject to the
-license specified in the LICENSE file which can be found in the
-top-level directory of this repository.
+This file is part of the mzpeak project.  It is subject to the license
+specified in the LICENSE file which can be found in the top-level
+directory of this repository.
 
 */
 
+#include <string>
 #include <vector>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/schema/psi/data_type.h"
 #include "mzpeak/util/encoding.h"
 #include "mzpeak/wavelength_spectrum.h"
@@ -29,7 +31,8 @@ decode_wavelength(const Schema::ArrayIndex& index, Util::array_map_type& map)
 
   std::vector<WavelengthSpectrum::wavelength_type> res;
   res.reserve(raw.size());
-  for (float v : raw) res.push_back(static_cast<double>(v));
+  for (float v : raw)
+    res.push_back(static_cast<double>(v));
   return res;
 }
 
@@ -49,6 +52,18 @@ WavelengthSpectrum::WavelengthSpectrum(const Schema::ArrayIndex& idx,
     , wavelength_(decode_wavelength(array_index_, *map_))
     , intensity_(decode_intensity(array_index_, *map_))
 {
+  // wavelength and intensity are paired sample arrays; a length mismatch means
+  // the decode dropped or duplicated points and the spectrum is corrupt.
+  // Surface it rather than returning mismatched arrays (mirrors Spectrum).
+  // Either array may legitimately be empty (an absent index yields two empty
+  // arrays; some layouts carry only one of the two).
+  if (!wavelength_.empty() && !intensity_.empty() &&
+      wavelength_.size() != intensity_.size()) {
+    throw ParquetError("wavelength spectrum wavelength and intensity length "
+                       "mismatch: " +
+                       std::to_string(wavelength_.size()) + " vs " +
+                       std::to_string(intensity_.size()));
+  }
 }
 
 /******************************************************************************/

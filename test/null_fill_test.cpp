@@ -28,7 +28,7 @@ BOOST_AUTO_TEST_CASE(matches_reference_reconstruction)
       202.60657495520474, 202.60682348271374, 202.60707201083247,
       202.607320539561,   202.60756906889915, 202.60781759884705,
       202.60806612940473, 202.60831465843808, // <- reconstructed
-      204.75933490116418,                       // <- reconstructed
+      204.75933490116418,                     // <- reconstructed
       204.75958873936264, 204.7598425769317,  204.76009641513016,
       204.76035025395797, 204.76060409341508};
 
@@ -61,18 +61,16 @@ BOOST_AUTO_TEST_CASE(single_value_run_uses_model)
 {
   using namespace MzPeak::Util;
 
-  std::vector<double> values{100.0, 100.2, 0.0, 0.0, 500.0,
-                             0.0,   0.0,   900.0, 900.3};
-  std::vector<bool> valid{true, true, false, false, true,
-                          false, false, true, true};
+  std::vector<double> values{100.0, 100.2, 0.0, 0.0, 500.0, 0.0, 0.0, 900.0, 900.3};
+  std::vector<bool> valid{true, true, false, false, true, false, false, true, true};
   const std::vector<double> beta{0.25}; // constant model: predict() = 0.25
 
   std::vector<double> out(reconstruct_null_mz(values, valid, beta));
 
   const std::vector<double> expected{
-      100.0, 100.2, 100.4,      // run a + its trailing delta (0.2)
-      499.75, 500.0, 500.25,    // singleton X +/- predict()=0.25
-      899.7, 900.0, 900.3};     // run b leading delta (0.3) + values
+      100.0,  100.2, 100.4,  // run a + its trailing delta (0.2)
+      499.75, 500.0, 500.25, // singleton X +/- predict()=0.25
+      899.7,  900.0, 900.3}; // run b leading delta (0.3) + values
   BOOST_TEST(out.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
     BOOST_TEST(out[i] == expected[i], boost::test_tools::tolerance(1e-9));

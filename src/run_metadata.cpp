@@ -8,6 +8,9 @@ directory of this repository.
 
 #include "mzpeak/run_metadata.h"
 
+#include <cstdint>
+#include <limits>
+
 /*
  * RDR-24 — parse the run-level metadata blocks from the index `metadata{}`
  * object into the typed model declared in run_metadata.h.  Boost.JSON is used
@@ -19,6 +22,10 @@ directory of this repository.
  * a pre-1.0 living standard.
  */
 namespace MzPeak {
+
+// Local alias: the public header qualifies Boost.JSON in full; inside this
+// translation unit the short form keeps the parsing code readable.
+namespace json = boost::json;
 
 /******************************************************************************/
 namespace {
@@ -33,10 +40,19 @@ std::optional<std::string> opt_string(const json::object& o, const char* key)
 }
 
 /// Read an optional integer member; absent/null/non-integral yields nullopt.
+/// Accepts both signed and (in-range) unsigned JSON integers, since Boost.JSON
+/// parses a non-negative literal as `uint64` and would otherwise be dropped.
 std::optional<std::int64_t> opt_int(const json::object& o, const char* key)
 {
-  if (const auto it = o.find(key); it != o.end() && it->value().is_int64()) {
-    return it->value().as_int64();
+  const auto it = o.find(key);
+  if (it == o.end()) return std::nullopt;
+  const auto& v = it->value();
+  if (v.is_int64()) return v.as_int64();
+  if (v.is_uint64()) {
+    const auto u = v.as_uint64();
+    if (u <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return static_cast<std::int64_t>(u);
+    }
   }
   return std::nullopt;
 }
@@ -145,7 +161,8 @@ DataProcessing DataProcessing::from_json(const json::object& o)
   DataProcessing dp;
   if (auto id = opt_string(o, "id")) dp.id = std::move(*id);
   for (const auto& v : array_member(o, "methods")) {
-    if (v.is_object()) dp.methods.push_back(ProcessingMethod::from_json(v.as_object()));
+    if (v.is_object())
+      dp.methods.push_back(ProcessingMethod::from_json(v.as_object()));
   }
   return dp;
 }
@@ -177,7 +194,8 @@ FileDescription FileDescription::from_json(const json::object& o)
   FileDescription fd;
   fd.contents = cv_params_from_json(array_member(o, "contents"));
   for (const auto& v : array_member(o, "source_files")) {
-    if (v.is_object()) fd.source_files.push_back(SourceFile::from_json(v.as_object()));
+    if (v.is_object())
+      fd.source_files.push_back(SourceFile::from_json(v.as_object()));
   }
   return fd;
 }

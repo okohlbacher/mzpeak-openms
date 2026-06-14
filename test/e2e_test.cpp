@@ -64,10 +64,10 @@ MzPeak::SpectrumData sorted_copy(const MzPeak::Spectrum& s)
   const auto& mz = s.mz();
   const auto& it = s.intensity();
   std::vector<std::size_t> order(mz.size());
-  for (std::size_t j = 0; j < order.size(); ++j) order[j] = j;
-  std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
-    return mz[a] < mz[b];
-  });
+  for (std::size_t j = 0; j < order.size(); ++j)
+    order[j] = j;
+  std::ranges::sort(order,
+                    [&](std::size_t a, std::size_t b) { return mz[a] < mz[b]; });
 
   MzPeak::SpectrumData out;
   out.mz.reserve(mz.size());
@@ -182,11 +182,12 @@ void exercise_reader(const std::string& path, std::optional<std::size_t> expecte
 
   // NOTE: the auxiliary chromatogram / wavelength tables are validated in the
   // per-fixture cases below rather than here, because their reader support is
-  // currently uneven across fixtures (see the two open gaps recorded in
-  // docs/reader-backlog.md, RDR-28/RDR-29): chunked-layout chromatograms throw
-  // "not yet supported" (small.chunked / small.numpress) and the has_uv point
-  // chromatograms decode `time` but not `intensity`.  This e2e codifies the
-  // capability that exists today and leaves those gaps explicitly tracked.
+  // currently uneven across fixtures (see the open gap recorded in
+  // docs/reader-backlog.md, RDR-28): chunked-layout chromatograms throw
+  // "not yet supported" (small.chunked / small.numpress).  Point chromatograms,
+  // including has_uv's multi-intensity-column case, are fully decoded (RDR-29).
+  // This e2e codifies the capability that exists today and leaves the remaining
+  // gap explicitly tracked.
 }
 
 /// Reverse round trip: read a fixture, write the first `cap` spectra back out
@@ -208,12 +209,10 @@ void exercise_round_trip(const std::string& path, std::size_t cap)
   for (std::size_t i = 0; i < subset.size(); ++i) {
     BOOST_TEST(out[i].mz.size() == subset[i].mz.size());
     BOOST_TEST(out[i].intensity.size() == subset[i].intensity.size());
-    const std::size_t m =
-        std::min(out[i].mz.size(), subset[i].mz.size());
+    const std::size_t m = std::min(out[i].mz.size(), subset[i].mz.size());
     for (std::size_t j = 0; j < m; ++j) {
       BOOST_TEST(out[i].mz[j] == subset[i].mz[j], tolerance(1e-9));
-      BOOST_TEST(out[i].intensity[j] == subset[i].intensity[j],
-                 tolerance(1e-6f));
+      BOOST_TEST(out[i].intensity[j] == subset[i].intensity[j], tolerance(1e-6f));
     }
   }
 }
@@ -276,6 +275,34 @@ BOOST_AUTO_TEST_CASE(has_uv)
   auto w = wls[0];
   BOOST_TEST(w.wavelength().size() == 96u);
   BOOST_TEST(w.intensity().size() == 96u);
+
+  // Point chromatograms now decode intensity as well as time (RDR-29).  This
+  // fixture has two chromatograms that each store their intensity in a
+  // different physical "intensity array" column (both tagged MS:1000515): the
+  // first uses the primary `intensity` counts column, the second the secondary
+  // `intensity_f32_au` absorbance column.  intensity() coalesces these so every
+  // chromatogram reads paired time/intensity arrays.
+  auto chroms = MzPeak::open(path).chromatograms();
+  BOOST_TEST(chroms.size() == 2u);
+  for (std::size_t i = 0; i < chroms.size(); ++i) {
+    auto c = chroms[i];
+    BOOST_TEST(c.time().size() == c.intensity().size());
+  }
+
+  // Ground-truth values (pyarrow over chromatograms_data.parquet):
+  //   chrom 0: 212 points, primary `intensity` (counts)  [0]=168514.375
+  //   chrom 1: 526 points, `intensity_f32_au` (absorbance) [0]=-0.02479553
+  auto c0 = chroms[0];
+  BOOST_TEST(c0.time().size() == 212u);
+  BOOST_TEST(c0.intensity().size() == 212u);
+  BOOST_TEST(c0.intensity().front() == 168514.375f, tolerance(1e-3f));
+  BOOST_TEST(c0.intensity().back() == 166080.78125f, tolerance(1e-3f));
+
+  auto c1 = chroms[1];
+  BOOST_TEST(c1.time().size() == 526u);
+  BOOST_TEST(c1.intensity().size() == 526u);
+  BOOST_TEST(c1.intensity().front() == -0.0247955322f, tolerance(1e-6f));
+  BOOST_TEST(c1.intensity().back() == -0.0214576721f, tolerance(1e-6f));
 }
 
 /******************************************************************************/

@@ -1,8 +1,8 @@
 /*
 
-This file is part of the mzpeak.h project.  It is subject to the
-license specified in the LICENSE file which can be found in the
-top-level directory of this repository.
+This file is part of the mzpeak project.  It is subject to the license
+specified in the LICENSE file which can be found in the top-level
+directory of this repository.
 
 */
 
@@ -12,9 +12,9 @@ top-level directory of this repository.
 #include <memory>
 #include <optional>
 
-#include "mzpeak/wavelength_spectrum.h"
 #include "mzpeak/util/data_arrays.h"
 #include "mzpeak/util/enumerable_proxy.h"
+#include "mzpeak/wavelength_spectrum.h"
 
 namespace MzPeak {
 

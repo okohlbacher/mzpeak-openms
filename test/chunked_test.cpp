@@ -19,8 +19,8 @@ directory of this repository.
 /******************************************************************************/
 // Materialize the POINT reference spectrum `idx` (small.mzpeak) into plain
 // vectors.  The reference is the oracle the chunked layouts must reproduce.
-static void reference_spectrum(std::size_t idx, std::vector<double>& mz,
-                               std::vector<float>& in)
+static void
+reference_spectrum(std::size_t idx, std::vector<double>& mz, std::vector<float>& in)
 {
   auto ref = MzPeak::open("../test/files/small.mzpeak");
   auto s = ref.spectra()[idx];

@@ -32,7 +32,11 @@ struct TempDir {
     std::error_code ec;
     fs::remove_all(path, ec);
   }
-  ~TempDir() { std::error_code ec; fs::remove_all(path, ec); }
+  ~TempDir()
+  {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
   static unsigned next_id()
   {
     static std::atomic<unsigned> c{0};
@@ -56,7 +60,8 @@ std::vector<MzPeak::SpectrumData> read_all_sorted(const std::string& path)
     const auto& it = s.intensity();
 
     std::vector<std::size_t> order(mz.size());
-    for (std::size_t j = 0; j < order.size(); ++j) order[j] = j;
+    for (std::size_t j = 0; j < order.size(); ++j)
+      order[j] = j;
     std::ranges::sort(order,
                       [&](std::size_t a, std::size_t b) { return mz[a] < mz[b]; });
 

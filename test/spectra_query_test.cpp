@@ -83,5 +83,6 @@ BOOST_AUTO_TEST_CASE(indices_in_time_range)
   auto all = spectra.indices_in_time_range(0.0, 1.0);
   BOOST_TEST(all.size() == spectra.size());
   BOOST_TEST(all.size() == 48u);
-  for (std::size_t i = 0; i < all.size(); ++i) BOOST_TEST(all[i] == i);
+  for (std::size_t i = 0; i < all.size(); ++i)
+    BOOST_TEST(all[i] == i);
 }

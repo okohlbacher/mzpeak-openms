@@ -14,7 +14,6 @@ directory of this repository.
 #include <vector>
 
 namespace MzPeak {
-namespace json = boost::json;
 
 /**
  * RDR-24 — typed file-level (run-level) metadata blocks parsed from the
@@ -42,12 +41,12 @@ struct CvParam {
   std::optional<std::string> unit;
   std::optional<std::string> value;
 
-  /// Parse from a JSON parameter object.
-  static CvParam from_json(const json::object&);
+  /// Parse a CvParam from its JSON parameter object.
+  static CvParam from_json(const boost::json::object&);
 };
 
 /// Parse a JSON array of parameter objects into a `CvParam` vector.
-std::vector<CvParam> cv_params_from_json(const json::array&);
+std::vector<CvParam> cv_params_from_json(const boost::json::array&);
 
 /**
  * A software package (`software_list[]` entry): id, version, and CV params
@@ -58,7 +57,8 @@ struct Software {
   std::optional<std::string> version;
   std::vector<CvParam> parameters;
 
-  static Software from_json(const json::object&);
+  /// Parse a Software from its JSON object representation.
+  static Software from_json(const boost::json::object&);
 };
 
 /**
@@ -70,7 +70,8 @@ struct Component {
   std::optional<std::int64_t> order;
   std::vector<CvParam> parameters;
 
-  static Component from_json(const json::object&);
+  /// Parse a Component from its JSON object representation.
+  static Component from_json(const boost::json::object&);
 };
 
 /**
@@ -84,7 +85,8 @@ struct InstrumentConfiguration {
   std::vector<CvParam> parameters;
   std::vector<Component> components;
 
-  static InstrumentConfiguration from_json(const json::object&);
+  /// Parse a InstrumentConfiguration from its JSON object representation.
+  static InstrumentConfiguration from_json(const boost::json::object&);
 };
 
 /**
@@ -96,7 +98,8 @@ struct ProcessingMethod {
   std::optional<std::string> software_reference;
   std::vector<CvParam> parameters;
 
-  static ProcessingMethod from_json(const json::object&);
+  /// Parse a ProcessingMethod from its JSON object representation.
+  static ProcessingMethod from_json(const boost::json::object&);
 };
 
 /**
@@ -107,7 +110,8 @@ struct DataProcessing {
   std::string id;
   std::vector<ProcessingMethod> methods;
 
-  static DataProcessing from_json(const json::object&);
+  /// Parse a DataProcessing from its JSON object representation.
+  static DataProcessing from_json(const boost::json::object&);
 };
 
 /**
@@ -118,7 +122,8 @@ struct Sample {
   std::optional<std::string> name;
   std::vector<CvParam> parameters;
 
-  static Sample from_json(const json::object&);
+  /// Parse a Sample from its JSON object representation.
+  static Sample from_json(const boost::json::object&);
 };
 
 /**
@@ -131,7 +136,8 @@ struct SourceFile {
   std::optional<std::string> location;
   std::vector<CvParam> parameters;
 
-  static SourceFile from_json(const json::object&);
+  /// Parse a SourceFile from its JSON object representation.
+  static SourceFile from_json(const boost::json::object&);
 };
 
 /**
@@ -142,7 +148,8 @@ struct FileDescription {
   std::vector<CvParam> contents;
   std::vector<SourceFile> source_files;
 
-  static FileDescription from_json(const json::object&);
+  /// Parse a FileDescription from its JSON object representation.
+  static FileDescription from_json(const boost::json::object&);
 };
 
 /**
@@ -157,7 +164,8 @@ struct Run {
   std::optional<std::string> default_data_processing_id;
   std::optional<std::string> default_source_file_id;
 
-  static Run from_json(const json::object&);
+  /// Parse a Run from its JSON object representation.
+  static Run from_json(const boost::json::object&);
 };
 
 /**
@@ -171,7 +179,7 @@ public:
   RunMetadata() = default;
 
   /// Parse the index `metadata{}` object (everything except `version`).
-  explicit RunMetadata(const json::object&);
+  explicit RunMetadata(const boost::json::object&);
 
   /// The run block, if a `run` object was present.
   const std::optional<Run>& run() const { return run_; }
@@ -200,14 +208,21 @@ public:
   /// `sample_list` (empty if absent).
   const std::vector<Sample>& samples() const { return samples_; }
 
-  /// `true` if the index carried any run-level metadata block.
-  bool empty() const { return raw_.empty(); }
+  /// `true` if the index carried no run-level metadata block.  Tests the typed
+  /// blocks rather than `raw_`, so a `metadata{}` that holds only the format
+  /// `version` (handled separately by Index) still reports empty.
+  bool empty() const
+  {
+    return !run_.has_value() && !file_description_.has_value() &&
+           software_list_.empty() && instrument_configurations_.empty() &&
+           data_processings_.empty() && samples_.empty();
+  }
 
   /// The verbatim `metadata{}` object, for blocks/terms not typed above.
-  const json::object& raw() const { return raw_; }
+  const boost::json::object& raw() const { return raw_; }
 
 private:
-  json::object raw_;
+  boost::json::object raw_;
   std::optional<Run> run_;
   std::optional<FileDescription> file_description_;
   std::vector<Software> software_list_;

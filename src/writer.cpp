@@ -39,8 +39,7 @@ void validate(const std::vector<SpectrumData>& spectra, const char* context)
 {
   for (std::size_t i = 0; i < spectra.size(); ++i) {
     if (spectra[i].mz.size() != spectra[i].intensity.size()) {
-      throw ParquetError(std::string(context) + ": spectrum " +
-                         std::to_string(i) +
+      throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
                          " has mismatched mz/intensity lengths");
     }
   }
@@ -116,13 +115,12 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
   rows.reserve(spectra.size());
   for (std::size_t i = 0; i < spectra.size(); ++i) {
     const SpectrumData& s = spectra[i];
-    rows.push_back(
-        {/*index=*/static_cast<uint64_t>(i),
-         /*id=*/"index=" + std::to_string(i),
-         /*ms_level=*/uint8_t{1},
-         /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
-         /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
-         /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
+    rows.push_back({/*index=*/static_cast<uint64_t>(i),
+                    /*id=*/"index=" + std::to_string(i),
+                    /*ms_level=*/uint8_t{1},
+                    /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
+                    /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
+                    /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
   }
   return rows;
 }
@@ -153,8 +151,8 @@ void add_stored_member(zip_t* archive, const char* name, const std::string& data
 
   // The mzPeak spec mandates ZIP_CM_STORE; the reader rejects compressed
   // members.
-  if (zip_set_file_compression(archive, static_cast<zip_uint64_t>(idx),
-                               ZIP_CM_STORE, 0) != 0) {
+  if (zip_set_file_compression(archive, static_cast<zip_uint64_t>(idx), ZIP_CM_STORE,
+                               0) != 0) {
     throw ParquetError(std::string("write_spectra_archive: "
                                    "zip_set_file_compression failed for ") +
                        name + ": " + zip_strerror(archive));
@@ -197,8 +195,7 @@ void write_spectra_directory(const fs::path& dir,
   if (with_peaks) {
     PointColumns peaks(flatten(spectra, /*want_centroid=*/true));
     Util::write_point_spectra_data((dir / "spectra_peaks.parquet").string(),
-                                   peaks.spectrum_index, peaks.mz,
-                                   peaks.intensity,
+                                   peaks.spectrum_index, peaks.mz, peaks.intensity,
                                    point_file_kv(total, peaks.mz.size()));
   }
 
@@ -220,9 +217,9 @@ void write_spectra_archive(const fs::path& zip_path,
   // Encode all members in memory first.  These strings back the libzip
   // sources and MUST stay alive until zip_close returns.
   PointColumns data(flatten(spectra, /*want_centroid=*/false));
-  std::string data_bytes(Util::point_spectra_data_bytes(
-      data.spectrum_index, data.mz, data.intensity,
-      point_file_kv(total, data.mz.size())));
+  std::string data_bytes(
+      Util::point_spectra_data_bytes(data.spectrum_index, data.mz, data.intensity,
+                                     point_file_kv(total, data.mz.size())));
 
   std::string peaks_bytes;
   if (with_peaks) {
@@ -237,8 +234,7 @@ void write_spectra_archive(const fs::path& zip_path,
   std::string index_json(spectra_index_json(with_peaks));
 
   int errnum = 0;
-  zip_t* archive =
-      zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
+  zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
   if (archive == nullptr) {
     zip_error_t error;
     zip_error_init_with_code(&error, errnum);

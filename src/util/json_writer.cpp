@@ -31,7 +31,7 @@ std::string point_spectra_array_index_json()
   mz["data_type"] = "MS:1000523";  // 64-bit float
   mz["array_type"] = "MS:1000514"; // m/z array
   mz["array_name"] = "m/z array";
-  mz["unit"] = "MS:1000040";       // m/z
+  mz["unit"] = "MS:1000040"; // m/z
   mz["buffer_format"] = "point";
   mz["transform"] = nullptr;
   mz["data_processing_id"] = nullptr;
@@ -45,7 +45,7 @@ std::string point_spectra_array_index_json()
   intensity["data_type"] = "MS:1000521";  // 32-bit float
   intensity["array_type"] = "MS:1000515"; // intensity array
   intensity["array_name"] = "intensity array";
-  intensity["unit"] = "MS:1000131";       // number of detector counts
+  intensity["unit"] = "MS:1000131"; // number of detector counts
   intensity["buffer_format"] = "point";
   intensity["transform"] = nullptr;
   intensity["data_processing_id"] = nullptr;

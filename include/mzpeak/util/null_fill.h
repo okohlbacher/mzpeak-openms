@@ -25,7 +25,8 @@ double predict_delta(const std::vector<double>& beta, double mz);
  * Mirrors the reference `MedianDeltaEstimator::estimate_median_delta`.
  */
 double estimate_median_delta(const std::vector<double>& values,
-                             std::size_t begin, std::size_t end);
+                             std::size_t begin,
+                             std::size_t end);
 
 /**
  * Reconstruct the null-marked m/z values of a profile spectrum.

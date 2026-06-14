@@ -86,8 +86,7 @@ public:
     arrow::Result<std::unique_ptr<arrow::ResizableBuffer>> alloc(
         arrow::AllocateResizableBuffer(nbytes));
     if (!alloc.ok()) throw ParquetError(alloc.status().ToString());
-    std::shared_ptr<arrow::ResizableBuffer> buffer(
-        std::move(alloc.ValueOrDie()));
+    std::shared_ptr<arrow::ResizableBuffer> buffer(std::move(alloc.ValueOrDie()));
 
     std::optional<std::size_t> n = file_->read(buffer->mutable_data(), nbytes);
 

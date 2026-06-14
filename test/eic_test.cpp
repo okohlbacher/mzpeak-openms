@@ -42,9 +42,8 @@ BOOST_AUTO_TEST_CASE(eic_ms2_window_values)
   auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.011, 0.11, 2);
 
   const std::vector<std::size_t> expect_idx{2, 3, 4, 5, 6, 9, 10, 11};
-  const std::vector<double> expect_int{1686.5167, 1890.8547, 418.7325,
-                                       579.9818,  1812.8755, 2145.2410,
-                                       1539.2138, 363.21295};
+  const std::vector<double> expect_int{1686.5167, 1890.8547, 418.7325,  579.9818,
+                                       1812.8755, 2145.2410, 1539.2138, 363.21295};
 
   BOOST_TEST(eic.size() == expect_idx.size());
 
@@ -99,8 +98,7 @@ BOOST_AUTO_TEST_CASE(eic_emits_dense_zeros)
   BOOST_TEST(eic.size() == 8u);
   std::size_t zeros = 0, nonzeros = 0;
   for (const auto& p : eic) {
-    if (p.intensity == 0.0)
-      ++zeros;
+    if (p.intensity == 0.0) ++zeros;
     else
       ++nonzeros;
   }

@@ -60,6 +60,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 - **Done when:** `DataType` + the Parquet type-tag maps cover `UInt32/UInt64`, `list`/`large_list`, `string`/`large_string`, and `large_list<u8>`; the spectrum-index path uses the correct unsigned type.
 - **Validate:** index values decode correctly across the full uint64 range; chunked/aux columns (RDR-6/RDR-10) can be typed.
 - **Note:** foundational — prerequisite for chunked (RDR-6), numpress, and auxiliary arrays. Consider doing early in R2.
+- **Reviewer note (2026-06-13):** an OpenMS-style adversarial review (codex) re-flagged exactly this as the top correctness item — the C++ writer emits the `spectrum_index` column as Arrow `uint64` (matching the Rust reference) while the reader synthesizes/casts the index as signed `Int64` (`src/schema/array_index.cpp` + `src/util/parquet_writer.cpp:141`). Bit-identical and correct for any realistic index (< 2^63), but the signed/unsigned round-trip is the type-safety hole this item exists to close. Deferred here (large change across DataType/Query/stats/array casts), not introduced by the recent work.
 
 ---
 
@@ -201,9 +202,11 @@ fixtures store chromatograms differently.
 - **Symptom:** `Index::chromatograms()` throws `"chunked chromatograms not yet supported"` (`src/chromatograms.cpp:33`) for `small.chunked.mzpeak` and `small.numpress.mzpeak`, whose chromatogram tables use the chunked top-level `chunk` node rather than `point`. (The wavelength reader has the identical guard, `src/wavelength_spectra.cpp:33` — chunked wavelength spectra likewise unsupported.)
 - **Done when:** the chunked decode path (already used for spectra, `Encoding::decode_chunked`) is reused for the chromatogram/wavelength data tables so these fixtures' auxiliary tables read.
 
-### RDR-29 — has_uv point chromatograms decode `time` but not `intensity`  ·  P2
+### RDR-29 — has_uv point chromatograms decode `time` but not `intensity`  ·  P2 — ✅ DONE (multi-intensity-column coalescing in encoding.h)
 - **Symptom:** for `has_uv.mzpeak`, point-layout chromatograms decode the `time` array (e.g. 212 / 526 values) but `Chromatogram::intensity()` returns an **empty** array — a time/intensity length mismatch (caught by the e2e test). `small.mzpeak`'s single TIC reads both arrays correctly, so the issue is specific to how these chromatograms' intensity column is named/typed/laid out.
-- **Done when:** `intensity()` decodes to the same length as `time()` for the has_uv chromatograms; add the size-equality assertion to the e2e `has_uv` case. Validate intensity values against pyarrow ground truth.
+- **Root cause:** `has_uv.mzpeak`'s chromatogram table has **two** point columns tagged with the intensity-array accession `MS:1000515`: a primary `intensity` column (counts, `MS:1000131`) and a secondary `intensity_f32_au` column (absorbance, `UO:0000269`). Each chromatogram populates exactly one (chrom 0 → counts, chrom 1 → absorbance, the other column all-null). `ArrayIndex::columns(Intensity)` therefore returned 2 columns, so `Encoding::decode_array` skipped the single-column point fast-path and fell through to `decode_chunked`, which finds no `chunk.*` columns and returns empty. `small.mzpeak` has only one intensity column, so it was unaffected.
+- **Fix:** `Encoding::decode_array` (`include/mzpeak/util/encoding.h`) now gathers *all* point-format columns of the array type; if any exist it treats the layout as point (not chunked) and, when several share an array type, coalesces them via the new `decode_point_coalesced()` — taking the first non-null value per row with the `buffer_priority: primary` column preferred. Single-column arrays still go through `decode_point()` unchanged.
+- **Verified:** chrom 0 → 212 values, `intensity[0]=168514.375` (counts); chrom 1 → 526 values, `intensity[0]=-0.02479553` (absorbance). Both match pyarrow ground truth over `chromatograms_data.parquet`. The e2e `has_uv` case now strictly asserts `time().size() == intensity().size()` for all chromatograms plus first/last value checks; all 24 test suites green.
 
 ---
 

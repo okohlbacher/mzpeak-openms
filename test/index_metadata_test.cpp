@@ -33,13 +33,12 @@ BOOST_AUTO_TEST_CASE(run_block_present)
 
   // From small.dir/mzpeak_index.json -> metadata.run.
   BOOST_TEST((run->id == std::optional<std::string>("small")));
-  BOOST_TEST((run->start_time ==
-              std::optional<std::string>("2005-07-20T19:44:22Z")));
+  BOOST_TEST(
+      (run->start_time == std::optional<std::string>("2005-07-20T19:44:22Z")));
   BOOST_TEST((run->default_instrument_id == std::optional<std::int64_t>(0)));
   BOOST_TEST((run->default_data_processing_id ==
               std::optional<std::string>("pwiz_Reader_Thermo_conversion")));
-  BOOST_TEST((run->default_source_file_id ==
-              std::optional<std::string>("RAW1")));
+  BOOST_TEST((run->default_source_file_id == std::optional<std::string>("RAW1")));
 }
 
 /******************************************************************************/
@@ -69,8 +68,7 @@ BOOST_AUTO_TEST_CASE(instrument_configuration_accessible)
 
   const auto& first = configs.front();
   BOOST_TEST((first.id == std::optional<std::int64_t>(0)));
-  BOOST_TEST((first.software_reference ==
-              std::optional<std::string>("Xcalibur")));
+  BOOST_TEST((first.software_reference == std::optional<std::string>("Xcalibur")));
 
   // Top-level params carry the instrument model (MS:1000448 "LTQ FT").
   const auto model =
@@ -115,8 +113,7 @@ BOOST_AUTO_TEST_CASE(data_processing_and_sample)
   const auto& meta = index.metadata();
 
   BOOST_TEST(meta.data_processings().size() == 2u);
-  BOOST_TEST(meta.data_processings().front().id ==
-             "pwiz_Reader_Thermo_conversion");
+  BOOST_TEST(meta.data_processings().front().id == "pwiz_Reader_Thermo_conversion");
   BOOST_TEST(!meta.data_processings().front().methods.empty());
 
   // sample_list has one entry whose CV param value (a number, 1) is
@@ -124,8 +121,7 @@ BOOST_AUTO_TEST_CASE(data_processing_and_sample)
   BOOST_TEST(meta.samples().size() == 1u);
   const auto& sample = meta.samples().front();
   BOOST_TEST(!sample.parameters.empty());
-  BOOST_TEST((sample.parameters.front().value ==
-              std::optional<std::string>("1")));
+  BOOST_TEST((sample.parameters.front().value == std::optional<std::string>("1")));
 
   // The verbatim metadata object is retained for untyped blocks.
   BOOST_TEST(meta.raw().contains("scan_settings_list"));

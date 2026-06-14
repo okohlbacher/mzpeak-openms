@@ -36,7 +36,11 @@ struct TempDir {
     std::error_code ec;
     fs::remove_all(path, ec); // start clean
   }
-  ~TempDir() { std::error_code ec; fs::remove_all(path, ec); }
+  ~TempDir()
+  {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
 
   static unsigned next_id()
   {
@@ -85,8 +89,7 @@ BOOST_AUTO_TEST_CASE(round_trips_through_the_reader)
 
     for (std::size_t j = 0; j < in[i].mz.size(); ++j) {
       BOOST_TEST(mz[j] == in[i].mz[j], boost::test_tools::tolerance(1e-9));
-      BOOST_TEST(it[j] == in[i].intensity[j],
-                 boost::test_tools::tolerance(1e-6f));
+      BOOST_TEST(it[j] == in[i].intensity[j], boost::test_tools::tolerance(1e-6f));
     }
   }
 }

@@ -9,6 +9,7 @@ directory of this repository.
 #pragma once
 
 #include <stdexcept>
+#include <string>
 
 namespace MzPeak {
 

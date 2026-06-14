@@ -1,18 +1,18 @@
 /*
 
-This file is part of the mzpeak.h project.  It is subject to the
-license specified in the LICENSE file which can be found in the
-top-level directory of this repository.
+This file is part of the mzpeak project.  It is subject to the license
+specified in the LICENSE file which can be found in the top-level
+directory of this repository.
 
 */
 
 #include <functional>
 #include <memory>
 
-#include "mzpeak/wavelength_spectrum.h"
-#include "mzpeak/wavelength_spectra.h"
 #include "mzpeak/exception.h"
 #include "mzpeak/util/enumerable_proxy.h"
+#include "mzpeak/wavelength_spectra.h"
+#include "mzpeak/wavelength_spectrum.h"
 
 namespace MzPeak {
 
@@ -22,8 +22,10 @@ WavelengthSpectra::WavelengthSpectra() {}
 /******************************************************************************/
 WavelengthSpectra::WavelengthSpectra(std::unique_ptr<Util::Parquet> data,
                                      std::optional<std::size_t> count)
-    : EnumerableProxy(0, std::bind(std::mem_fn(&WavelengthSpectra::fetch), this,
-                                   std::placeholders::_1))
+    : EnumerableProxy(0,
+                      std::bind(std::mem_fn(&WavelengthSpectra::fetch),
+                                this,
+                                std::placeholders::_1))
     , data_(std::make_shared<Util::DataArrays>(std::move(data)))
 {
   // Wavelength spectra currently only support the "point" layout.  The chunked

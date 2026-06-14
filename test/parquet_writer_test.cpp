@@ -28,7 +28,10 @@ namespace {
 
 // Small RAII helper that removes a temporary file on scope exit.
 struct TempFile {
-  explicit TempFile(std::string p) : path(std::move(p)) {}
+  explicit TempFile(std::string p)
+      : path(std::move(p))
+  {
+  }
   ~TempFile() { std::remove(path.c_str()); }
   std::string path;
 };
@@ -59,8 +62,7 @@ BOOST_AUTO_TEST_CASE(round_trips_point_spectra_data)
   BOOST_TEST(infile_result.ok());
   std::shared_ptr<arrow::io::ReadableFile> infile(infile_result.ValueOrDie());
 
-  auto reader_result(
-      parquet::arrow::OpenFile(infile, arrow::default_memory_pool()));
+  auto reader_result(parquet::arrow::OpenFile(infile, arrow::default_memory_pool()));
   BOOST_TEST(reader_result.ok());
   std::unique_ptr<parquet::arrow::FileReader> reader(
       std::move(reader_result).ValueOrDie());
@@ -78,8 +80,7 @@ BOOST_AUTO_TEST_CASE(round_trips_point_spectra_data)
   BOOST_TEST(point_field->name() == "point");
   BOOST_TEST((point_field->type()->id() == arrow::Type::STRUCT));
 
-  auto struct_type(
-      std::static_pointer_cast<arrow::StructType>(point_field->type()));
+  auto struct_type(std::static_pointer_cast<arrow::StructType>(point_field->type()));
   BOOST_TEST(struct_type->num_fields() == 3);
 
   BOOST_TEST(struct_type->field(0)->name() == "spectrum_index");

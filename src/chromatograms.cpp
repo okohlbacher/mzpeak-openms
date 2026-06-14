@@ -1,8 +1,8 @@
 /*
 
-This file is part of the mzpeak.h project.  It is subject to the
-license specified in the LICENSE file which can be found in the
-top-level directory of this repository.
+This file is part of the mzpeak project.  It is subject to the license
+specified in the LICENSE file which can be found in the top-level
+directory of this repository.
 
 */
 
@@ -22,8 +22,9 @@ Chromatograms::Chromatograms() {}
 /******************************************************************************/
 Chromatograms::Chromatograms(std::unique_ptr<Util::Parquet> data,
                              std::optional<std::size_t> count)
-    : EnumerableProxy(0, std::bind(std::mem_fn(&Chromatograms::fetch), this,
-                                   std::placeholders::_1))
+    : EnumerableProxy(
+          0,
+          std::bind(std::mem_fn(&Chromatograms::fetch), this, std::placeholders::_1))
     , data_(std::make_shared<Util::DataArrays>(std::move(data)))
 {
   // Chromatograms currently only support the "point" layout.  The chunked
@@ -46,8 +47,7 @@ Chromatogram Chromatograms::fetch(std::size_t index)
   auto chromatogram_index_column = array_index.columns()[0];
 
   using enum Schema::PSI::DataType;
-  Query query =
-      Query::Predicate<Int64>::equal_to(chromatogram_index_column, index);
+  Query query = Query::Predicate<Int64>::equal_to(chromatogram_index_column, index);
 
   auto map = data_->read_arrays(query, array_index.columns());
 

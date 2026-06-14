@@ -35,8 +35,8 @@ std::shared_ptr<arrow::ChunkedArray> spectrum_column(Parquet& metadata)
 /// Optional integer field of any stored width (uint8/int8/uint64/...),
 /// returned as the caller's integer type T.
 template <typename T>
-std::optional<T> opt_int(const std::shared_ptr<arrow::StructArray>& s,
-                         const char* name, int64_t row)
+std::optional<T>
+opt_int(const std::shared_ptr<arrow::StructArray>& s, const char* name, int64_t row)
 {
   auto field(s->GetFieldByName(name));
   if (!field || field->IsNull(row)) return std::nullopt;
@@ -72,7 +72,8 @@ std::optional<T> opt_int(const std::shared_ptr<arrow::StructArray>& s,
 
 /// Optional float64 field.
 std::optional<double> opt_double(const std::shared_ptr<arrow::StructArray>& s,
-                                 const char* name, int64_t row)
+                                 const char* name,
+                                 int64_t row)
 {
   auto field(s->GetFieldByName(name));
   if (!field || field->IsNull(row)) return std::nullopt;
@@ -82,7 +83,8 @@ std::optional<double> opt_double(const std::shared_ptr<arrow::StructArray>& s,
 
 /// Optional float32 field.
 std::optional<float> opt_float(const std::shared_ptr<arrow::StructArray>& s,
-                               const char* name, int64_t row)
+                               const char* name,
+                               int64_t row)
 {
   auto field(s->GetFieldByName(name));
   if (!field || field->IsNull(row)) return std::nullopt;
@@ -92,7 +94,8 @@ std::optional<float> opt_float(const std::shared_ptr<arrow::StructArray>& s,
 
 /// String field (large_string or string); empty string if absent/null.
 std::string get_string(const std::shared_ptr<arrow::StructArray>& s,
-                       const char* name, int64_t row)
+                       const char* name,
+                       int64_t row)
 {
   auto field(s->GetFieldByName(name));
   if (!field || field->IsNull(row)) return {};
@@ -140,10 +143,10 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
       bool null_model = large_list ? large_list->IsNull(r) : list->IsNull(r);
       if (null_model) continue;
 
-      int64_t offset = large_list ? large_list->value_offset(r)
-                                  : list->value_offset(r);
-      int64_t length = large_list ? large_list->value_length(r)
-                                  : list->value_length(r);
+      int64_t offset =
+          large_list ? large_list->value_offset(r) : list->value_offset(r);
+      int64_t length =
+          large_list ? large_list->value_length(r) : list->value_length(r);
       if (length == 0) continue;
 
       std::vector<double> betas;
@@ -191,10 +194,10 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
           opt_int<uint64_t>(spectrum, "MS_1003059_number_of_peaks", r);
       m.base_peak_mz =
           opt_double(spectrum, "MS_1000504_base_peak_mz_unit_MS_1000040", r);
-      m.base_peak_intensity = opt_float(
-          spectrum, "MS_1000505_base_peak_intensity_unit_MS_1000131", r);
-      m.total_ion_current = opt_float(
-          spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
+      m.base_peak_intensity =
+          opt_float(spectrum, "MS_1000505_base_peak_intensity_unit_MS_1000131", r);
+      m.total_ion_current =
+          opt_float(spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
 
       out[m.index] = std::move(m);
     }

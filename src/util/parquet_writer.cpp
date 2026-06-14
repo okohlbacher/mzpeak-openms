@@ -77,8 +77,7 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
       *table->schema(), arrow::default_memory_pool(), sink, writer_props,
       arrow_props));
   if (!writer_result.ok()) {
-    throw ParquetError("open parquet writer: " +
-                       writer_result.status().ToString());
+    throw ParquetError("open parquet writer: " + writer_result.status().ToString());
   }
   std::unique_ptr<parquet::arrow::FileWriter> writer(
       std::move(writer_result).ValueOrDie());
@@ -87,9 +86,9 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
   // pruning and is memory-hungry for large files.  Keep it positive even
   // for an empty table (WriteTable rejects a zero chunk size).
   constexpr int64_t kMaxRowGroup = 1 << 20; // ~1M rows
-  int64_t row_group_size =
-      table->num_rows() > 0 ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
-                            : kMaxRowGroup;
+  int64_t row_group_size = table->num_rows() > 0
+                               ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
+                               : kMaxRowGroup;
   check(writer->WriteTable(*table, row_group_size), "write table");
 
   // Embed file-level key/value metadata after the data, before Close().
@@ -111,8 +110,8 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
 
 /******************************************************************************/
 // Read the bytes of an in-memory Parquet buffer sink into a string.
-std::string finish_to_string(
-    const std::shared_ptr<arrow::io::BufferOutputStream>& sink)
+std::string
+finish_to_string(const std::shared_ptr<arrow::io::BufferOutputStream>& sink)
 {
   auto buffer_result(sink->Finish());
   if (!buffer_result.ok()) {
@@ -156,8 +155,7 @@ void write_point_spectra_data_to_sink(
   auto point_result(arrow::StructArray::Make(
       {index_array, mz_array, intensity_array}, point_fields));
   if (!point_result.ok()) {
-    throw ParquetError("build point struct: " +
-                       point_result.status().ToString());
+    throw ParquetError("build point struct: " + point_result.status().ToString());
   }
   std::shared_ptr<arrow::Array> point_array(point_result.ValueOrDie());
 
@@ -238,12 +236,11 @@ void write_spectra_metadata_to_sink(
 } // namespace
 
 /******************************************************************************/
-void write_point_spectra_data(
-    const std::string& path,
-    const std::vector<uint64_t>& spectrum_index,
-    const std::vector<double>& mz,
-    const std::vector<float>& intensity,
-    const std::map<std::string, std::string>& file_kv)
+void write_point_spectra_data(const std::string& path,
+                              const std::vector<uint64_t>& spectrum_index,
+                              const std::vector<double>& mz,
+                              const std::vector<float>& intensity,
+                              const std::map<std::string, std::string>& file_kv)
 {
   // Output sink.
   auto sink_result(arrow::io::FileOutputStream::Open(path));
@@ -253,16 +250,15 @@ void write_point_spectra_data(
   }
   std::shared_ptr<arrow::io::FileOutputStream> sink(sink_result.ValueOrDie());
 
-  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity,
-                                   file_kv);
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv);
 }
 
 /******************************************************************************/
-std::string point_spectra_data_bytes(
-    const std::vector<uint64_t>& spectrum_index,
-    const std::vector<double>& mz,
-    const std::vector<float>& intensity,
-    const std::map<std::string, std::string>& file_kv)
+std::string
+point_spectra_data_bytes(const std::vector<uint64_t>& spectrum_index,
+                         const std::vector<double>& mz,
+                         const std::vector<float>& intensity,
+                         const std::map<std::string, std::string>& file_kv)
 {
   // In-memory sink: the same table/schema/properties path as the file
   // writer, but the bytes are returned instead of landing on disk.
@@ -273,8 +269,7 @@ std::string point_spectra_data_bytes(
   }
   std::shared_ptr<arrow::io::BufferOutputStream> sink(sink_result.ValueOrDie());
 
-  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity,
-                                   file_kv);
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv);
 
   return finish_to_string(sink);
 }

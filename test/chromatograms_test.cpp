@@ -40,11 +40,9 @@ BOOST_AUTO_TEST_CASE(can_read_chromatograms)
   BOOST_TEST(intensity.size() == 48u);
 
   BOOST_TEST(time.front() == 0.004935, boost::test_tools::tolerance(1e-9));
-  BOOST_TEST(time.back() == 0.48723666666666665,
-             boost::test_tools::tolerance(1e-9));
+  BOOST_TEST(time.back() == 0.48723666666666665, boost::test_tools::tolerance(1e-9));
 
-  BOOST_TEST(intensity.front() == 15245068.0f,
-             boost::test_tools::tolerance(1.0f));
+  BOOST_TEST(intensity.front() == 15245068.0f, boost::test_tools::tolerance(1.0f));
   BOOST_TEST(intensity.back() == 77939.0078125f,
              boost::test_tools::tolerance(0.01f));
 }

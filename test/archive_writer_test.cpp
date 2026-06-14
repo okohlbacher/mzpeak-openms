@@ -30,8 +30,7 @@ struct TempFile {
   fs::path path;
   TempFile()
       : path(fs::temp_directory_path() /
-             ("mzpeak_archive_writer_test_" + std::to_string(next_id()) +
-              ".mzpeak"))
+             ("mzpeak_archive_writer_test_" + std::to_string(next_id()) + ".mzpeak"))
   {
     std::error_code ec;
     fs::remove(path, ec); // start clean
@@ -51,8 +50,7 @@ struct TempFile {
 
 // Return the compression method libzip records for a named archive member,
 // or -1 if the member is absent / cannot be stat-ed.
-zip_int32_t member_compression(const fs::path& archive_path,
-                               const char* name)
+zip_int32_t member_compression(const fs::path& archive_path, const char* name)
 {
   int errnum = 0;
   zip_t* archive = zip_open(archive_path.c_str(), ZIP_RDONLY, &errnum);
@@ -119,8 +117,7 @@ BOOST_AUTO_TEST_CASE(round_trips_through_the_reader)
     BOOST_TEST(it.size() == expected[i].intensity.size());
 
     for (std::size_t j = 0; j < expected[i].mz.size(); ++j) {
-      BOOST_TEST(mz[j] == expected[i].mz[j],
-                 boost::test_tools::tolerance(1e-9));
+      BOOST_TEST(mz[j] == expected[i].mz[j], boost::test_tools::tolerance(1e-9));
       BOOST_TEST(it[j] == expected[i].intensity[j],
                  boost::test_tools::tolerance(1e-6f));
     }

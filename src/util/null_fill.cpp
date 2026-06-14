@@ -43,7 +43,8 @@ double predict_delta(const std::vector<double>& beta, double mz)
 
 /******************************************************************************/
 double estimate_median_delta(const std::vector<double>& values,
-                             std::size_t begin, std::size_t end)
+                             std::size_t begin,
+                             std::size_t end)
 {
   std::vector<double> deltas;
   if (end > begin + 1) deltas.reserve(end - begin - 1);
@@ -66,6 +67,11 @@ std::vector<double> reconstruct_null_mz(const std::vector<double>& values,
                                         const std::vector<double>& beta)
 {
   const std::size_t n = values.size();
+  // valid is the per-position null bitmap for values; if a caller passes
+  // mismatched sizes, indexing valid[i] up to n would read out of bounds.
+  // Decline rather than risk UB (callers treat {} as "no reconstruction").
+  if (valid.size() != n) return {};
+
   std::vector<double> out;
   out.reserve(n);
 
@@ -79,7 +85,8 @@ std::vector<double> reconstruct_null_mz(const std::vector<double>& values,
     // Maximal run of valid values [s, e).
     std::size_t s = i;
     std::size_t e = s;
-    while (e < n && valid[e]) ++e;
+    while (e < n && valid[e])
+      ++e;
 
     std::size_t len = e - s;
     double delta = (len > 1) ? estimate_median_delta(values, s, e)
@@ -88,7 +95,8 @@ std::vector<double> reconstruct_null_mz(const std::vector<double>& values,
     // Runs are separated by nulls, so a run starting after position 0 has a
     // null immediately before it, and a run ending before n has one after.
     if (s > 0) out.push_back(values[s] - delta);
-    for (std::size_t k = s; k < e; ++k) out.push_back(values[k]);
+    for (std::size_t k = s; k < e; ++k)
+      out.push_back(values[k]);
     if (e < n) out.push_back(values[e - 1] + delta);
 
     i = e;

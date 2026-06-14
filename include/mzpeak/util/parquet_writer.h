@@ -44,12 +44,11 @@ namespace MzPeak::Util {
  * @throws ParquetError on any Arrow/Parquet error, or if the input
  *         vectors do not all have the same length.
  */
-void write_point_spectra_data(
-    const std::string& path,
-    const std::vector<uint64_t>& spectrum_index,
-    const std::vector<double>& mz,
-    const std::vector<float>& intensity,
-    const std::map<std::string, std::string>& file_kv);
+void write_point_spectra_data(const std::string& path,
+                              const std::vector<uint64_t>& spectrum_index,
+                              const std::vector<double>& mz,
+                              const std::vector<float>& intensity,
+                              const std::map<std::string, std::string>& file_kv);
 
 /**
  * Encode a point-layout spectra data table to an in-memory Parquet buffer
@@ -71,11 +70,11 @@ void write_point_spectra_data(
  * @throws ParquetError on any Arrow/Parquet error, or if the input
  *         vectors do not all have the same length.
  */
-std::string point_spectra_data_bytes(
-    const std::vector<uint64_t>& spectrum_index,
-    const std::vector<double>& mz,
-    const std::vector<float>& intensity,
-    const std::map<std::string, std::string>& file_kv);
+std::string
+point_spectra_data_bytes(const std::vector<uint64_t>& spectrum_index,
+                         const std::vector<double>& mz,
+                         const std::vector<float>& intensity,
+                         const std::map<std::string, std::string>& file_kv);
 
 /**
  * The minimal per-spectrum metadata row written to spectra_metadata.parquet.

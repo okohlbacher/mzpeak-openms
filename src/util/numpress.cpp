@@ -25,6 +25,7 @@ std::vector<unsigned char> as_uchar(const std::vector<uint8_t>& bytes)
 
 } // namespace
 
+/******************************************************************************/
 std::vector<double> numpress_decode_linear(const std::vector<uint8_t>& bytes)
 {
   std::vector<unsigned char> data = as_uchar(bytes);
@@ -33,6 +34,7 @@ std::vector<double> numpress_decode_linear(const std::vector<uint8_t>& bytes)
   return result;
 }
 
+/******************************************************************************/
 std::vector<float> numpress_decode_slof(const std::vector<uint8_t>& bytes)
 {
   std::vector<unsigned char> data = as_uchar(bytes);
@@ -41,7 +43,8 @@ std::vector<float> numpress_decode_slof(const std::vector<uint8_t>& bytes)
 
   std::vector<float> result;
   result.reserve(decoded.size());
-  for (double v : decoded) result.push_back(static_cast<float>(v));
+  for (double v : decoded)
+    result.push_back(static_cast<float>(v));
   return result;
 }
 

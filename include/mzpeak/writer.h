@@ -32,12 +32,13 @@ struct SpectrumData {
 /**
  * Write a point-layout mzPeak file as an unpacked DIRECTORY.
  *
- * Produces `spectra_data.parquet` (point layout) and `mzpeak_index.json`
- * inside `dir`.  The result is readable by `MzPeak::open(dir)`.
+ * Produces, inside `dir`: `spectra_data.parquet` (point-layout profile
+ * spectra), `spectra_peaks.parquet` (centroid spectra, only when any are
+ * present), `spectra_metadata.parquet` (per-spectrum scalar metadata) and
+ * `mzpeak_index.json`.  The result is readable by `MzPeak::open(dir)`.
  *
- * This is the Phase-0 vertical slice: profile/centroid distinction,
- * metadata tables, peaks tables, chunked layout, transforms and zip
- * packaging are not yet emitted.
+ * Still point-layout only: the chunked layout, numpress and other transforms,
+ * and the run-level index metadata blocks are not yet emitted.
  *
  * @throws on I/O or encoding errors, or if any spectrum's mz and
  *         intensity arrays differ in length.
