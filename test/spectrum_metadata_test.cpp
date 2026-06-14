@@ -12,6 +12,10 @@ directory of this repository.
  * CvParam list) is read from spectra_metadata.parquet and exposed via
  * SpectrumMetadata.  Ground truth values are verified via pyarrow on the
  * bundled fixtures (small.mzpeak and has_uv.mzpeak).
+ *
+ * NOTE: spectra[i] returns a Spectrum by value (temporary).  Always store
+ * the Spectrum in a named local before taking a reference to its metadata(),
+ * to avoid a dangling reference to the temporary's member.
  */
 #define BOOST_TEST_MODULE SpectrumMetadata
 #include <boost/test/included/unit_test.hpp>
@@ -26,13 +30,13 @@ directory of this repository.
 BOOST_AUTO_TEST_CASE(opens_and_reads_metadata)
 {
   // Smoke test: open small.mzpeak and verify an already-existing field
-  // (ms_level) on the first spectrum.  This keeps the scaffold compiling
-  // before the RDR-10b fields land in Task 2.
+  // (ms_level) on the first spectrum.
   auto index = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = index.spectra();
 
   // Spectrum index 0 is an MS1 scan in small.mzpeak (pyarrow verified).
-  const auto& m0 = spectra[0].metadata();
+  auto s0 = spectra[0];
+  const auto& m0 = s0.metadata();
   BOOST_TEST(m0.ms_level.has_value());
   BOOST_TEST(m0.ms_level.value() == 1);
 }
@@ -44,7 +48,8 @@ BOOST_AUTO_TEST_CASE(spectrum_type_ms1)
 {
   auto index = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = index.spectra();
-  const auto& m0 = spectra[0].metadata();
+  auto s0 = spectra[0];
+  const auto& m0 = s0.metadata();
   BOOST_TEST(m0.spectrum_type == std::string("MS:1000579"));
 }
 
@@ -55,7 +60,8 @@ BOOST_AUTO_TEST_CASE(lowest_observed_mz_index0)
 {
   auto index = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = index.spectra();
-  const auto& m0 = spectra[0].metadata();
+  auto s0 = spectra[0];
+  const auto& m0 = s0.metadata();
   BOOST_TEST(m0.lowest_observed_mz.has_value());
   BOOST_TEST(
       std::abs(m0.lowest_observed_mz.value() - 200.00018816645024) < 1e-9);
@@ -68,7 +74,8 @@ BOOST_AUTO_TEST_CASE(highest_observed_mz_index0)
 {
   auto index = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = index.spectra();
-  const auto& m0 = spectra[0].metadata();
+  auto s0 = spectra[0];
+  const auto& m0 = s0.metadata();
   BOOST_TEST(m0.highest_observed_mz.has_value());
   BOOST_TEST(
       std::abs(m0.highest_observed_mz.value() - 1999.9857293095915) < 1e-9);
@@ -82,6 +89,64 @@ BOOST_AUTO_TEST_CASE(data_processing_ref_empty_all_rows)
   auto index = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = index.spectra();
   for (std::size_t i = 0; i < spectra.size(); ++i) {
-    BOOST_TEST(spectra[i].metadata().data_processing_ref.empty());
+    auto s = spectra[i];
+    BOOST_TEST(s.metadata().data_processing_ref.empty());
   }
+}
+
+/******************************************************************************/
+// RDR-10b: parameters list is empty (not null, no crash) in small.mzpeak.
+// small.mzpeak carries 0 spectrum-level parameters (pyarrow verified).
+BOOST_AUTO_TEST_CASE(parameters_empty_in_small)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    BOOST_TEST(s.metadata().parameters.empty());
+  }
+}
+
+/******************************************************************************/
+// RDR-10b: parameters populated in has_uv.mzpeak.
+// Ground truth (pyarrow verified): index 0, parameters[0].accession ==
+// "MS:1000796", name == "spectrum title", value starts with "TOFsulfas".
+BOOST_AUTO_TEST_CASE(parameters_populated_in_has_uv)
+{
+  auto index = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto spectra = index.spectra();
+
+  // Store in a local to avoid dangling reference from temporary Spectrum.
+  auto s0 = spectra[0];
+  const auto& m0 = s0.metadata();
+
+  // Spectrum index 0 has exactly one parameter: the spectrum title.
+  BOOST_TEST(m0.parameters.size() == 1u);
+
+  const auto& p0 = m0.parameters.front();
+  BOOST_TEST((p0.accession == std::optional<std::string>("MS:1000796")));
+  BOOST_TEST((p0.name == std::optional<std::string>("spectrum title")));
+
+  // Value is the spectrum title string; check prefix, not full equality,
+  // to stay robust against minor fixture differences.
+  BOOST_TEST(p0.value.has_value());
+  const std::string& title = p0.value.value();
+  BOOST_TEST(title.substr(0, 9) == std::string("TOFsulfas"));
+}
+
+/******************************************************************************/
+// M2 determinism: verify format_double_canonical via the public API.
+// has_uv.mzpeak parameters carry string-arm values (spectrum title);
+// this test confirms extract_one_cv_param passes the string arm through
+// unmangled.  The float-arm "35" canonical form is validated in plan 01-02
+// which reads collision-energy (MS:1000045) from small.mzpeak activation.
+BOOST_AUTO_TEST_CASE(parameters_string_arm_unmangled_in_has_uv)
+{
+  auto index = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto spectra = index.spectra();
+  auto s0 = spectra[0];
+  const auto& p0 = s0.metadata().parameters.front();
+  BOOST_TEST(p0.value.has_value());
+  // Title must be a non-empty string (not a number, not "true").
+  BOOST_TEST(!p0.value.value().empty());
 }

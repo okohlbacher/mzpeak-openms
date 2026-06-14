@@ -10,8 +10,10 @@ directory of this repository.
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
 #include <arrow/table.h>
+#include <iomanip>
 #include <memory>
 #include <parquet/arrow/reader.h>
+#include <sstream>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/metadata_model.h"
@@ -106,6 +108,155 @@ std::string get_string(const std::shared_ptr<arrow::StructArray>& s,
     return str->GetString(row);
   }
   return {};
+}
+
+/// M2 — deterministic double-to-string conversion used for CvParam values.
+/// Prints with full precision (17 significant digits), then strips trailing
+/// zeros and a trailing decimal point so that 35.0 -> "35", 1.5 -> "1.5",
+/// and 810.789428710938 -> "810.789428710938".
+///
+/// std::to_string(double) is FORBIDDEN for value-union floats — it produces
+/// "35.000000" for 35.0, making string assertions fragile.
+std::string format_double_canonical(double v)
+{
+  std::ostringstream oss;
+  oss << std::defaultfloat << std::setprecision(17) << v;
+  std::string s = oss.str();
+  // Strip trailing zeros after a decimal point.
+  if (s.find('.') != std::string::npos) {
+    auto last = s.find_last_not_of('0');
+    if (last != std::string::npos) {
+      // If the last non-zero char is '.', strip it too.
+      if (s[last] == '.') {
+        s.erase(last);
+      } else {
+        s.erase(last + 1);
+      }
+    }
+  }
+  return s;
+}
+
+/// Extract one CvParam from list item @p k of an items StructArray.
+///
+/// @param items  the flat values() array of a large_list<struct<value,
+///               accession, name, unit>> column.
+/// @param k      absolute offset into items (i.e. after adding
+///               value_offset(row)).
+///
+/// Reads accession (string), name (large_string), unit (string), and
+/// the value union struct whose arms are named "integer" (Int64),
+/// "float" (Double), "string" (LargeString), "boolean" (Bool); the first
+/// non-null arm is serialised to CvParam.value as an optional<string>.
+/// All-null value struct -> CvParam.value stays nullopt.
+///
+/// This is the SINGLE-ITEM body factored out of read_cv_params_from_list
+/// so plans 01-02/01-03 can reuse it for the aux-array name struct (a lone
+/// CvParam, not a list).
+///
+/// Security note (T-01-01): GetFieldByName returns nullptr for an unknown
+/// name — every arm is null-checked before use, so a wrong child name
+/// silently skips that arm rather than producing UB.
+CvParam extract_one_cv_param(const arrow::StructArray& items, int64_t k)
+{
+  CvParam p;
+
+  // accession: string
+  if (auto f = std::dynamic_pointer_cast<arrow::StringArray>(
+          items.GetFieldByName("accession"))) {
+    if (!f->IsNull(k)) p.accession = f->GetString(k);
+  }
+
+  // name: large_string
+  if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
+          items.GetFieldByName("name"))) {
+    if (!f->IsNull(k)) p.name = f->GetString(k);
+  }
+
+  // unit: string
+  if (auto f = std::dynamic_pointer_cast<arrow::StringArray>(
+          items.GetFieldByName("unit"))) {
+    if (!f->IsNull(k)) p.unit = f->GetString(k);
+  }
+
+  // value: struct<integer:int64, float:double, string:large_string, boolean:bool>
+  // Exact child names are lowercase and come from the Parquet schema (Pitfall 1).
+  auto val_field = items.GetFieldByName("value");
+  if (val_field && !val_field->IsNull(k)) {
+    auto val_struct =
+        std::dynamic_pointer_cast<arrow::StructArray>(val_field);
+    if (val_struct) {
+      // "string" arm — large_string; check first (most common in fixtures).
+      if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
+              val_struct->GetFieldByName("string"))) {
+        if (!f->IsNull(k)) {
+          p.value = f->GetString(k);
+          return p;
+        }
+      }
+      // "integer" arm — Int64.
+      if (auto f = std::dynamic_pointer_cast<arrow::Int64Array>(
+              val_struct->GetFieldByName("integer"))) {
+        if (!f->IsNull(k)) {
+          p.value = std::to_string(f->Value(k));
+          return p;
+        }
+      }
+      // "float" arm — Double (stored as float64 in Arrow; use canonical
+      // format per M2 to avoid trailing zeros, e.g. 35.0 -> "35").
+      if (auto f = std::dynamic_pointer_cast<arrow::DoubleArray>(
+              val_struct->GetFieldByName("float"))) {
+        if (!f->IsNull(k)) {
+          p.value = format_double_canonical(f->Value(k));
+          return p;
+        }
+      }
+      // "boolean" arm — Bool.
+      if (auto f = std::dynamic_pointer_cast<arrow::BooleanArray>(
+              val_struct->GetFieldByName("boolean"))) {
+        if (!f->IsNull(k)) {
+          p.value = f->Value(k) ? std::string("true") : std::string("false");
+          return p;
+        }
+      }
+    }
+  }
+
+  return p;
+}
+
+/// Decode all CvParam items from a large_list<struct<...>> field of @p parent
+/// at row @p row.  Returns an empty vector when the field is absent or the
+/// row is null (matching the "empty-means-decoded" API contract on
+/// SpectrumMetadata::parameters).
+///
+/// Mirrors the offset/length idiom already used by read_mz_delta_models.
+/// Each item body is handled by extract_one_cv_param so plans 01-02/01-03
+/// can reuse that helper for lone-CvParam structs (not lists).
+std::vector<CvParam>
+read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
+                         const char* list_field_name,
+                         int64_t row)
+{
+  std::vector<CvParam> out;
+
+  auto list_col = parent->GetFieldByName(list_field_name);
+  if (!list_col || list_col->IsNull(row)) return out;
+
+  auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(list_col);
+  if (!la || la->IsNull(row)) return out;
+
+  auto items =
+      std::dynamic_pointer_cast<arrow::StructArray>(la->values());
+  if (!items) return out;
+
+  int64_t begin = la->value_offset(row);
+  int64_t length = la->value_length(row);
+  out.reserve(static_cast<std::size_t>(length));
+  for (int64_t k = 0; k < length; ++k) {
+    out.push_back(extract_one_cv_param(*items, begin + k));
+  }
+  return out;
 }
 
 } // namespace
@@ -208,6 +359,9 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
           spectrum, "MS_1000527_highest_observed_mz_unit_MS_1000040", r);
       m.data_processing_ref =
           get_string(spectrum, "data_processing_ref", r);
+
+      // RDR-10b CvParam list.
+      m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
       out[m.index] = std::move(m);
     }
