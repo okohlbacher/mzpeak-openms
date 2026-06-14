@@ -182,6 +182,7 @@ test_names = [
     'roundtrip',
     'spectra',
     'spectra_query',
+    'spectrum_metadata',
     'unsigned_index',
     'util',
     'wavelength_spectra',
