@@ -63,8 +63,7 @@ BOOST_AUTO_TEST_CASE(lowest_observed_mz_index0)
   auto s0 = spectra[0];
   const auto& m0 = s0.metadata();
   BOOST_TEST(m0.lowest_observed_mz.has_value());
-  BOOST_TEST(
-      std::abs(m0.lowest_observed_mz.value() - 200.00018816645024) < 1e-9);
+  BOOST_TEST(std::abs(m0.lowest_observed_mz.value() - 200.00018816645024) < 1e-9);
 }
 
 /******************************************************************************/
@@ -77,8 +76,7 @@ BOOST_AUTO_TEST_CASE(highest_observed_mz_index0)
   auto s0 = spectra[0];
   const auto& m0 = s0.metadata();
   BOOST_TEST(m0.highest_observed_mz.has_value());
-  BOOST_TEST(
-      std::abs(m0.highest_observed_mz.value() - 1999.9857293095915) < 1e-9);
+  BOOST_TEST(std::abs(m0.highest_observed_mz.value() - 1999.9857293095915) < 1e-9);
 }
 
 /******************************************************************************/

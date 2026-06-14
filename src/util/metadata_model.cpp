@@ -183,8 +183,7 @@ CvParam extract_one_cv_param(const arrow::StructArray& items, int64_t k)
   // Exact child names are lowercase and come from the Parquet schema (Pitfall 1).
   auto val_field = items.GetFieldByName("value");
   if (val_field && !val_field->IsNull(k)) {
-    auto val_struct =
-        std::dynamic_pointer_cast<arrow::StructArray>(val_field);
+    auto val_struct = std::dynamic_pointer_cast<arrow::StructArray>(val_field);
     if (val_struct) {
       // "string" arm — large_string; check first (most common in fixtures).
       if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
@@ -246,8 +245,7 @@ read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
   auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(list_col);
   if (!la || la->IsNull(row)) return out;
 
-  auto items =
-      std::dynamic_pointer_cast<arrow::StructArray>(la->values());
+  auto items = std::dynamic_pointer_cast<arrow::StructArray>(la->values());
   if (!items) return out;
 
   int64_t begin = la->value_offset(row);
@@ -351,14 +349,12 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
           opt_float(spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
 
       // RDR-10b scalar fields.
-      m.spectrum_type =
-          get_string(spectrum, "MS_1000559_spectrum_type", r);
-      m.lowest_observed_mz = opt_double(
-          spectrum, "MS_1000528_lowest_observed_mz_unit_MS_1000040", r);
-      m.highest_observed_mz = opt_double(
-          spectrum, "MS_1000527_highest_observed_mz_unit_MS_1000040", r);
-      m.data_processing_ref =
-          get_string(spectrum, "data_processing_ref", r);
+      m.spectrum_type = get_string(spectrum, "MS_1000559_spectrum_type", r);
+      m.lowest_observed_mz =
+          opt_double(spectrum, "MS_1000528_lowest_observed_mz_unit_MS_1000040", r);
+      m.highest_observed_mz =
+          opt_double(spectrum, "MS_1000527_highest_observed_mz_unit_MS_1000040", r);
+      m.data_processing_ref = get_string(spectrum, "data_processing_ref", r);
 
       // RDR-10b CvParam list.
       m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
