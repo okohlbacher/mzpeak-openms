@@ -74,8 +74,40 @@ Phase 1b).
 - **One byte-exact carve-out**: Numpress buffers vs `numpress-rs`, once chunked
   encoding exists (writer P3 / reader RDR-7).
 
+## The one-command driver: `scripts/e2e.sh`
+
+`scripts/e2e.sh` runs the whole matrix and prints a PASS/FAIL/SKIP summary:
+
+```
+scripts/e2e.sh            # everything available
+FAST=1 scripts/e2e.sh     # skip the slow `e2e` meson suite
+```
+
+It builds the project, runs the meson suite (T1/T3 + units) and the dedicated
+`e2e` suite, then — when a Rust toolchain and `../hupo-mzpeak` are present —
+runs the two cross-implementation stages. Stages whose toolchain is missing are
+SKIPped (not failed), so the core runs anywhere the C++ project builds. Exit
+status is non-zero only if a stage that actually ran failed.
+
+## The `e2e` meson suite (`test/e2e_test.cpp`)
+
+A self-contained integration test (run in isolation with `meson test --suite
+e2e`; given a 300 s timeout as it decodes real profile fixtures in full). For
+**every** bundled fixture — point archive, point directory, chunked, numpress,
+has_uv, imaging — it drives the entire reader API in one pass: reads every
+spectrum (asserting paired m/z+intensity), then by-id lookup, RT-range, EIC,
+batch read, plus a reverse round trip (read → write archive → read → compare).
+Where the per-feature unit tests each pin one decoder against ground truth, this
+guards that the whole API stays mutually consistent across all layouts. It
+surfaced two chromatogram-reader gaps now tracked as RDR-28/RDR-29.
+
 ## Current coverage snapshot
 - T1 forward intra: PASS (point directory + zip archive).
 - T2 forward cross: **PASS** (Rust `MzPeakReader` reads C++ output, values match).
 - T3 reverse intra: PASS (Example_Processed.img, 9 spectra, read→write→read).
-- T4 reverse cross: ad hoc pyarrow; blocked on reader gaps.
+- T4 reverse cross: PASS (C++ reads every Rust-written bundled fixture; the
+  `e2e` suite drives all layouts and the per-decoder unit tests pin values
+  against pyarrow ground truth).
+- T5 full pipeline: **PASS** (small.mzML → Rust `convert` → C++ read = 48
+  spectra, 13589 points in spectrum 0; wired into `scripts/e2e.sh`).
+- Cross-impl matrix driver: `scripts/e2e.sh` (T1/T3 + e2e + T2 + T5).

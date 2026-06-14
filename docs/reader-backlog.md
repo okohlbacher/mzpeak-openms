@@ -191,6 +191,22 @@ Capability gaps vs the Rust `MzPeakReader` surfaced by [reader-rust-parity.md](r
 
 ---
 
+## Milestone R8 — gaps surfaced by the full e2e test (`test/e2e_test.cpp`)
+These were found by driving the whole reader API over every bundled fixture.
+The chromatogram read path (RDR-8) was implemented and validated against
+`small.mzpeak`'s single point-layout TIC only; the e2e test shows other
+fixtures store chromatograms differently.
+
+### RDR-28 — Chunked-layout chromatograms  ·  P3
+- **Symptom:** `Index::chromatograms()` throws `"chunked chromatograms not yet supported"` (`src/chromatograms.cpp:33`) for `small.chunked.mzpeak` and `small.numpress.mzpeak`, whose chromatogram tables use the chunked top-level `chunk` node rather than `point`. (The wavelength reader has the identical guard, `src/wavelength_spectra.cpp:33` — chunked wavelength spectra likewise unsupported.)
+- **Done when:** the chunked decode path (already used for spectra, `Encoding::decode_chunked`) is reused for the chromatogram/wavelength data tables so these fixtures' auxiliary tables read.
+
+### RDR-29 — has_uv point chromatograms decode `time` but not `intensity`  ·  P2
+- **Symptom:** for `has_uv.mzpeak`, point-layout chromatograms decode the `time` array (e.g. 212 / 526 values) but `Chromatogram::intensity()` returns an **empty** array — a time/intensity length mismatch (caught by the e2e test). `small.mzpeak`'s single TIC reads both arrays correctly, so the issue is specific to how these chromatograms' intensity column is named/typed/laid out.
+- **Done when:** `intensity()` decodes to the same length as `time()` for the has_uv chromatograms; add the size-equality assertion to the e2e `has_uv` case. Validate intensity values against pyarrow ground truth.
+
+---
+
 ## Dependency graph (summary)
 ```
 RDR-1 ──► RDR-9

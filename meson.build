@@ -196,6 +196,21 @@ foreach test : test_names
          verbose : false)
 endforeach
 
+# Full end-to-end integration test: drives the whole reader API over every
+# bundled fixture plus a reverse round trip through the writer.  It decodes
+# real profile fixtures in full, so it is slower than the unit tests and is
+# given a generous timeout and its own `e2e` suite (run alone with
+# `meson test --suite e2e`).
+test('e2e',
+     executable('e2e_test',
+                'test/e2e_test.cpp',
+                include_directories : include,
+                dependencies : deps,
+                link_with : libmzpeak_so),
+     suite : 'e2e',
+     timeout : 300,
+     verbose : false)
+
 # Examples
 example_names = [
   'read_spectra'
