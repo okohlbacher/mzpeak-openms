@@ -538,7 +538,7 @@ Phase 1 is a pure in-process data-structure extension with no network I/O, authe
 - `include/mzpeak/spectrum_metadata.h` — current `SpectrumMetadata` struct
 - `include/mzpeak/run_metadata.h` — `CvParam` struct definition
 - `include/mzpeak/util/encoding.h` — existing decode patterns for auxiliary/secondary arrays
-- `.planning/phases/mzpeak-openms-01-reader-lossless-map-prerequisites/01-CONTEXT.md` — locked decisions
+- `.planning/phases/01-reader-lossless-map-prerequisites/01-CONTEXT.md` — locked decisions
 - `docs/openms-integration-plan.md §7` — reader prerequisites definition
 - `docs/reader-backlog.md` — RDR-10/9 history and extension specs
 

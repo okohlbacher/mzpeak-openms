@@ -56,7 +56,7 @@
   "hooks": {
     "context_warnings": true
   },
-  "project_code": "mzpeak-openms",
+  "project_code": "",
   "agent_skills": {},
   "claude_md_path": "./CLAUDE.md"
 }
