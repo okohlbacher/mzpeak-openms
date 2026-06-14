@@ -171,7 +171,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Build & Port Prerequisites | 0/TBD | Not started | - |
-| 1. Reader Lossless-Map Prerequisites | 1/3 | Executing | - |
+| 1. Reader Lossless-Map Prerequisites | 2/3 | Executing | - |
 | 2. MzPeakFile::load + Registration | 0/TBD | Not started | - |
 | 3. MzPeakFile::store | 0/TBD | Not started | - |
 | 3b. Shared CV Helper (optional) | 0/TBD | Not started | - |
@@ -183,8 +183,8 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 | Plan | Description | Status | Commits |
 |------|-------------|--------|---------|
 | 01-01 | RDR-10b: spectrum_type / observed-mz / data_processing_ref / parameters | DONE | 4e00a45, a006264, 8abd3b7, 69b2aeb |
-| 01-02 | RDR-10c: precursor / isolation-window / activation / scan params+windows | Planned | - |
+| 01-02 | RDR-10c: precursor / isolation-window / activation / scan params+windows | DONE | c258016, 2e64711, 6200457, 10641ab |
 | 01-03 | RDR-9b: auxiliary_arrays accessor + phase gate | Planned | - |
 
 ---
-*Last updated: 2026-06-14 after Plan 01-01 completion*
+*Last updated: 2026-06-14 after Plan 01-02 completion*

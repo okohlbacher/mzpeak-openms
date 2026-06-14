@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 Plan 01-01 complete (RDR-10b scalar fields + parameters CvParam)
-last_updated: "2026-06-14T17:05:00Z"
-last_activity: 2026-06-14 -- Phase 1 Plan 01-01 executed (4 tasks, 30/30 green)
+stopped_at: Phase 1 Plan 01-02 complete (RDR-10c precursor/scan join + scan windows)
+last_updated: "2026-06-14T18:02:00Z"
+last_activity: 2026-06-14 -- Phase 1 Plan 01-02 executed (3 tasks, 30/30 green, 18 new test cases)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -27,31 +27,31 @@ mzML → mzpeak → mzML through OpenMS yields an equivalent `MSExperiment`.
 ## Current Position
 
 Phase: 1 (Reader Lossless-Map Prerequisites) — EXECUTING
-Plan: 2 of 3
-Status: Plan 01-01 complete; next: 01-02 (RDR-10c precursor/scan)
-Last activity: 2026-06-14 -- Plan 01-01 executed (spectrum_type, observed-mz,
-data_processing_ref, parameters CvParam list + helpers)
+Plan: 3 of 3
+Status: Plan 01-02 complete; next: 01-03 (RDR-9b auxiliary_arrays accessor)
+Last activity: 2026-06-14 -- Plan 01-02 executed (precursor/isolation-window/
+activation/selected-ion/scan join + scan_windows; 18 new test cases; 30/30 green)
 
-Progress: [███░░░░░░░] 33%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
-- Average duration: ~50 min
-- Total execution time: 0.8 hours
+- Total plans completed: 2
+- Average duration: ~53 min
+- Total execution time: 1.7 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 (in progress) | 1 | 50 min | 50 min |
+| 1 (in progress) | 2 | ~105 min | ~53 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 50min (01-01)
-- Trend: establishing baseline
+- Last 5 plans: 50min (01-01), 55min (01-02)
+- Trend: stable ~53 min/plan
 
 *Updated after each plan completion*
 
@@ -83,19 +83,29 @@ decisions treated as LOCKED for this milestone). Most relevant to current work:
   setprecision(17) + strip trailing zeros; `std::to_string` is forbidden for
   float-arm CvParam values (M2 rule).
 
+### Decisions (plan 01-02)
+
+- DEC-01-02-float-scan-window: ScanWindow.lower/upper_limit are optional<float>
+  (not double); Arrow schema stores float32 for MS_1000501/MS_1000500.
+
+- DEC-01-02-table-read-once: read_spectra_metadata calls ReadTable once; all
+  four facet passes (spectrum, precursor, selected_ion, scan) share one table.
+
+- DEC-01-02-test-timeout-120s: spectrum_metadata moved to separate meson test()
+  with timeout=120s; 18-case suite runs ~34s (too close to 30s default).
+
+- DEC-01-02-clang-format-meson-excluded: meson.build is not C++; clang-format
+  incorrectly reformatted it (URL -> goto label); excluded from style gate.
+
 ### Pending Todos
 
-- Plan 01-02: RDR-10c (precursor / selected-ion / isolation-window /
-  activation / scan params+windows; IM deferred as documented stub).
+- Plan 01-03: RDR-9b (typed auxiliary_arrays accessor; structural validation
+  via schema parse + empty-list round-trip; full phase gate).
 
 ### Blockers/Concerns
 
 - [Phase 0] `libOpenMS` is NOT yet built locally (only deps). Finishing the build
   is a long compile and gates all RDR-19 work.
-
-- [Phase 1] RDR-10c needs scan.parameters + scan.scan_windows from small.mzpeak
-  (both populated, fully testable per RESEARCH); ion-mobility decode is deferred
-  (null in all bundled fixtures).
 
 ## Standing Per-Phase Gates
 
@@ -127,6 +137,6 @@ Carried forward to a future milestone (see PROJECT.md Out of Scope):
 ## Session Continuity
 
 Last session: 2026-06-14
-Stopped at: Phase 1 Plan 01-01 complete (RDR-10b scalar fields +
-parameters CvParam list; spectrum_metadata test suite 8 cases; 30/30 green).
+Stopped at: Phase 1 Plan 01-02 complete (RDR-10c precursor/scan join;
+18 test cases including 34 MS2 / 14 MS1 sweep; 30/30 green).
 Resume file: None
