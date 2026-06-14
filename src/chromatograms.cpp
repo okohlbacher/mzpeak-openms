@@ -11,7 +11,6 @@ directory of this repository.
 
 #include "mzpeak/chromatogram.h"
 #include "mzpeak/chromatograms.h"
-#include "mzpeak/exception.h"
 #include "mzpeak/query.h"
 #include "mzpeak/util/enumerable_proxy.h"
 
@@ -28,12 +27,14 @@ Chromatograms::Chromatograms(std::unique_ptr<Util::Parquet> data,
           std::bind(std::mem_fn(&Chromatograms::fetch), this, std::placeholders::_1))
     , data_(std::make_shared<Data::Arrays>(std::move(data)))
 {
-  // Chromatograms currently only support the "point" layout.  The chunked
-  // layout uses a different top-level node ("chunk") which would require a
-  // separate decode path.
-  if (data_->array_index().prefix() != "point") {
-    throw ParquetError("chunked chromatograms not yet supported");
-  }
+  // RDR-28a: chunked chromatograms are now supported.  Their data table uses
+  // the "chunk" top-level node, but the time axis (MS:1000595,
+  // RelativeTimeOffset, Float64) and intensity axis route through the same
+  // chunked decoder as chunked spectra: the time chunk is delta- or
+  // numpress-linear-encoded (chunk_start + chunk_values), and the intensity
+  // chunk is a plain secondary list or a numpress-SLOF transform.  See
+  // Encoding<T>::decode_array / decode_chunked.  Chunked wavelength spectra
+  // remain deferred (RDR-28b).
 
   // The chromatogram count lives in the metadata table's `chromatogram_count`
   // key; the data table does not carry it, so prefer the supplied count and

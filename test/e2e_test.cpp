@@ -182,12 +182,11 @@ void exercise_reader(const std::string& path, std::optional<std::size_t> expecte
 
   // NOTE: the auxiliary chromatogram / wavelength tables are validated in the
   // per-fixture cases below rather than here, because their reader support is
-  // currently uneven across fixtures (see the open gap recorded in
-  // docs/reader-backlog.md, RDR-28): chunked-layout chromatograms throw
-  // "not yet supported" (small.chunked / small.numpress).  Point chromatograms,
-  // including has_uv's multi-intensity-column case, are fully decoded (RDR-29).
-  // This e2e codifies the capability that exists today and leaves the remaining
-  // gap explicitly tracked.
+  // currently uneven across fixtures (see docs/reader-backlog.md, RDR-28):
+  // chunked-layout chromatograms now decode (small.chunked / small.numpress,
+  // RDR-28a), as do point chromatograms including has_uv's multi-intensity
+  // case (RDR-29).  Chunked-layout WAVELENGTH spectra remain deferred
+  // (RDR-28b).  This e2e codifies the capability that exists today.
 }
 
 /// Reverse round trip: read a fixture, write the first `cap` spectra back out
@@ -250,6 +249,14 @@ BOOST_AUTO_TEST_CASE(chunked)
 {
   exercise_reader("../test/files/small.chunked.mzpeak", 48u);
   exercise_round_trip("../test/files/small.chunked.mzpeak", 8u);
+
+  // RDR-28a: chunked chromatograms now read.  Single TIC, 48 paired samples.
+  auto chroms = MzPeak::open("../test/files/small.chunked.mzpeak").chromatograms();
+  BOOST_TEST(chroms.size() == 1u);
+  auto c = chroms[0];
+  BOOST_TEST(c.time().size() == c.intensity().size());
+  BOOST_TEST(c.time().size() == 48u);
+  BOOST_TEST(c.intensity().front() == 15245068.0f, tolerance(1e-3f));
 }
 
 /******************************************************************************/
@@ -258,6 +265,16 @@ BOOST_AUTO_TEST_CASE(numpress)
 {
   exercise_reader("../test/files/small.numpress.mzpeak", 48u);
   exercise_round_trip("../test/files/small.numpress.mzpeak", 8u);
+
+  // RDR-28a: chunked chromatogram with numpress-SLOF intensity now reads.
+  // Same underlying TIC as small.chunked; SLOF is lossy so use a relative
+  // tolerance on intensity.
+  auto chroms = MzPeak::open("../test/files/small.numpress.mzpeak").chromatograms();
+  BOOST_TEST(chroms.size() == 1u);
+  auto c = chroms[0];
+  BOOST_TEST(c.time().size() == c.intensity().size());
+  BOOST_TEST(c.time().size() == 48u);
+  BOOST_TEST(c.intensity().front() == 15245068.0f, tolerance(2e-3f));
 }
 
 /******************************************************************************/
