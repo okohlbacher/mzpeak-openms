@@ -11,8 +11,8 @@ directory of this repository.
 #include <memory>
 #include <vector>
 
+#include "mzpeak/data/arrays.h"
 #include "mzpeak/schema/psi/data_type.h"
-#include "mzpeak/util/encoding.h"
 
 namespace MzPeak {
 
@@ -60,7 +60,7 @@ public:
    * NOTE: wavelength and intensity values have been decoded already; use the
    * corresponding methods in this class to fetch those values instead.
    */
-  const Util::array_map_type& raw_encoded_arrays() const;
+  const Data::array_map_type& raw_encoded_arrays() const;
 
   /**
    * The array index for this wavelength spectrum.
@@ -72,11 +72,11 @@ protected:
 
   /// Internal constructor.
   WavelengthSpectrum(const Schema::ArrayIndex&,
-                     std::unique_ptr<Util::array_map_type>);
+                     std::unique_ptr<Data::array_map_type>);
 
 private:
   Schema::ArrayIndex array_index_;
-  std::shared_ptr<Util::array_map_type> map_;
+  std::shared_ptr<Data::array_map_type> map_;
   std::vector<wavelength_type> wavelength_;
   std::vector<intensity_type> intensity_;
 };

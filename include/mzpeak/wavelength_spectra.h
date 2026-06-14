@@ -12,7 +12,7 @@ directory of this repository.
 #include <memory>
 #include <optional>
 
-#include "mzpeak/util/data_arrays.h"
+#include "mzpeak/data/arrays.h"
 #include "mzpeak/util/enumerable_proxy.h"
 #include "mzpeak/wavelength_spectrum.h"
 
@@ -45,7 +45,7 @@ public:
 
 private:
   // The wavelength spectrum data table.
-  std::shared_ptr<Util::DataArrays> data_;
+  std::shared_ptr<Data::Arrays> data_;
 
   // Function to fetch a specific wavelength spectrum.
   WavelengthSpectrum fetch(std::size_t);

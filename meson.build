@@ -180,6 +180,7 @@ test_names = [
     'roundtrip',
     'spectra',
     'spectra_query',
+    'unsigned_index',
     'util',
     'wavelength_spectra',
     'writer',

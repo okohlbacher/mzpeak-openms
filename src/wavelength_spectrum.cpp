@@ -9,16 +9,16 @@ directory of this repository.
 #include <string>
 #include <vector>
 
+#include "mzpeak/data/encoding.h"
 #include "mzpeak/exception.h"
 #include "mzpeak/schema/psi/data_type.h"
-#include "mzpeak/util/encoding.h"
 #include "mzpeak/wavelength_spectrum.h"
 
 namespace MzPeak {
 
 /******************************************************************************/
 inline std::vector<WavelengthSpectrum::wavelength_type>
-decode_wavelength(const Schema::ArrayIndex& index, Util::array_map_type& map)
+decode_wavelength(const Schema::ArrayIndex& index, Data::array_map_type& map)
 {
   // The wavelength axis is the PSI "wavelength array" (MS:1000617), which the
   // ArrayType enum models as ElectromagneticRadiation.  In this file it is
@@ -26,7 +26,7 @@ decode_wavelength(const Schema::ArrayIndex& index, Util::array_map_type& map)
   // decoded with the Float32 encoding (decoding it as Float64 would misread
   // the underlying Arrow FloatArray and yield garbage).  The public API
   // exposes wavelengths as double, so widen the decoded float32 values.
-  Util::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
+  Data::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
   auto raw(enc.decode_array(Schema::PSI::ArrayType::ElectromagneticRadiation));
 
   std::vector<WavelengthSpectrum::wavelength_type> res;
@@ -38,15 +38,15 @@ decode_wavelength(const Schema::ArrayIndex& index, Util::array_map_type& map)
 
 /******************************************************************************/
 inline std::vector<WavelengthSpectrum::intensity_type>
-decode_intensity(const Schema::ArrayIndex& index, Util::array_map_type& map)
+decode_intensity(const Schema::ArrayIndex& index, Data::array_map_type& map)
 {
-  Util::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
+  Data::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
   return enc.decode_array(Schema::PSI::ArrayType::Intensity);
 }
 
 /******************************************************************************/
 WavelengthSpectrum::WavelengthSpectrum(const Schema::ArrayIndex& idx,
-                                       std::unique_ptr<Util::array_map_type> map)
+                                       std::unique_ptr<Data::array_map_type> map)
     : array_index_(idx)
     , map_(std::move(map))
     , wavelength_(decode_wavelength(array_index_, *map_))
@@ -81,7 +81,7 @@ WavelengthSpectrum::intensity() const
 }
 
 /******************************************************************************/
-const Util::array_map_type& WavelengthSpectrum::raw_encoded_arrays() const
+const Data::array_map_type& WavelengthSpectrum::raw_encoded_arrays() const
 {
   return *map_;
 }

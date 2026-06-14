@@ -8,6 +8,7 @@ top-level directory of this repository.
 
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
+#include <bit>
 #include <memory>
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
@@ -298,6 +299,37 @@ struct ColMinMax final {
   }
 };
 
+// We don't support string searches right now.
+template <>
+Query::Result<Query::range_t> ColMinMax::operator()<psi::DataType::ASCII>() const
+{
+  return Query::Result<Query::range_t>::fail();
+}
+
+// RDR-4a: UInt64 columns are stored with a signed INT64 physical type, so
+// the min/max raw values from statistics/page-index are bit-pattern signed.
+// bit_cast them to uint64_t so the range type matches the predicate value type.
+template <>
+Query::Result<Query::range_t> ColMinMax::operator()<psi::DataType::UInt64>() const
+{
+  using R = Query::Result<Query::range_t>;
+
+  if (index_ != nullptr) {
+    using Index = parquet::TypedColumnIndex<parquet::Int64Type>;
+    std::shared_ptr<Index> index = std::static_pointer_cast<Index>(index_);
+    return R(
+        std::make_pair(std::bit_cast<uint64_t>(index->min_values()[page_index_]),
+                       std::bit_cast<uint64_t>(index->max_values()[page_index_])));
+  } else if (stats_ != nullptr) {
+    using Stats = parquet::TypedStatistics<parquet::Int64Type>;
+    if (!stats_->HasMinMax()) return R::skip();
+    std::shared_ptr<Stats> stats = std::static_pointer_cast<Stats>(stats_);
+    return R(std::make_pair(std::bit_cast<uint64_t>(stats->min()),
+                            std::bit_cast<uint64_t>(stats->max())));
+  } else {
+    return R::skip();
+  }
+}
 /******************************************************************************/
 /**
  * Helper class for planning which row groups/pages need to be read by

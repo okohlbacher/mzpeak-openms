@@ -13,7 +13,7 @@ directory of this repository.
 #include <optional>
 
 #include "mzpeak/chromatogram.h"
-#include "mzpeak/util/data_arrays.h"
+#include "mzpeak/data/arrays.h"
 #include "mzpeak/util/enumerable_proxy.h"
 
 namespace MzPeak {
@@ -45,7 +45,7 @@ public:
 
 private:
   // The chromatogram data table.
-  std::shared_ptr<Util::DataArrays> data_;
+  std::shared_ptr<Data::Arrays> data_;
 
   // Function to fetch a specific chromatogram.
   Chromatogram fetch(std::size_t);

@@ -12,6 +12,7 @@ directory of this repository.
 #include "mzpeak/chromatogram.h"
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/exception.h"
+#include "mzpeak/query.h"
 #include "mzpeak/util/enumerable_proxy.h"
 
 namespace MzPeak {
@@ -25,7 +26,7 @@ Chromatograms::Chromatograms(std::unique_ptr<Util::Parquet> data,
     : EnumerableProxy(
           0,
           std::bind(std::mem_fn(&Chromatograms::fetch), this, std::placeholders::_1))
-    , data_(std::make_shared<Util::DataArrays>(std::move(data)))
+    , data_(std::make_shared<Data::Arrays>(std::move(data)))
 {
   // Chromatograms currently only support the "point" layout.  The chunked
   // layout uses a different top-level node ("chunk") which would require a
@@ -44,12 +45,14 @@ Chromatograms::Chromatograms(std::unique_ptr<Util::Parquet> data,
 Chromatogram Chromatograms::fetch(std::size_t index)
 {
   auto array_index(data_->array_index());
-  auto chromatogram_index_column = array_index.columns()[0];
+  auto fields = data_->columns_to_fields(array_index.columns());
 
-  using enum Schema::PSI::DataType;
-  Query query = Query::Predicate<Int64>::equal_to(chromatogram_index_column, index);
+  // RDR-4a: the index column is unsigned 64-bit.
+  auto dest = data_->field("chromatogram_index");
+  if (!dest.has_value()) return Chromatogram(array_index, nullptr);
 
-  auto map = data_->read_arrays(query, array_index.columns());
+  Query query = Query::Builder(*dest).eq<uint64_t>(static_cast<uint64_t>(index));
+  auto map = data_->read_arrays(query, fields);
 
   return Chromatogram(array_index, std::move(map));
 }
