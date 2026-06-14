@@ -4,6 +4,29 @@ Consolidates every open backlog/gap after the reader-feature, e2e-harness, and
 OpenMS-style-conformance rounds. Status verified against the code on
 `writer_test` (not just the backlog doc, which under-marked several done items).
 
+## Implemented this round (2026-06-14, all on `writer_test`, suite 27/27)
+- **Phase 0 · DOC-1** ✅ backlog reconciled + `THIRD_PARTY.md` (commit 674f09b).
+- **Phase 1 · RDR-4a** ✅ unsigned `UInt64` entity-index typing through
+  DataType/parquet-tags/Query/stats/record_count; >`INT64_MAX` test; cross-impl
+  PASS (commit fbe4b58).
+- **Phase 2 · RDR-28a** ✅ chunked-layout chromatograms read (small.chunked +
+  small.numpress) via the existing `decode_chunked`; ground-truthed (13248fa).
+- **Phase 3 · RDR-25** ✅ detail-level / metadata-only mode
+  (`Index::spectra(DetailLevel)`), no array decode (2ffd823).
+- **RDR-22** (in-memory archive) **deferred**: the feasible half (in-memory
+  *unpacked* name→bytes archive) has narrow utility; the useful half (a
+  `.mzpeak` *zip blob* in memory, `zip_source_buffer` + per-member lifetime) is
+  the large part. Do the zip-buffer version when prioritized.
+- **RDR-28b** (chunked wavelength) **deferred**: no bundled fixture.
+- **RDR-4b** (large_list/large_string/large_list<u8> typing) **deferred**: the
+  chunked decoder already casts those directly; not blocking.
+
+Remaining open (none standalone-feasible-and-high-value this round): RDR-19
+(needs OpenMS build), RDR-20 (no encrypted fixtures), RDR-21/RDR-23 (perf infra,
+no behavioral fixture), RDR-22b (zip-from-buffer), WRT-1 (writer chunked emit,
+multi-month), WRT-2 (writer metadata blocks, modest value / API change),
+RDR-14 (remote, P4).
+
 ## Done (for context — do not re-do)
 Reader: RDR-1/2/3/5/6/7/8/9/10/11/12/13/15/16/17/18/24/26/27/29. Point layout
 (profile+centroid, null-marked m/z, multi-intensity-column coalescing), chunked
