@@ -101,13 +101,17 @@ struct PrecursorInfo {
 
 /**
  * One scan window (m/z range) within a scan's scan_windows list.
+ * The Parquet schema stores lower/upper limits as float32; the type matches
+ * the actual Arrow column type to avoid a narrowing conversion.
  */
 struct ScanWindow {
-  /// `MS_1000501_scan_window_lower_limit` — lower m/z bound (double).
-  std::optional<double> lower_limit;
+  /// `MS_1000501_scan_window_lower_limit_unit_MS_1000040` — lower m/z bound
+  /// (float, as stored in the Parquet schema).
+  std::optional<float> lower_limit;
 
-  /// `MS_1000500_scan_window_upper_limit` — upper m/z bound (double).
-  std::optional<double> upper_limit;
+  /// `MS_1000500_scan_window_upper_limit_unit_MS_1000040` — upper m/z bound
+  /// (float, as stored in the Parquet schema).
+  std::optional<float> upper_limit;
 
   /// Additional CV parameters on this scan window.
   std::vector<CvParam> parameters;
