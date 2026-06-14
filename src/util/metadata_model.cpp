@@ -10,6 +10,7 @@ directory of this repository.
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
 #include <arrow/table.h>
+#include <cstdio>
 #include <iomanip>
 #include <memory>
 #include <parquet/arrow/reader.h>
@@ -22,15 +23,24 @@ namespace MzPeak::Util {
 
 namespace {
 
-/// Read the `spectrum` struct column from a metadata table.  Returns null if
-/// the column is absent or not a struct.
-std::shared_ptr<arrow::ChunkedArray> spectrum_column(Parquet& metadata)
+/// Read the full metadata table from @p metadata.  Throws ParquetError on
+/// failure.  The caller is responsible for caching: this function is NOT
+/// idempotent (each call re-reads the Parquet file).
+std::shared_ptr<arrow::Table> read_metadata_table(Parquet& metadata)
 {
   std::shared_ptr<arrow::Table> table;
   arrow::Status status = metadata.reader().ReadTable(&table);
   if (!status.ok()) {
     throw ParquetError("read metadata table: " + status.ToString());
   }
+  return table;
+}
+
+/// Read the `spectrum` struct column from an already-read table.  Returns null
+/// if the column is absent or not a struct.
+std::shared_ptr<arrow::ChunkedArray>
+spectrum_column_from_table(const std::shared_ptr<arrow::Table>& table)
+{
   return table->GetColumnByName("spectrum");
 }
 
@@ -264,7 +274,8 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
 {
   std::map<uint64_t, std::vector<double>> out;
 
-  std::shared_ptr<arrow::ChunkedArray> col(spectrum_column(metadata));
+  auto table = read_metadata_table(metadata);
+  std::shared_ptr<arrow::ChunkedArray> col(spectrum_column_from_table(table));
   if (!col) return out;
 
   for (const auto& chunk : col->chunks()) {
@@ -315,7 +326,15 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 {
   std::map<uint64_t, SpectrumMetadata> out;
 
-  std::shared_ptr<arrow::ChunkedArray> col(spectrum_column(metadata));
+  // Read the table ONCE; all facet passes (spectrum, precursor, selected_ion,
+  // scan) operate on this in-memory table — no second Parquet read (anti-pattern
+  // from 01-RESEARCH.md).
+  auto table = read_metadata_table(metadata);
+
+  // -------------------------------------------------------------------
+  // PASS 1: spectrum column — build `out` keyed by spectrum.index VALUE.
+  // -------------------------------------------------------------------
+  std::shared_ptr<arrow::ChunkedArray> col(spectrum_column_from_table(table));
   if (!col) return out;
 
   for (const auto& chunk : col->chunks()) {
@@ -360,6 +379,198 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
       m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
       out[m.index] = std::move(m);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // PASS 2: precursor column — H1 join by source_index VALUE.
+  // For each facet row r, si = source_index VALUE (not r), then attach to
+  // out[si].  NEVER index out positionally (chunk boundaries differ per
+  // column).  MS1 rows have NULL source_index and are skipped.
+  // -------------------------------------------------------------------
+  {
+    auto prec_col = table->GetColumnByName("precursor");
+    if (prec_col) {
+      for (const auto& chunk : prec_col->chunks()) {
+        if (chunk->type_id() != arrow::Type::STRUCT) continue;
+        auto prec(std::static_pointer_cast<arrow::StructArray>(chunk));
+
+        for (int64_t r = 0; r < prec->length(); ++r) {
+          // source_index NULL => MS1 row, skip (Pitfall 2).
+          auto si = opt_int<uint64_t>(prec, "source_index", r);
+          if (!si) continue;
+
+          // H1: join by source_index VALUE into the map keyed by spectrum.index.
+          auto it = out.find(*si);
+          if (it == out.end()) {
+            // T-02-01 mitigation: log unmatched source_index, never drop silently.
+            // Using stderr — the library has no logger; callers may redirect.
+            std::fprintf(stderr,
+                         "mzpeak: precursor source_index %llu has no matching "
+                         "spectrum — skipped\n",
+                         static_cast<unsigned long long>(*si));
+            continue;
+          }
+
+          PrecursorInfo pi;
+          pi.precursor_index = opt_int<uint64_t>(prec, "precursor_index", r);
+          pi.precursor_id = get_string(prec, "precursor_id", r);
+
+          // Isolation window: nested struct field.
+          auto iw_field = prec->GetFieldByName("isolation_window");
+          if (iw_field && !iw_field->IsNull(r)) {
+            auto iw_struct = std::dynamic_pointer_cast<arrow::StructArray>(iw_field);
+            if (iw_struct) {
+              pi.isolation_window.target_mz =
+                  opt_float(iw_struct, "MS_1000827_isolation_window_target_mz", r);
+              pi.isolation_window.lower_offset = opt_float(
+                  iw_struct, "MS_1000828_isolation_window_lower_offset", r);
+              pi.isolation_window.upper_offset = opt_float(
+                  iw_struct, "MS_1000829_isolation_window_upper_offset", r);
+              pi.isolation_window.parameters =
+                  read_cv_params_from_list(iw_struct, "parameters", r);
+            }
+          }
+
+          // Activation: nested struct carrying a parameters list.
+          auto act_field = prec->GetFieldByName("activation");
+          if (act_field && !act_field->IsNull(r)) {
+            auto act_struct =
+                std::dynamic_pointer_cast<arrow::StructArray>(act_field);
+            if (act_struct) {
+              pi.activation_parameters =
+                  read_cv_params_from_list(act_struct, "parameters", r);
+            }
+          }
+
+          it->second.precursors.push_back(std::move(pi));
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // PASS 3: selected_ion column — H2 attach by (source_index, precursor_index).
+  // Run AFTER the precursor pass so precursors exist to attach to.
+  // Attach ion to the PrecursorInfo whose precursor_index matches the ion's
+  // precursor_index.  If no such precursor exists, create one to hold the ion
+  // (do NOT attach to an arbitrary precursor, do NOT use precursors.back()).
+  // -------------------------------------------------------------------
+  {
+    auto si_col = table->GetColumnByName("selected_ion");
+    if (si_col) {
+      for (const auto& chunk : si_col->chunks()) {
+        if (chunk->type_id() != arrow::Type::STRUCT) continue;
+        auto si(std::static_pointer_cast<arrow::StructArray>(chunk));
+
+        for (int64_t r = 0; r < si->length(); ++r) {
+          // source_index NULL => MS1 row, skip.
+          auto src_idx = opt_int<uint64_t>(si, "source_index", r);
+          if (!src_idx) continue;
+
+          auto it = out.find(*src_idx);
+          if (it == out.end()) {
+            std::fprintf(stderr,
+                         "mzpeak: selected_ion source_index %llu has no matching "
+                         "spectrum — skipped\n",
+                         static_cast<unsigned long long>(*src_idx));
+            continue;
+          }
+
+          // Read precursor_index for H2 matching.
+          auto pi_idx = opt_int<uint64_t>(si, "precursor_index", r);
+
+          SelectedIonInfo ion;
+          ion.selected_ion_mz =
+              opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
+          ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
+          ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
+          // ion_mobility_value / ion_mobility_type: DEFERRED (NULL in all
+          // fixtures; deferred note in SelectedIonInfo header documentation).
+          ion.parameters = read_cv_params_from_list(si, "parameters", r);
+
+          // H2: attach by (source_index, precursor_index) — NOT precursors.back().
+          auto& precs = it->second.precursors;
+          PrecursorInfo* target = nullptr;
+          for (auto& p : precs) {
+            if (p.precursor_index == pi_idx) {
+              target = &p;
+              break;
+            }
+          }
+          if (!target) {
+            // No precursor with this precursor_index yet — create a holder
+            // (ion seen before/without its precursor row, or ion-only entry).
+            PrecursorInfo holder;
+            holder.precursor_index = pi_idx;
+            precs.push_back(std::move(holder));
+            target = &precs.back();
+          }
+          target->selected_ions.push_back(std::move(ion));
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // PASS 4: scan column — scan_parameters + scan_windows (accepted add-on).
+  // Same H1 source_index VALUE join.  scan ion_mobility is NULL in all
+  // fixtures and is DEFERRED (same as selected_ion IM above).
+  // -------------------------------------------------------------------
+  {
+    auto scan_col = table->GetColumnByName("scan");
+    if (scan_col) {
+      for (const auto& chunk : scan_col->chunks()) {
+        if (chunk->type_id() != arrow::Type::STRUCT) continue;
+        auto scan(std::static_pointer_cast<arrow::StructArray>(chunk));
+
+        for (int64_t r = 0; r < scan->length(); ++r) {
+          // source_index NULL: skip (scan rows for MS1 have valid source_index
+          // in small.mzpeak — every scan row has a non-null source_index).
+          auto src_idx = opt_int<uint64_t>(scan, "source_index", r);
+          if (!src_idx) continue;
+
+          auto it = out.find(*src_idx);
+          if (it == out.end()) {
+            std::fprintf(stderr,
+                         "mzpeak: scan source_index %llu has no matching spectrum — "
+                         "skipped\n",
+                         static_cast<unsigned long long>(*src_idx));
+            continue;
+          }
+
+          it->second.scan_parameters =
+              read_cv_params_from_list(scan, "parameters", r);
+
+          // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
+          auto sw_field = scan->GetFieldByName("scan_windows");
+          if (sw_field && !sw_field->IsNull(r)) {
+            auto sw_list =
+                std::dynamic_pointer_cast<arrow::LargeListArray>(sw_field);
+            if (sw_list && !sw_list->IsNull(r)) {
+              auto sw_items =
+                  std::dynamic_pointer_cast<arrow::StructArray>(sw_list->values());
+              if (sw_items) {
+                int64_t begin = sw_list->value_offset(r);
+                int64_t length = sw_list->value_length(r);
+                it->second.scan_windows.reserve(static_cast<std::size_t>(length));
+                for (int64_t k = 0; k < length; ++k) {
+                  ScanWindow sw;
+                  sw.lower_limit = opt_float(
+                      sw_items, "MS_1000501_scan_window_lower_limit_unit_MS_1000040",
+                      begin + k);
+                  sw.upper_limit = opt_float(
+                      sw_items, "MS_1000500_scan_window_upper_limit_unit_MS_1000040",
+                      begin + k);
+                  sw.parameters =
+                      read_cv_params_from_list(sw_items, "parameters", begin + k);
+                  it->second.scan_windows.push_back(std::move(sw));
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 
