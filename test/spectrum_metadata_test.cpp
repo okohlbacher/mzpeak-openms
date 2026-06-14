@@ -278,7 +278,8 @@ BOOST_AUTO_TEST_CASE(precursor_selected_ion_index2)
   BOOST_TEST(ion.selected_ion_mz.has_value());
   BOOST_TEST(std::abs(ion.selected_ion_mz.value() - 810.789428710938) < 1e-6);
   BOOST_TEST(ion.intensity.has_value());
-  BOOST_TEST(std::abs(static_cast<double>(ion.intensity.value()) - 1994039.125) < 1e-3);
+  BOOST_TEST(std::abs(static_cast<double>(ion.intensity.value()) - 1994039.125) <
+             1e-3);
 }
 
 /******************************************************************************/
@@ -318,13 +319,11 @@ BOOST_AUTO_TEST_CASE(multirow_sweep_ms2_carry_precursor_ms1_carry_none)
     const auto& m = s.metadata();
     if (!m.ms_level.has_value()) continue;
     if (m.ms_level.value() == 1) {
-      if (m.precursors.empty())
-        ++ms1_without_precursor;
+      if (m.precursors.empty()) ++ms1_without_precursor;
       else
         ++ms1_with_precursor;
     } else if (m.ms_level.value() == 2) {
-      if (!m.precursors.empty())
-        ++ms2_with_precursor;
+      if (!m.precursors.empty()) ++ms2_with_precursor;
       else
         ++ms2_without_precursor;
     }
@@ -452,8 +451,9 @@ BOOST_AUTO_TEST_CASE(scan_windows_present_on_ms1_spectrum)
 // join is by source_index VALUE, not positionally.
 //
 // Ground truth (pyarrow):
-//   scan row 0: source_index=0, MS_1000512_filter_string="FTMS + p ESI Full ms [200.00-2000.00]"
-//   scan row 2: source_index=2, MS_1000512_filter_string="ITMS + c ESI d Full ms2 810.79@cid35.00 [210.00-1635.00]"
+//   scan row 0: source_index=0, MS_1000512_filter_string="FTMS + p ESI Full ms
+//   [200.00-2000.00]" scan row 2: source_index=2, MS_1000512_filter_string="ITMS + c
+//   ESI d Full ms2 810.79@cid35.00 [210.00-1635.00]"
 // (filter_string is in the scan struct but not on SpectrumMetadata; verify
 //  indirectly via scan_windows: index 0 has window 200-2000, index 2 has 210-1635)
 BOOST_AUTO_TEST_CASE(scan_windows_source_index_join_correct_for_two_spectra)
@@ -475,15 +475,15 @@ BOOST_AUTO_TEST_CASE(scan_windows_source_index_join_correct_for_two_spectra)
 
   BOOST_TEST_REQUIRE(m0.has_value());
   BOOST_TEST(m0->scan_windows.size() >= 1u);
-  BOOST_TEST(std::abs(static_cast<double>(m0->scan_windows[0].lower_limit.value()) - 200.0) <
-             1.0);
-  BOOST_TEST(std::abs(static_cast<double>(m0->scan_windows[0].upper_limit.value()) - 2000.0) <
-             1.0);
+  BOOST_TEST(std::abs(static_cast<double>(m0->scan_windows[0].lower_limit.value()) -
+                      200.0) < 1.0);
+  BOOST_TEST(std::abs(static_cast<double>(m0->scan_windows[0].upper_limit.value()) -
+                      2000.0) < 1.0);
 
   BOOST_TEST_REQUIRE(m2.has_value());
   BOOST_TEST(m2->scan_windows.size() >= 1u);
-  BOOST_TEST(std::abs(static_cast<double>(m2->scan_windows[0].lower_limit.value()) - 210.0) <
-             1.0);
-  BOOST_TEST(std::abs(static_cast<double>(m2->scan_windows[0].upper_limit.value()) - 1635.0) <
-             1.0);
+  BOOST_TEST(std::abs(static_cast<double>(m2->scan_windows[0].lower_limit.value()) -
+                      210.0) < 1.0);
+  BOOST_TEST(std::abs(static_cast<double>(m2->scan_windows[0].upper_limit.value()) -
+                      1635.0) < 1.0);
 }
