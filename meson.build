@@ -164,6 +164,7 @@ test_names = [
     'chunked',
     'chunked_chromatograms',
     'data_arrays',
+    'detail_level',
     'directory',
     'eic',
     'executor',

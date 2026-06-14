@@ -41,8 +41,13 @@ public:
 
   /**
    * Access the spectra in the file.
+   *
+   * RDR-25: @p detail_level selects how much of each spectrum a fetch
+   * materializes.  `Full` (the default) decodes the m/z + intensity arrays;
+   * `MetadataOnly` returns per-spectrum scalar metadata with empty arrays and
+   * reads no array data — a speedup for metadata-only scans.
    */
-  Spectra spectra() const;
+  Spectra spectra(DetailLevel detail_level = DetailLevel::Full) const;
 
   /**
    * Open a Parquet file directly.
