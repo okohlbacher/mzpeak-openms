@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <boost/json.hpp>
 #include <string>
 #include <vector>
 
@@ -40,5 +41,17 @@ struct IndexFileEntry {
  */
 std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
                               const std::string& version = "0.9.0");
+
+/**
+ * WRT-2 — emit mzpeak_index.json with run-level metadata blocks.
+ *
+ * Identical to the @ref mzpeak_index_json overload above, but merges the
+ * members of `run_metadata` (already serialized run-level blocks, e.g. from
+ * `RunMetadata::to_json()`) into the emitted `metadata{}` object alongside
+ * `version`.  `version` always wins over any `version` key in `run_metadata`.
+ */
+std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
+                              const std::string& version,
+                              const boost::json::object& run_metadata);
 
 } // namespace MzPeak::Util

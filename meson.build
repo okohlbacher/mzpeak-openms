@@ -186,6 +186,7 @@ test_names = [
     'util',
     'wavelength_spectra',
     'writer',
+    'writer_metadata',
     'zip',
 ]
 

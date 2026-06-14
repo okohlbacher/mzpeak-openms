@@ -25,8 +25,13 @@ namespace MzPeak {
  * a `CvParam` keeps `accession`/`name`/`unit`/`value` but does not interpret
  * the term or resolve its CV; callers that need more reach for the raw
  * Boost.JSON value preserved alongside the typed blocks
- * (`RunMetadata::raw()`).  The C++ writer does not yet emit these blocks (see
- * docs/reader-backlog.md RDR-24 writer counterpart), so this is read-only.
+ * (`RunMetadata::raw()`).
+ *
+ * WRT-2 — each block and `RunMetadata` also provides a `to_json()` serializer,
+ * the inverse of the `from_json` parsers, so the C++ writer can emit these
+ * run-level blocks into the index `metadata{}` object.  The serialization
+ * mirrors the parser's field names, so `parse(serialize(x)) == x` holds for
+ * the typed fields.
  */
 
 /**
@@ -43,10 +48,17 @@ struct CvParam {
 
   /// Parse a CvParam from its JSON parameter object.
   static CvParam from_json(const boost::json::object&);
+
+  /// Serialize to its `{accession, name, unit, value}` JSON object (the
+  /// inverse of from_json); absent optionals are omitted.
+  boost::json::object to_json() const;
 };
 
 /// Parse a JSON array of parameter objects into a `CvParam` vector.
 std::vector<CvParam> cv_params_from_json(const boost::json::array&);
+
+/// Serialize a `CvParam` vector to a JSON array of parameter objects.
+boost::json::array cv_params_to_json(const std::vector<CvParam>&);
 
 /**
  * A software package (`software_list[]` entry): id, version, and CV params
@@ -59,6 +71,9 @@ struct Software {
 
   /// Parse a Software from its JSON object representation.
   static Software from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -72,6 +87,9 @@ struct Component {
 
   /// Parse a Component from its JSON object representation.
   static Component from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -87,6 +105,9 @@ struct InstrumentConfiguration {
 
   /// Parse a InstrumentConfiguration from its JSON object representation.
   static InstrumentConfiguration from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -100,6 +121,9 @@ struct ProcessingMethod {
 
   /// Parse a ProcessingMethod from its JSON object representation.
   static ProcessingMethod from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -112,6 +136,9 @@ struct DataProcessing {
 
   /// Parse a DataProcessing from its JSON object representation.
   static DataProcessing from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -124,6 +151,9 @@ struct Sample {
 
   /// Parse a Sample from its JSON object representation.
   static Sample from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -138,6 +168,9 @@ struct SourceFile {
 
   /// Parse a SourceFile from its JSON object representation.
   static SourceFile from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -150,6 +183,9 @@ struct FileDescription {
 
   /// Parse a FileDescription from its JSON object representation.
   static FileDescription from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -166,6 +202,9 @@ struct Run {
 
   /// Parse a Run from its JSON object representation.
   static Run from_json(const boost::json::object&);
+
+  /// Serialize to its JSON object representation (inverse of from_json).
+  boost::json::object to_json() const;
 };
 
 /**
@@ -220,6 +259,13 @@ public:
 
   /// The verbatim `metadata{}` object, for blocks/terms not typed above.
   const boost::json::object& raw() const { return raw_; }
+
+  /// WRT-2 — serialize the typed blocks into a `metadata{}` JSON object (the
+  /// inverse of the parsing ctor), suitable for merging into the index's
+  /// emitted `metadata{}` alongside `version`.  Only the typed blocks are
+  /// emitted; absent optionals and empty lists are omitted, so
+  /// `RunMetadata(x.to_json())` reproduces the typed fields of `x`.
+  boost::json::object to_json() const;
 
 private:
   boost::json::object raw_;

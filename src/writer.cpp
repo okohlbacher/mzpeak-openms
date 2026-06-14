@@ -93,7 +93,10 @@ bool any_centroid(const std::vector<SpectrumData>& spectra)
 
 /******************************************************************************/
 // mzpeak_index.json describing the data + metadata tables (+ peaks if present).
-std::string spectra_index_json(bool with_peaks)
+// WRT-2: when `run_metadata` is non-null, its serialized run-level blocks are
+// merged into the emitted `metadata{}` alongside `version`.
+std::string spectra_index_json(bool with_peaks,
+                               const RunMetadata* run_metadata = nullptr)
 {
   std::vector<Util::IndexFileEntry> files{
       {"spectra_data.parquet", "spectrum", "data arrays"},
@@ -101,6 +104,9 @@ std::string spectra_index_json(bool with_peaks)
   };
   if (with_peaks) {
     files.push_back({"spectra_peaks.parquet", "spectrum", "peaks"});
+  }
+  if (run_metadata != nullptr) {
+    return Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json());
   }
   return Util::mzpeak_index_json(files, "0.9.0");
 }
@@ -173,11 +179,12 @@ void write_index_file(const fs::path& path, const std::string& json)
   }
 }
 
-} // namespace
-
 /******************************************************************************/
-void write_spectra_directory(const fs::path& dir,
-                             const std::vector<SpectrumData>& spectra)
+// WRT-2: shared directory writer; `run_metadata` is null for the no-metadata
+// overload and otherwise carries the run-level blocks to emit.
+void write_spectra_directory_impl(const fs::path& dir,
+                                  const std::vector<SpectrumData>& spectra,
+                                  const RunMetadata* run_metadata)
 {
   validate(spectra, "write_spectra_directory");
   fs::create_directories(dir);
@@ -202,12 +209,16 @@ void write_spectra_directory(const fs::path& dir,
   Util::write_spectra_metadata((dir / "spectra_metadata.parquet").string(),
                                build_metadata_rows(spectra));
 
-  write_index_file(dir / "mzpeak_index.json", spectra_index_json(with_peaks));
+  write_index_file(dir / "mzpeak_index.json",
+                   spectra_index_json(with_peaks, run_metadata));
 }
 
 /******************************************************************************/
-void write_spectra_archive(const fs::path& zip_path,
-                           const std::vector<SpectrumData>& spectra)
+// WRT-2: shared archive writer; `run_metadata` is null for the no-metadata
+// overload and otherwise carries the run-level blocks to emit.
+void write_spectra_archive_impl(const fs::path& zip_path,
+                                const std::vector<SpectrumData>& spectra,
+                                const RunMetadata* run_metadata)
 {
   validate(spectra, "write_spectra_archive");
 
@@ -231,7 +242,7 @@ void write_spectra_archive(const fs::path& zip_path,
 
   std::string metadata_bytes(
       Util::spectra_metadata_bytes(build_metadata_rows(spectra)));
-  std::string index_json(spectra_index_json(with_peaks));
+  std::string index_json(spectra_index_json(with_peaks, run_metadata));
 
   int errnum = 0;
   zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
@@ -266,6 +277,38 @@ void write_spectra_archive(const fs::path& zip_path,
     zip_discard(archive);
     throw ParquetError(msg);
   }
+}
+
+} // namespace
+
+/******************************************************************************/
+void write_spectra_directory(const fs::path& dir,
+                             const std::vector<SpectrumData>& spectra)
+{
+  write_spectra_directory_impl(dir, spectra, /*run_metadata=*/nullptr);
+}
+
+/******************************************************************************/
+void write_spectra_directory(const fs::path& dir,
+                             const std::vector<SpectrumData>& spectra,
+                             const RunMetadata& metadata)
+{
+  write_spectra_directory_impl(dir, spectra, &metadata);
+}
+
+/******************************************************************************/
+void write_spectra_archive(const fs::path& zip_path,
+                           const std::vector<SpectrumData>& spectra)
+{
+  write_spectra_archive_impl(zip_path, spectra, /*run_metadata=*/nullptr);
+}
+
+/******************************************************************************/
+void write_spectra_archive(const fs::path& zip_path,
+                           const std::vector<SpectrumData>& spectra,
+                           const RunMetadata& metadata)
+{
+  write_spectra_archive_impl(zip_path, spectra, &metadata);
 }
 
 } // namespace MzPeak

@@ -86,6 +86,19 @@ json::array array_member(const json::object& o, const char* key)
   return json::array();
 }
 
+/// WRT-2 — set an optional string member, omitting it entirely when absent so
+/// `parse(serialize(x)) == x` holds (the parser tolerates missing members).
+void put_opt(json::object& o, const char* key, const std::optional<std::string>& v)
+{
+  if (v.has_value()) o[key] = *v;
+}
+
+/// WRT-2 — set an optional integer member, omitting it when absent.
+void put_opt(json::object& o, const char* key, const std::optional<std::int64_t>& v)
+{
+  if (v.has_value()) o[key] = *v;
+}
+
 } // namespace
 
 /******************************************************************************/
@@ -102,6 +115,17 @@ CvParam CvParam::from_json(const json::object& o)
 }
 
 /******************************************************************************/
+json::object CvParam::to_json() const
+{
+  json::object o;
+  put_opt(o, "accession", accession);
+  put_opt(o, "name", name);
+  put_opt(o, "unit", unit);
+  put_opt(o, "value", value);
+  return o;
+}
+
+/******************************************************************************/
 std::vector<CvParam> cv_params_from_json(const json::array& a)
 {
   std::vector<CvParam> params;
@@ -110,6 +134,16 @@ std::vector<CvParam> cv_params_from_json(const json::array& a)
     if (v.is_object()) params.push_back(CvParam::from_json(v.as_object()));
   }
   return params;
+}
+
+/******************************************************************************/
+json::array cv_params_to_json(const std::vector<CvParam>& params)
+{
+  json::array a;
+  a.reserve(params.size());
+  for (const auto& p : params)
+    a.push_back(p.to_json());
+  return a;
 }
 
 /******************************************************************************/
@@ -123,6 +157,16 @@ Software Software::from_json(const json::object& o)
 }
 
 /******************************************************************************/
+json::object Software::to_json() const
+{
+  json::object o;
+  o["id"] = id;
+  put_opt(o, "version", version);
+  o["parameters"] = cv_params_to_json(parameters);
+  return o;
+}
+
+/******************************************************************************/
 Component Component::from_json(const json::object& o)
 {
   Component c;
@@ -130,6 +174,16 @@ Component Component::from_json(const json::object& o)
   c.order = opt_int(o, "order");
   c.parameters = cv_params_from_json(array_member(o, "parameters"));
   return c;
+}
+
+/******************************************************************************/
+json::object Component::to_json() const
+{
+  json::object o;
+  put_opt(o, "component_type", component_type);
+  put_opt(o, "order", order);
+  o["parameters"] = cv_params_to_json(parameters);
+  return o;
 }
 
 /******************************************************************************/
@@ -146,6 +200,21 @@ InstrumentConfiguration InstrumentConfiguration::from_json(const json::object& o
 }
 
 /******************************************************************************/
+json::object InstrumentConfiguration::to_json() const
+{
+  json::object o;
+  put_opt(o, "id", id);
+  put_opt(o, "software_reference", software_reference);
+  o["parameters"] = cv_params_to_json(parameters);
+  json::array comps;
+  comps.reserve(components.size());
+  for (const auto& c : components)
+    comps.push_back(c.to_json());
+  o["components"] = std::move(comps);
+  return o;
+}
+
+/******************************************************************************/
 ProcessingMethod ProcessingMethod::from_json(const json::object& o)
 {
   ProcessingMethod m;
@@ -153,6 +222,16 @@ ProcessingMethod ProcessingMethod::from_json(const json::object& o)
   m.software_reference = opt_string(o, "software_reference");
   m.parameters = cv_params_from_json(array_member(o, "parameters"));
   return m;
+}
+
+/******************************************************************************/
+json::object ProcessingMethod::to_json() const
+{
+  json::object o;
+  put_opt(o, "order", order);
+  put_opt(o, "software_reference", software_reference);
+  o["parameters"] = cv_params_to_json(parameters);
+  return o;
 }
 
 /******************************************************************************/
@@ -168,6 +247,19 @@ DataProcessing DataProcessing::from_json(const json::object& o)
 }
 
 /******************************************************************************/
+json::object DataProcessing::to_json() const
+{
+  json::object o;
+  o["id"] = id;
+  json::array ms;
+  ms.reserve(methods.size());
+  for (const auto& m : methods)
+    ms.push_back(m.to_json());
+  o["methods"] = std::move(ms);
+  return o;
+}
+
+/******************************************************************************/
 Sample Sample::from_json(const json::object& o)
 {
   Sample s;
@@ -175,6 +267,16 @@ Sample Sample::from_json(const json::object& o)
   s.name = opt_string(o, "name");
   s.parameters = cv_params_from_json(array_member(o, "parameters"));
   return s;
+}
+
+/******************************************************************************/
+json::object Sample::to_json() const
+{
+  json::object o;
+  o["id"] = id;
+  put_opt(o, "name", name);
+  o["parameters"] = cv_params_to_json(parameters);
+  return o;
 }
 
 /******************************************************************************/
@@ -186,6 +288,17 @@ SourceFile SourceFile::from_json(const json::object& o)
   sf.location = opt_string(o, "location");
   sf.parameters = cv_params_from_json(array_member(o, "parameters"));
   return sf;
+}
+
+/******************************************************************************/
+json::object SourceFile::to_json() const
+{
+  json::object o;
+  o["id"] = id;
+  put_opt(o, "name", name);
+  put_opt(o, "location", location);
+  o["parameters"] = cv_params_to_json(parameters);
+  return o;
 }
 
 /******************************************************************************/
@@ -201,6 +314,19 @@ FileDescription FileDescription::from_json(const json::object& o)
 }
 
 /******************************************************************************/
+json::object FileDescription::to_json() const
+{
+  json::object o;
+  o["contents"] = cv_params_to_json(contents);
+  json::array sfs;
+  sfs.reserve(source_files.size());
+  for (const auto& sf : source_files)
+    sfs.push_back(sf.to_json());
+  o["source_files"] = std::move(sfs);
+  return o;
+}
+
+/******************************************************************************/
 Run Run::from_json(const json::object& o)
 {
   Run r;
@@ -210,6 +336,18 @@ Run Run::from_json(const json::object& o)
   r.default_data_processing_id = opt_string(o, "default_data_processing_id");
   r.default_source_file_id = opt_string(o, "default_source_file_id");
   return r;
+}
+
+/******************************************************************************/
+json::object Run::to_json() const
+{
+  json::object o;
+  put_opt(o, "id", id);
+  put_opt(o, "start_time", start_time);
+  put_opt(o, "default_instrument_id", default_instrument_id);
+  put_opt(o, "default_data_processing_id", default_data_processing_id);
+  put_opt(o, "default_source_file_id", default_source_file_id);
+  return o;
 }
 
 /******************************************************************************/
@@ -246,6 +384,53 @@ RunMetadata::RunMetadata(const json::object& metadata)
   for (const auto& v : array_member(metadata, "sample_list")) {
     if (v.is_object()) samples_.push_back(Sample::from_json(v.as_object()));
   }
+}
+
+/******************************************************************************/
+// WRT-2 — inverse of the parsing ctor: emit only the typed blocks, mirroring
+// the member names the ctor reads.  Absent optionals and empty lists are left
+// out, so RunMetadata(x.to_json()) reproduces the typed fields of x.
+json::object RunMetadata::to_json() const
+{
+  json::object o;
+
+  if (run_.has_value()) o["run"] = run_->to_json();
+  if (file_description_.has_value())
+    o["file_description"] = file_description_->to_json();
+
+  if (!software_list_.empty()) {
+    json::array a;
+    a.reserve(software_list_.size());
+    for (const auto& s : software_list_)
+      a.push_back(s.to_json());
+    o["software_list"] = std::move(a);
+  }
+
+  if (!instrument_configurations_.empty()) {
+    json::array a;
+    a.reserve(instrument_configurations_.size());
+    for (const auto& ic : instrument_configurations_)
+      a.push_back(ic.to_json());
+    o["instrument_configuration_list"] = std::move(a);
+  }
+
+  if (!data_processings_.empty()) {
+    json::array a;
+    a.reserve(data_processings_.size());
+    for (const auto& dp : data_processings_)
+      a.push_back(dp.to_json());
+    o["data_processing_method_list"] = std::move(a);
+  }
+
+  if (!samples_.empty()) {
+    json::array a;
+    a.reserve(samples_.size());
+    for (const auto& s : samples_)
+      a.push_back(s.to_json());
+    o["sample_list"] = std::move(a);
+  }
+
+  return o;
 }
 
 } // namespace MzPeak

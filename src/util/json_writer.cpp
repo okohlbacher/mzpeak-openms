@@ -59,8 +59,15 @@ std::string point_spectra_array_index_json()
 }
 
 /******************************************************************************/
-std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
-                              const std::string& version)
+namespace {
+
+// Build the shared `files` array + `metadata{}` skeleton.  `metadata` is
+// supplied pre-populated with the run-level blocks (empty for the no-metadata
+// overload); `version` is then stamped on, always overriding any pre-existing
+// `version` member.
+std::string index_json(const std::vector<IndexFileEntry>& files,
+                       const std::string& version,
+                       json::object metadata)
 {
   json::object root;
 
@@ -77,11 +84,28 @@ std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
 
   root["files"] = std::move(file_array);
 
-  json::object metadata;
   metadata["version"] = version;
   root["metadata"] = std::move(metadata);
 
   return json::serialize(root);
+}
+
+} // namespace
+
+/******************************************************************************/
+std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
+                              const std::string& version)
+{
+  return index_json(files, version, json::object{});
+}
+
+/******************************************************************************/
+// WRT-2 — merge the serialized run-level metadata blocks into `metadata{}`.
+std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
+                              const std::string& version,
+                              const json::object& run_metadata)
+{
+  return index_json(files, version, run_metadata);
 }
 
 } // namespace MzPeak::Util

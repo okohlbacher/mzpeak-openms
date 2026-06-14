@@ -11,6 +11,8 @@ directory of this repository.
 #include <filesystem>
 #include <vector>
 
+#include "mzpeak/run_metadata.h"
+
 namespace MzPeak {
 
 /**
@@ -37,14 +39,26 @@ struct SpectrumData {
  * present), `spectra_metadata.parquet` (per-spectrum scalar metadata) and
  * `mzpeak_index.json`.  The result is readable by `MzPeak::open(dir)`.
  *
- * Still point-layout only: the chunked layout, numpress and other transforms,
- * and the run-level index metadata blocks are not yet emitted.
+ * Still point-layout only: the chunked layout, numpress and other transforms
+ * are not yet emitted.  Run-level index metadata blocks (`run`,
+ * `software_list`, …) ARE emitted when the @ref RunMetadata overload is used
+ * (WRT-2); this overload emits a `metadata{}` carrying only `version`.
  *
  * @throws on I/O or encoding errors, or if any spectrum's mz and
  *         intensity arrays differ in length.
  */
 void write_spectra_directory(const std::filesystem::path& dir,
                              const std::vector<SpectrumData>& spectra);
+
+/**
+ * WRT-2 — as @ref write_spectra_directory, additionally emitting the run-level
+ * metadata blocks of `metadata` into the index's `metadata{}` object
+ * (alongside `version`).  The emitted blocks round-trip back through
+ * `Index::metadata()`.
+ */
+void write_spectra_directory(const std::filesystem::path& dir,
+                             const std::vector<SpectrumData>& spectra,
+                             const RunMetadata& metadata);
 
 /**
  * Write a point-layout mzPeak file as a single ZIP ARCHIVE (`.mzpeak`).
@@ -63,5 +77,15 @@ void write_spectra_directory(const std::filesystem::path& dir,
  */
 void write_spectra_archive(const std::filesystem::path& zip_path,
                            const std::vector<SpectrumData>& spectra);
+
+/**
+ * WRT-2 — as @ref write_spectra_archive, additionally emitting the run-level
+ * metadata blocks of `metadata` into the index's `metadata{}` object
+ * (alongside `version`).  The emitted blocks round-trip back through
+ * `Index::metadata()`.
+ */
+void write_spectra_archive(const std::filesystem::path& zip_path,
+                           const std::vector<SpectrumData>& spectra,
+                           const RunMetadata& metadata);
 
 } // namespace MzPeak
