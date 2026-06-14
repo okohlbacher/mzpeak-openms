@@ -1,0 +1,19 @@
+{
+  "source_path": "/Users/kohlbach/Claude/mzPeak OpenMS/openms-mzpeak/docs/reader-backlog.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "mzPeak C++ Reader — Backlog",
+  "summary": "Per-item reader implementation backlog (RDR-1..RDR-29) with symptom, root-cause, done-when, validate, and DONE/deferred status across milestones R1-R8.",
+  "scope": ["mzPeak C++ reader", "Parquet/Arrow adapter", "spectrum/peaks tables", "chunked & numpress layouts", "chromatograms", "wavelength/UV spectra", "metadata", "Rust reference parity", "OpenMS integration"],
+  "cross_refs": [
+    "reader-completion-gaps.md",
+    "reader-rust-parity.md",
+    "writer-implementation-research.md",
+    "https://github.com/OpenMS/mzpeak/pull/3",
+    "https://github.com/OpenMS/mzpeak/pull/5"
+  ],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}
