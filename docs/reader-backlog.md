@@ -33,7 +33,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 - **Done when:** row groups with missing stats are **conservatively included** (or resolved via the page index) rather than pruned. **[DONE]** — `query.cpp` range eval keeps stats-less groups.
 - **Validate:** unit test with a predicate over a file/row-group lacking stats; assert all matching rows are returned.
 
-### RDR-26 — Read multiple spectrum tables from one zip archive  ·  P1
+### RDR-26 — Read multiple spectrum tables from one zip archive  ·  P1 — ✅ DONE (281d06d; per-member zip handles)
 - **Symptom:** reading **two** spectrum tables (`spectra_data` + `spectra_peaks`) from a **C++-written** `.mzpeak` zip fails with `IOError: unable to seek`. The directory form works; multi-table **Rust-written** zips (e.g. small.mzpeak: 48/48) also read fine — so it is specific to concurrent `zip_fseek` on the members of a C++-produced archive.
 - **Root cause:** the zip reader streams members with `zip_fseek` (`src/zip.cpp` `ZipFile_::seek`); libzip's stored-member seek does not support several members of one archive open at once (which RDR-3 now does). A first attempt to buffer each member in memory caused test timeouts and was reverted — needs careful re-implementation (lazy/windowed buffer, or a per-member fresh archive handle).
 - **Done when:** `write_spectra_archive` output with both profile + centroid spectra round-trips through `MzPeak::open(zip)`.
@@ -46,7 +46,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R2 — Spectrum coverage (the big win)
 
-### RDR-3 — Resolve spectrum sources by entity_type/data_kind, read the peaks table  ·  P1 · G13+G1+G2 (Bug B, C4)
+### RDR-3 — Resolve spectrum sources by entity_type/data_kind, read the peaks table  ·  P1 · G13+G1+G2 (Bug B, C4) — ✅ DONE (e738eb5; data+peaks tables, absent→empty)
 - **Symptom:** 34/48 centroid spectra in `small.mzpeak` are unserved — 29 return empty m/z, 5 throw `index not in column map` (`include/mzpeak/util/encoding.h:100`).
 - **Root cause:** `Index::spectra()` hard-codes `"spectra_data.parquet"` (`src/index.cpp:97`) and `Spectra::fetch` queries only it (`src/spectra.cpp:31`); the `spectra_peaks.parquet` table is never read; absent rows throw instead of returning empty.
 - **Done when:** spectrum sources are resolved from the index `files[]` by `entity_type==spectrum` + `data_kind` (the `EntityType`/`DataKind` enums already exist); a spectrum's **representation is metadata-driven** — read `MS_1000525_spectrum_representation` (profile `MS:1000128` / centroid `MS:1000127`) and the `MS_1003060_number_of_data_points` / `MS_1003059_number_of_peaks` counts, pulling profile from `spectra_data` and centroid from `spectra_peaks` (a spectrum may have both); absent rows return empty, never throw. **Do not silently merge tables.**
@@ -66,7 +66,7 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R3 — Lossless profile fidelity
 
-### RDR-5 — Reconstruct null-marked m/z from the delta model  ·  P1 (silent correctness) · G3 (Bug C-null)
+### RDR-5 — Reconstruct null-marked m/z from the delta model  ·  P1 (silent correctness) · G3 (Bug C-null) — ✅ DONE (6440e17+2861fa8; matches Rust read_spectrum)
 - **Symptom:** interior null m/z in profile spectra decode to `0.0` — silent corruption not caught by endpoint checks.
 - **Root cause:** `decode_point` pushes `0` for null values (`include/mzpeak/util/encoding.h:130`, `FIXME`).
 - **Done when:** null coordinate values are reconstructed per spec (`signal-data.md#null-marking`): read the per-spectrum `mz_delta_model` (from `spectra_metadata.parquet`), apply the segment-median + WLS regression fill (mirror Rust `fill_nulls_for`, `hupo-mzpeak/src/filter.rs:543`); null **intensity** stays `0`; honor `transform` `MS:1003901`/`MS:1003902`.
@@ -77,14 +77,14 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R4 — Chunked & Numpress layouts
 
-### RDR-6 — Decode the chunked layout  ·  P1 · G4
+### RDR-6 — Decode the chunked layout  ·  P1 · G4 — ✅ DONE (18386f3; basic/delta + null reconstruction)
 - **Symptom:** `small.chunked.mzpeak` is unreadable — `open()` throws `column index out of bounds for column: chunk.mz_chunk_values`.
 - **Root cause (layered):** (1) nested/list column-path resolution fails — `schema->ColumnIndex("chunk.mz_chunk_values")` returns −1 because the list leaf path is longer (`src/util/parquet.cpp:241`); (2) `decode_array` assumes a single column (`encoding.h:76`); (3) `decode_chunked` is unimplemented and uses a bare `throw("not implemented")` (`encoding.h:87`).
 - **Done when:** list/nested column paths map to their Parquet leaf index; `chunk_start`/`chunk_end`/`chunk_values`/`chunk_encoding` are read; `decode_chunked` reconstructs per-chunk values for basic (`MS:1000576`) and delta (`MS:1003089`) encodings and concatenates them.
 - **Validate:** `small.chunked.mzpeak` reads back equal (within tolerance) to `small.mzpeak`/pyarrow ground truth.
 - **Depends on:** RDR-4 (list types). **Writer synergy:** pairs with writer chunked encoder.
 
-### RDR-7 — Decode Numpress chunk transforms  ·  P1 · G5+G18
+### RDR-7 — Decode Numpress chunk transforms  ·  P1 · G5+G18 — ✅ DONE (cb2aa03+18386f3; vendored ms-numpress linear+SLOF)
 - **Symptom:** `small.numpress.mzpeak` unreadable (chunked + numpress).
 - **Root cause:** `chunk_transform` byte columns (`*_numpress_linear_bytes`/`*_numpress_slof_bytes`, `large_list<u8>`) aren't parsed — `buffer_format` parsing falls back to point (`src/schema/buffer_format.cpp:37`); no numpress decode. Also `decode_array` throws on duplicate `array_type` rather than selecting the primary by `buffer_priority` (`encoding.h:74`) — needed when a transformed surrogate column coexists with the values column.
 - **Done when:** numpress linear (`MS:1002312`) and SLOF (`MS:1002314`) decode via vendored **ms-numpress** (OpenMS already ships a copy); primary array selected by `buffer_priority`.
@@ -95,13 +95,13 @@ Traceability: each item notes its gap id (G#) and, where applicable, the origina
 
 ## Milestone R5 — Entity & metadata breadth
 
-### RDR-8 — Chromatogram read API (incl. synthesized TIC/BPC)  ·  P2 · G7
+### RDR-8 — Chromatogram read API (incl. synthesized TIC/BPC)  ·  P2 · G7 — ✅ DONE (91372d0; point layout. Chunked aux = RDR-28)
 - **Symptom:** chromatograms (every test file has them; has_uv: 738 points) are entirely inaccessible.
 - **Root cause:** `Index` exposes only `spectra()` (`include/mzpeak/index.h:39`).
 - **Done when:** `Chromatogram`/`Chromatograms` types + `Index::chromatograms()` read `chromatograms_{metadata,data}.parquet` (point + chunked). Also provide the **synthesized TIC/BPC** the Rust reader builds from per-spectrum metadata when no stored chromatogram exists (`hupo-mzpeak/src/reader.rs:1395-1452,1455-1508`) — this needs the spectrum metadata of RDR-10.
 - **Validate:** TIC/SIC time+intensity match pyarrow ground truth.
 
-### RDR-9 — Wavelength/UV spectra read API (+ correct naming)  ·  P2 · G8+G17
+### RDR-9 — Wavelength/UV spectra read API (+ correct naming)  ·  P2 · G8+G17 — ✅ DONE (3efb6e4; point layout. Chunked aux = RDR-28)
 - **Symptom:** `wavelength_spectra_*` (has_uv: 49,920 points) inaccessible.
 - **Root cause:** no API; **and** the entity→prefix/key derivation produces a space, `"wavelength spectrum_index"` / `"wavelength spectrum_array_index"`, instead of underscores `wavelength_spectrum_*` (`src/schema/array_index.cpp:22`; cf. `hupo-mzpeak/src/constants.rs:9`).
 - **Done when:** wavelength-spectra access (mirrors spectra, no precursor/selected_ion facets) with correct underscore naming for prefix, index column, and `*_array_index` KV key.
