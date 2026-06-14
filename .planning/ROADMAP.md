@@ -31,7 +31,7 @@ mzML→mzpeak→mzML round-trip through OpenMS (Phase 5).
 - Phase 3b is an *optional, propose-to-OpenMS* phase off the critical path.
 
 - [ ] **Phase 0: Build & Port Prerequisites** - Build `libOpenMS` locally; port reused cores to C++20
-- [ ] **Phase 1: Reader Lossless-Map Prerequisites** - Close RDR-10b/10c/9b reader metadata gaps
+- [x] **Phase 1: Reader Lossless-Map Prerequisites** - Close RDR-10b/10c/9b reader metadata gaps (COMPLETE 2026-06-14)
 - [ ] **Phase 2: MzPeakFile::load + Registration** - Whole-experiment load, converter, FileTypes/FileHandler wiring, test
 - [ ] **Phase 3: MzPeakFile::store** - MSExperiment → mzPeak write path with metadata emit
 - [ ] **Phase 3b: Shared CV Helper (OPTIONAL, propose to OpenMS)** - Refactor `handleCVParam_` into a shared `applyCVParam`
@@ -73,9 +73,9 @@ needs to map a lossless experiment.
      (RDR-9b).
 **Plans**: 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — RDR-10b: spectrum_type / observed-mz / data_processing_ref / per-spectrum parameters + new test scaffold
-- [ ] 01-02-PLAN.md — RDR-10c: precursor / selected-ion / isolation-window / activation + scan params/windows (IM deferred stub)
-- [ ] 01-03-PLAN.md — RDR-9b: typed auxiliary_arrays accessor (structural) + full phase gate (meson test + e2e)
+- [x] 01-01-PLAN.md — RDR-10b: spectrum_type / observed-mz / data_processing_ref / per-spectrum parameters + new test scaffold
+- [x] 01-02-PLAN.md — RDR-10c: precursor / selected-ion / isolation-window / activation + scan params/windows (IM deferred stub)
+- [x] 01-03-PLAN.md — RDR-9b: typed auxiliary_arrays accessor (structural) + full phase gate (meson test + e2e)
 **Notes**: RDR-10c is substantially unblocked — small.mzpeak carries 34 MS2
 spectra with full precursor/isolation/activation/selected-ion data (research
 finding); only ion-mobility decode is deferred (null in all fixtures). RDR-9b is
@@ -171,7 +171,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Build & Port Prerequisites | 0/TBD | Not started | - |
-| 1. Reader Lossless-Map Prerequisites | 2/3 | Executing | - |
+| 1. Reader Lossless-Map Prerequisites | 3/3 | COMPLETE | 2026-06-14 |
 | 2. MzPeakFile::load + Registration | 0/TBD | Not started | - |
 | 3. MzPeakFile::store | 0/TBD | Not started | - |
 | 3b. Shared CV Helper (optional) | 0/TBD | Not started | - |
@@ -184,7 +184,11 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 |------|-------------|--------|---------|
 | 01-01 | RDR-10b: spectrum_type / observed-mz / data_processing_ref / parameters | DONE | 4e00a45, a006264, 8abd3b7, 69b2aeb |
 | 01-02 | RDR-10c: precursor / isolation-window / activation / scan params+windows | DONE | c258016, 2e64711, 6200457, 10641ab |
-| 01-03 | RDR-9b: auxiliary_arrays accessor + phase gate | Planned | - |
+| 01-03 | RDR-9b: auxiliary_arrays accessor + phase gate | DONE | 30c546f, 01be7cf, c315282 |
+
+Phase 1 complete: 30/30 tests green; e2e PASS; clang-format all-clean.
+RDR-9b structural decode (schema parse + empty-list + count-consistency assert)
+validated; raw-byte VALUE decode is fixture-gated (deferred to Phase 2 fixture).
 
 ---
-*Last updated: 2026-06-14 after Plan 01-02 completion*
+*Last updated: 2026-06-14 after Phase 1 completion (Plan 01-03)*

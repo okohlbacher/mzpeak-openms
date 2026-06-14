@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 Plan 01-02 complete (RDR-10c precursor/scan join + scan windows)
-last_updated: "2026-06-14T18:02:00Z"
-last_activity: 2026-06-14 -- Phase 1 Plan 01-02 executed (3 tasks, 30/30 green, 18 new test cases)
+stopped_at: Phase 1 COMPLETE (all 3 plans done; RDR-9b auxiliary_arrays accessor)
+last_updated: "2026-06-14T18:45:00Z"
+last_activity: 2026-06-14 -- Phase 1 Plan 01-03 executed (3 tasks, 30/30 green, 2 new RDR-9b structural tests, phase gate passed)
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -22,36 +22,37 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 
 **Core value:** OpenMS can load/store `.mzpeak` into/from `MSExperiment`, and
 mzML → mzpeak → mzML through OpenMS yields an equivalent `MSExperiment`.
-**Current focus:** Phase 1 — Reader Lossless-Map Prerequisites
+**Current focus:** Phase 1 COMPLETE — next: Phase 2 (OpenMS integration)
 
 ## Current Position
 
-Phase: 1 (Reader Lossless-Map Prerequisites) — EXECUTING
-Plan: 3 of 3
-Status: Plan 01-02 complete; next: 01-03 (RDR-9b auxiliary_arrays accessor)
-Last activity: 2026-06-14 -- Plan 01-02 executed (precursor/isolation-window/
-activation/selected-ion/scan join + scan_windows; 18 new test cases; 30/30 green)
+Phase: 1 (Reader Lossless-Map Prerequisites) — COMPLETE
+Plan: 3 of 3 (all plans done)
+Status: Phase 1 complete; ready for Phase 2 (MzPeakFile handler / RDR-19)
+Last activity: 2026-06-14 -- Plan 01-03 executed (RDR-9b auxiliary_arrays
+accessor; structural decode validated; raw-byte VALUE decode fixture-gated;
+phase gate: 30/30 green, e2e PASS, clang-format all-clean)
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100% (Phase 1)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
-- Average duration: ~53 min
-- Total execution time: 1.7 hours
+- Total plans completed: 3
+- Average duration: ~43 min
+- Total execution time: ~2.0 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 (in progress) | 2 | ~105 min | ~53 min |
+| 1 (COMPLETE) | 3 | ~130 min | ~43 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 50min (01-01), 55min (01-02)
-- Trend: stable ~53 min/plan
+- Last 5 plans: 50min (01-01), 55min (01-02), 25min (01-03)
+- Trend: stable ~43 min/plan (01-03 was small — struct + structural decode only)
 
 *Updated after each plan completion*
 
@@ -97,10 +98,29 @@ decisions treated as LOCKED for this milestone). Most relevant to current work:
 - DEC-01-02-clang-format-meson-excluded: meson.build is not C++; clang-format
   incorrectly reformatted it (URL -> goto label); excluded from style gate.
 
+### Decisions (plan 01-03)
+
+- DEC-01-03-structural-vs-gated-split: per CONTEXT.md "do not ship unvalidated
+  decode paths" and cross-AI review (M1), aux decode split: Part A (structural
+  schema parse + empty-list + count assert) is VALIDATED; Part B (raw-byte VALUE
+  decode) is FIXTURE-GATED, marked UNVERIFIED, and guarded by values_decoded.
+
+- DEC-01-03-data-type-opaque: data_type treated as opaque lowercase Arrow dtype
+  string (Pitfall 5) — never routed through any PSI enum; switch on string
+  literals "float32"/"int32"/"float64" in Part B.
+
+- DEC-01-03-memcpy-reinterpret: byte reinterpretation via std::memcpy into a
+  local array (not direct pointer cast) for strict-aliasing safety; byte-length
+  guard ensures alignment before any memcpy.
+
 ### Pending Todos
 
-- Plan 01-03: RDR-9b (typed auxiliary_arrays accessor; structural validation
-  via schema parse + empty-list round-trip; full phase gate).
+- Phase 2: MzPeakFile OpenMS integration handler (RDR-19): MzPeakFile::load,
+  MSExperiment mapping, FileTypes/FileHandler registration, streaming transform,
+  cross-validation mzML → mzpeak → mzML.
+- REQ-openms-build: build libOpenMS locally (gates all RDR-19 work).
+- REQ-cpp20-port: port null_fill/numpress wrapper from C++23 to C++20.
+- RDR-9b VALUE decode: deferred pending a fixture with populated aux bytes.
 
 ### Blockers/Concerns
 
@@ -133,10 +153,12 @@ Carried forward to a future milestone (see PROJECT.md Out of Scope):
 | Reader | RDR-4b (large_list/string types) | Deferred (no benefit) | bootstrap |
 | Integration | M1 shared `applyCVParam` (Phase 3b) | Optional | bootstrap |
 | Reader | RDR-10c ion-mobility | Deferred (null in all fixtures) | 01-01 |
+| Reader | RDR-9b VALUE decode | Deferred (no aux fixture) | 01-03 |
 
 ## Session Continuity
 
 Last session: 2026-06-14
-Stopped at: Phase 1 Plan 01-02 complete (RDR-10c precursor/scan join;
-18 test cases including 34 MS2 / 14 MS1 sweep; 30/30 green).
+Stopped at: Phase 1 COMPLETE. All 3 plans executed (01-01 RDR-10b scalar
+metadata, 01-02 RDR-10c precursor/scan join, 01-03 RDR-9b auxiliary arrays).
+30/30 tests green. Phase gate: clang-format all-clean, e2e PASS.
 Resume file: None

@@ -70,7 +70,7 @@ prevent re-planning.
 
 #### RDR-9b — Typed `auxiliary_arrays` accessor
 - traces: REQ-reader-prereqs-10b10c9b (9b)
-- status: OPEN · phase: 1
+- status: DONE (Plan 01-03, 2026-06-14) · phase: 1
 - A typed accessor for `auxiliary_arrays`, mapping to OpenMS `FloatDataArrays`
   (named + CV-annotated).
 - acceptance: auxiliary arrays read back as named typed arrays; validated
@@ -198,8 +198,8 @@ prevent re-planning.
 | BUILD-01 | Phase 0 | Pending |
 | PORT-01 | Phase 0 | Pending |
 | RDR-10b | Phase 1 | DONE (Plan 01-01, 2026-06-14) |
-| RDR-10c | Phase 1 | Pending |
-| RDR-9b | Phase 1 | Pending |
+| RDR-10c | Phase 1 | DONE (Plan 01-02, 2026-06-14) |
+| RDR-9b | Phase 1 | DONE (Plan 01-03, 2026-06-14) |
 | INT-01 | Phase 2 | Pending |
 | INT-02 | Phase 2 | Pending |
 | INT-03 | Phase 2 | Pending |
