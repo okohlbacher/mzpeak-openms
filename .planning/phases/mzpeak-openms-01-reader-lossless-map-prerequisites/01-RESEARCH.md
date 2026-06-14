@@ -452,23 +452,21 @@ assert prec.field("isolation_window").field("MS_1000827_isolation_window_target_
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three questions are resolved below with rationale; the plans (01-01..01-03) implement these resolutions.
 
 1. **How to surface `PrecursorInfo` to callers — on `SpectrumMetadata` or via a separate method on `Spectra`/`Spectrum`?**
-   - What we know: `SpectrumMetadata` is a plain struct passed by value; adding a nested `optional<PrecursorInfo>` member is consistent with how `optional<int> ms_level` works.
-   - What's unclear: if a spectrum can have multiple precursors (DDA/DIA multiple precursor rows), `optional<PrecursorInfo>` would drop them. The `selected_ion` table has `precursor_index` suggesting multiple selected ions per precursor.
-   - Recommendation: model as `optional<PrecursorInfo>` with `PrecursorInfo::selected_ions` as `std::vector<SelectedIonInfo>` to handle multiple ions. For multiple precursors (rare in bundled data), use `std::vector<PrecursorInfo>` on `SpectrumMetadata`. Planner decides.
+   - **RESOLVED: `std::vector<PrecursorInfo>` on `SpectrumMetadata`** (with `PrecursorInfo::selected_ions` as `std::vector<SelectedIonInfo>`).
+   - Rationale: DIA-ready — a `vector` (not `optional`) cleanly carries the multi-precursor case and maps directly to OpenMS `MSSpectrum`'s `vector<Precursor>` in Phase 2. Bundled data has exactly one precursor per MS2 spectrum, so the vector has size 1 there, but the contract does not lose multi-precursor data. Empty for MS1 spectra. Implemented in plan 01-02 (Task 1 defines the struct, Task 2 fills it).
 
 2. **Should `AuxiliaryArray::values` be decoded immediately (in `read_spectra_metadata`) or lazily (on first access)?**
-   - What we know: no bundled fixture exercises this path. Eager decode would add dead code in current tests; lazy would complicate the API.
-   - Recommendation: decode eagerly during `read_spectra_metadata` (since number_of_auxiliary_arrays==0 in all current fixtures, the loop body never runs; cost is zero). Keeps the API simple.
+   - **RESOLVED: eager decode in `read_spectra_metadata`.**
+   - Rationale: consistent with how the whole table is read in one pass — `read_spectra_metadata` already materializes every per-spectrum field during the single `ReadTable` pass, so decoding aux values there keeps the API simple and avoids a lazy-access code path. Since `number_of_auxiliary_arrays == 0` in all bundled fixtures the loop body never runs (cost zero), but the eager path is in place for a populated fixture. Implemented in plan 01-03 (Task 2).
 
 3. **`scan` struct fields for Phase 1 scope?**
-   - What we know: `scan.parameters` (scan-level CV terms like `MS:1000800` mass resolving power) and `scan.scan_windows` are populated in small.mzpeak. These are useful for Phase 2 (they map to `InstrumentSettings` in OpenMS).
-   - What's unclear: CONTEXT.md does not mention scan-level CV terms as a Phase 1 target (only spectrum, precursor, aux arrays).
-   - Recommendation: defer scan-level CV params to Phase 2. RDR-10b targets only the `spectrum` struct. Planner should confirm.
-
----
+   - **RESOLVED (REVERSED from the earlier "defer to Phase 2" recommendation — deliberately): scan `parameters` + `scan_windows` ARE included in Phase 1 (RDR-10b/10c, plan 01-02 Task 3).**
+   - Rationale for the reversal: (a) scan `parameters` (e.g. `MS:1000800` mass resolving power) and `scan_windows` are **populated in small.mzpeak**, so they are ground-truth-testable now against pyarrow; (b) they are **needed by Phase 2's OpenMS `InstrumentSettings` (scan-window) mapping** — deferring them would re-open this read path one phase later for no gain; (c) reading them is **mechanically identical to the precursor / CvParam decode path already built in plans 01-01/01-02** (same `read_cv_params_from_list` helper + large-list offset idiom), so the marginal cost is ~zero. Including them now keeps the reader extension self-contained and avoids a second editing pass over `read_spectra_metadata`. The IM fields on the scan struct remain deferred (NULL in all fixtures).
 
 ## Environment Availability
 

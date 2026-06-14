@@ -63,15 +63,25 @@ needs to map a lossless experiment.
   1. Per-spectrum `parameters` (flat CvParam list), `spectrum_type`, observed-mz
      range, and `data_processing_ref` are readable and match the Rust reader on a
      fixture (RDR-10b).
-  2. Precursor / selected-ion / isolation-window / activation / ion-mobility
-     columns read correctly from an MSn+IM fixture, matching the Rust reader
-     within tolerance (RDR-10c).
+  2. Precursor / selected-ion / isolation-window / activation columns read
+     correctly from small.mzpeak's MS2 spectra, matching pyarrow ground truth /
+     the Rust oracle within tolerance (RDR-10c); ion-mobility decode is a
+     documented stub (null in every bundled fixture).
   3. `auxiliary_arrays` are accessible as named, typed arrays (→ OpenMS
-     FloatDataArrays), spot-checked vs pyarrow / Rust reader (RDR-9b).
-**Plans**: TBD
-**Notes**: RDR-10c requires sourcing/creating an MSn+IM fixture before its plan
-can validate. If a v1 converter must ship without these, it maps peaks + core
-scalars + run metadata only (documented as acceptable for a first PR).
+     FloatDataArrays), structurally validated (empty-list round-trip + schema
+     parse) vs pyarrow; value-level validation deferred to a populated fixture
+     (RDR-9b).
+**Plans**: 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — RDR-10b: spectrum_type / observed-mz / data_processing_ref / per-spectrum parameters + new test scaffold
+- [ ] 01-02-PLAN.md — RDR-10c: precursor / selected-ion / isolation-window / activation + scan params/windows (IM deferred stub)
+- [ ] 01-03-PLAN.md — RDR-9b: typed auxiliary_arrays accessor (structural) + full phase gate (meson test + e2e)
+**Notes**: RDR-10c is substantially unblocked — small.mzpeak carries 34 MS2
+spectra with full precursor/isolation/activation/selected-ion data (research
+finding); only ion-mobility decode is deferred (null in all fixtures). RDR-9b is
+schema-observable but data-empty in all bundled fixtures, so validated
+structurally. Pure standalone mzpeak-lib work on branch `writer_test` — no OpenMS
+code, so Phase 1 is independently executable ahead of Phase 0.
 
 ### Phase 2: MzPeakFile::load + Registration
 **Goal**: OpenMS can load a `.mzpeak` archive into a populated `MSExperiment`
@@ -161,7 +171,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Build & Port Prerequisites | 0/TBD | Not started | - |
-| 1. Reader Lossless-Map Prerequisites | 0/TBD | Not started | - |
+| 1. Reader Lossless-Map Prerequisites | 0/3 | Planned | - |
 | 2. MzPeakFile::load + Registration | 0/TBD | Not started | - |
 | 3. MzPeakFile::store | 0/TBD | Not started | - |
 | 3b. Shared CV Helper (optional) | 0/TBD | Not started | - |
@@ -169,4 +179,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 | 5. Cross-Validation | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-06-14 after ingest-driven project bootstrap*
+*Last updated: 2026-06-14 after Phase 1 planning (3 plans, waves 1-3)*

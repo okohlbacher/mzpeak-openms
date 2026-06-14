@@ -39,6 +39,14 @@ prevent re-planning.
 
 ### RDR — Reader prerequisites (lossless-map gaps)
 
+> **DEC-phase1-pyarrow-oracle (orchestrator decision, 2026-06-14):** For Phase 1,
+> the new reader metadata fields (RDR-10b/10c/9b) are validated against **pyarrow
+> ground truth** on bundled fixtures — the authoritative source-of-truth read
+> directly from the actual Parquet. Full **Rust-oracle parity** for these fields is
+> **deferred to Phase 5 (INT-07 Cross-Validation)**, the project's defined
+> cross-validation phase (mzML→mzpeak→mzML, e2e matrix T2/T4/T5). The Phase 1
+> plans' pyarrow assertions fully satisfy the revised acceptance criteria above.
+
 #### RDR-10b — Per-spectrum CvParams / spectrum_type / observed-mz / data_processing_ref
 - traces: REQ-reader-prereqs-10b10c9b (10b)
 - status: OPEN · phase: 1
@@ -46,23 +54,30 @@ prevent re-planning.
   (flat `CvParam` list), `spectrum_type`, observed-mz range, and
   `data_processing_ref`.
 - acceptance: per-spectrum CvParams + spectrum_type + observed-mz + dp-ref
-  surfaced for a fixture and spot-checked vs the Rust reader.
+  surfaced for a fixture and validated against pyarrow ground truth on bundled
+  fixtures; Rust-oracle parity covered by Phase 5 cross-validation (DEC-phase1-pyarrow-oracle).
 
 #### RDR-10c — Precursor / isolation / activation / ion-mobility columns
 - traces: REQ-reader-prereqs-10b10c9b (10c)
 - status: OPEN · phase: 1
 - Precursor / selected-ion / isolation-window / activation / ion-mobility columns
   exposed, mirroring the Rust reader fields. Requires an MSn+IM fixture.
-- acceptance: an MSn+IM fixture reads precursor/isolation/activation/IM fields
-  matching the Rust reader within tolerance.
+- acceptance (revised for Phase 1 scope): the populated precursor / isolation /
+  activation / selected-ion fields in bundled fixtures (small.mzpeak's 34 MS2
+  spectra) are validated against pyarrow ground truth now; Rust-oracle parity for
+  these fields is covered by Phase 5 cross-validation (DEC-phase1-pyarrow-oracle).
+  The IM subcase still requires an MSn+IM fixture and is deferred within Phase 1.
 
 #### RDR-9b — Typed `auxiliary_arrays` accessor
 - traces: REQ-reader-prereqs-10b10c9b (9b)
 - status: OPEN · phase: 1
 - A typed accessor for `auxiliary_arrays`, mapping to OpenMS `FloatDataArrays`
   (named + CV-annotated).
-- acceptance: auxiliary arrays read back as named typed arrays; spot-checked vs
-  pyarrow / Rust reader.
+- acceptance: auxiliary arrays read back as named typed arrays; validated
+  structurally (schema + empty-list round-trip) against pyarrow ground truth on
+  bundled fixtures (number_of_auxiliary_arrays==0 in all bundled data, so value-
+  level validation awaits a populated fixture); Rust-oracle parity covered by
+  Phase 5 cross-validation (DEC-phase1-pyarrow-oracle).
 
 ### INT — RDR-19 OpenMS integration (decomposed from REQ-rdr19-openms-integration)
 
