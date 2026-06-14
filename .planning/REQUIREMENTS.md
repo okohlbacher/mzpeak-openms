@@ -49,7 +49,7 @@ prevent re-planning.
 
 #### RDR-10b — Per-spectrum CvParams / spectrum_type / observed-mz / data_processing_ref
 - traces: REQ-reader-prereqs-10b10c9b (10b)
-- status: OPEN · phase: 1
+- status: DONE · phase: 1 · plan: 01-01 · date: 2026-06-14
 - `read_spectra_metadata` + `SpectrumMetadata` expose per-spectrum `parameters`
   (flat `CvParam` list), `spectrum_type`, observed-mz range, and
   `data_processing_ref`.
@@ -197,7 +197,7 @@ prevent re-planning.
 |-------------|-------|--------|
 | BUILD-01 | Phase 0 | Pending |
 | PORT-01 | Phase 0 | Pending |
-| RDR-10b | Phase 1 | Pending |
+| RDR-10b | Phase 1 | DONE (Plan 01-01, 2026-06-14) |
 | RDR-10c | Phase 1 | Pending |
 | RDR-9b | Phase 1 | Pending |
 | INT-01 | Phase 2 | Pending |
