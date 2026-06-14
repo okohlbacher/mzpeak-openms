@@ -31,8 +31,12 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata);
  * struct fields) from a spectra_metadata Parquet table, keyed by
  * `spectrum.index`.
  *
- * Nested facets (scan / precursor / selected_ion) are not read.  Nullable
- * source values map to absent std::optional fields.
+ * RDR-10b: exposes spectrum_type (MS:1000559), lowest/highest observed m/z,
+ * data_processing_ref, and the per-spectrum parameters CvParam list in
+ * addition to the original scalar fields.  Nested facets (scan / precursor /
+ * selected_ion) are read by plans 01-02/01-03.  Nullable source values map
+ * to absent std::optional fields or empty strings/vectors as documented on
+ * SpectrumMetadata.
  */
 std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata);
 

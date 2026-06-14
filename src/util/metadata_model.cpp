@@ -199,6 +199,16 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
       m.total_ion_current =
           opt_float(spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
 
+      // RDR-10b scalar fields.
+      m.spectrum_type =
+          get_string(spectrum, "MS_1000559_spectrum_type", r);
+      m.lowest_observed_mz = opt_double(
+          spectrum, "MS_1000528_lowest_observed_mz_unit_MS_1000040", r);
+      m.highest_observed_mz = opt_double(
+          spectrum, "MS_1000527_highest_observed_mz_unit_MS_1000040", r);
+      m.data_processing_ref =
+          get_string(spectrum, "data_processing_ref", r);
+
       out[m.index] = std::move(m);
     }
   }
