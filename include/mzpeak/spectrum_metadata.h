@@ -118,6 +118,83 @@ struct ScanWindow {
 };
 
 /**
+ * One auxiliary data array carried by a spectrum (e.g. additional ion-mobility
+ * or intensity channels beyond the primary m/z + intensity pair).
+ *
+ * The Arrow schema column is `spectrum.auxiliary_arrays`:
+ * large_list<struct{data:large_list<uint8>, name:struct<CvParam>,
+ *   data_type:string, compression:string, unit:string,
+ *   parameters:large_list<CvParam>, data_processing_ref:large_string}>.
+ *
+ * The field `data_type` is an opaque, lowercase Arrow dtype string
+ * (e.g. "float32") — it is NOT routed through any PSI enum (Pitfall 5).
+ *
+ * @note DECODED vs UNDECODED contract — callers MUST check `values_decoded`:
+ *   - `values_decoded == true  && values.empty()` — the source `data` buffer
+ *     was successfully decoded and contains zero elements (a legitimately empty
+ *     auxiliary array).
+ *   - `values_decoded == false` — the raw bytes were present but the VALUE
+ *     decode is a fixture-gated follow-up (UNVERIFIED against any bundled
+ *     fixture) or the byte-length guard rejected a misaligned buffer.  Phase 2
+ *     MUST NOT treat an empty `values` + `values_decoded == false` as "decoded
+ *     empty"; it means "not decoded".
+ *
+ * (RDR-9b)
+ */
+struct AuxiliaryArray {
+  /// CV term identifying the array (a lone CvParam from the `name` struct
+  /// child; decoded via `extract_one_cv_param`).
+  CvParam name;
+
+  /// Arrow dtype name, lowercase (e.g. "float32", "float64", "int32").
+  /// Treated as an opaque string — NOT routed through any PSI enum (Pitfall 5).
+  std::string data_type;
+
+  /// Compression scheme name (e.g. "none").
+  std::string compression;
+
+  /// Unit name for the decoded values (empty if absent).
+  std::string unit;
+
+  /// Additional CV parameters on this auxiliary array entry.
+  std::vector<CvParam> parameters;
+
+  /// Reference to the data-processing chain applied to this array.
+  /// Empty when null in the source.
+  std::string data_processing_ref;
+
+  /**
+   * Decoded values (float).  The decode path converts each element to float
+   * regardless of the stored data_type.
+   *
+   * Empty when (a) the source `data` buffer has zero bytes (decoded-empty,
+   * `values_decoded` is set to `true`), (b) the byte-length guard rejected
+   * a misaligned buffer (`values_decoded` is `false`), or (c) the raw-byte
+   * VALUE decode is a fixture-gated follow-up and was not performed
+   * (`values_decoded` is `false`).
+   *
+   * @note Callers MUST check `values_decoded` to distinguish (a) from (b)/(c).
+   */
+  std::vector<float> values;
+
+  /**
+   * Decoded-vs-undecoded discriminator.
+   *
+   * `true` when the raw `data` buffer was actually decoded into `values`
+   * (including the legitimate zero-element case: the source buffer was empty
+   * and `values.clear()` was called, marking the decode as complete).
+   *
+   * `false` when the bytes were present but the VALUE decode was not performed
+   * (fixture-gated follow-up — no bundled fixture carries aux bytes, so this
+   * path is UNVERIFIED) or the byte-length guard rejected a misaligned buffer.
+   *
+   * Phase 2 MUST NOT interpret `values.empty() && !values_decoded` as a
+   * successfully decoded empty array.
+   */
+  bool values_decoded = false;
+};
+
+/**
  * Per-spectrum descriptive (scalar) metadata, read from the top-level
  * `spectrum` struct of the spectra_metadata Parquet table.
  *
@@ -192,6 +269,21 @@ struct SpectrumMetadata final {
   /// Empty when the source list is null or has zero elements.
   /// @note An empty vector means "decoded successfully, zero params".
   std::vector<CvParam> parameters;
+
+  // ---- RDR-9b additions ---------------------------------------------------
+
+  /**
+   * Auxiliary data arrays carried by this spectrum (e.g. ion-mobility drift
+   * or additional intensity channels).
+   *
+   * Empty in ALL bundled fixtures (number_of_auxiliary_arrays == 0 in every
+   * row of every bundled file).  Schema parsing and empty-list handling are
+   * validated structurally against those fixtures.  The raw-byte VALUE decode
+   * (Part B of the decode path) is a FIXTURE-GATED follow-up: it is NOT
+   * shipped as a validated path — see `values_decoded` on `AuxiliaryArray`.
+   * (RDR-9b)
+   */
+  std::vector<AuxiliaryArray> auxiliary_arrays;
 
   // ---- RDR-10c additions --------------------------------------------------
 
