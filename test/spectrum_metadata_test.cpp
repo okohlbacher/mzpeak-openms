@@ -444,6 +444,56 @@ BOOST_AUTO_TEST_CASE(scan_windows_present_on_ms1_spectrum)
   BOOST_TEST(sw.lower_limit.value() < sw.upper_limit.value());
 }
 
+// ============================================================================
+// RDR-9b: auxiliary_arrays structural tests (validated).
+//
+// Every bundled fixture has number_of_auxiliary_arrays == 0; the auxiliary_arrays
+// list is empty for every spectrum.  These tests validate:
+//   1. auxiliary_arrays reads as an empty list on all spectra (no crash).
+//   2. number_of_auxiliary_arrays == auxiliary_arrays.size() is asserted by the
+//      reader (the reader would have thrown ParquetError on mismatch — if we
+//      reach here, the assert held for all rows).
+//
+// NOTE: VALUE-level assertions (decoded float values) are DEFERRED until a
+// fixture with populated aux bytes is available.  The `values_decoded` field is
+// the decoded-vs-undecoded discriminator; `values_decoded==false` on all entries
+// here is expected because there are no aux bytes to decode in any bundled
+// fixture (see AuxiliaryArray::values_decoded Doxygen for the API contract).
+// ============================================================================
+
+/******************************************************************************/
+// RDR-9b: auxiliary_arrays is an empty list on all spectra in small.mzpeak
+// (number_of_auxiliary_arrays == 0 in every row; structural validate).
+BOOST_AUTO_TEST_CASE(auxiliary_arrays_empty_all_spectra_small)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+  // If the count-consistency assert fires, read_spectra_metadata throws
+  // ParquetError and the test fails here — no explicit check needed for it.
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    // auxiliary_arrays must be empty; reading it must not throw or crash.
+    BOOST_TEST(s.metadata().auxiliary_arrays.empty());
+  }
+}
+
+/******************************************************************************/
+// RDR-9b: auxiliary_arrays is an empty list on has_uv.mzpeak too (cross-fixture
+// structural check; number_of_auxiliary_arrays == 0 in that file as well).
+BOOST_AUTO_TEST_CASE(auxiliary_arrays_empty_has_uv)
+{
+  auto index = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto spectra = index.spectra();
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    BOOST_TEST(s.metadata().auxiliary_arrays.empty());
+  }
+}
+
+// ============================================================================
+// End RDR-9b.
+// ============================================================================
+
 /******************************************************************************/
 // Scan source_index VALUE join: scan data lands on the correct spectrum.
 // Verify for spectrum index 0 (filter_string from scan row 0) AND spectrum
