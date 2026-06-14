@@ -18,6 +18,102 @@ directory of this repository.
 namespace MzPeak {
 
 /**
+ * Isolation window for a precursor, stored as the target m/z and half-width
+ * offsets that the file carries.  The conversion from offsets to absolute
+ * lower/upper bounds is Phase 2's responsibility (CONTEXT.md); this struct
+ * preserves the file-native representation.
+ */
+struct IsolationWindow {
+  /// `MS_1000827_isolation_window_target_mz` — centre of the window (float).
+  std::optional<float> target_mz;
+
+  /// `MS_1000828_isolation_window_lower_offset` — lower half-width (float).
+  std::optional<float> lower_offset;
+
+  /// `MS_1000829_isolation_window_upper_offset` — upper half-width (float).
+  std::optional<float> upper_offset;
+
+  /// Additional CV parameters on the isolation_window struct.
+  /// Empty in bundled fixtures; reserved for extended metadata.
+  std::vector<CvParam> parameters;
+};
+
+/**
+ * One selected ion within a precursor entry.
+ *
+ * Ion-mobility fields (`ion_mobility_value`, `ion_mobility_type`) are present
+ * in the schema but NULL in every bundled fixture.  They are retained as
+ * typed members to preserve the API shape; their decode path is DEFERRED until
+ * a fixture with populated IM values is available (see RDR-10c ion-mobility in
+ * STATE.md Deferred Items).  Callers must treat them as always-nullopt for now.
+ */
+struct SelectedIonInfo {
+  /// `MS_1000744_selected_ion_mz` — selected-ion m/z (double).
+  std::optional<double> selected_ion_mz;
+
+  /// `MS_1000041_charge_state` — charge state (int32; NULL in bundled data).
+  std::optional<int> charge_state;
+
+  /// `MS_1000042_intensity` — selected-ion intensity (float).
+  std::optional<float> intensity;
+
+  /// Ion mobility value (double) — NULL in ALL bundled fixtures.
+  /// @note DEFERRED: decode path awaits an IM fixture; always nullopt today.
+  std::optional<double> ion_mobility_value;
+
+  /// Ion mobility type (string) — NULL in ALL bundled fixtures.
+  /// @note DEFERRED: decode path awaits an IM fixture; always nullopt today.
+  std::optional<std::string> ion_mobility_type;
+
+  /// Additional CV parameters on this selected-ion entry.
+  std::vector<CvParam> parameters;
+};
+
+/**
+ * One precursor entry for a spectrum.
+ *
+ * `precursor_index` is the WITHIN-SPECTRUM key used to attach selected ions
+ * to this precursor by (source_index, precursor_index) matching.  It is NOT
+ * a global index and NOT an array position.  This makes the attach correct
+ * under DIA / multi-precursor and multi-ion-per-precursor scenarios (H2 fix).
+ *
+ * For DIA / multi-precursor spectra, `SpectrumMetadata::precursors` may hold
+ * more than one `PrecursorInfo` entry.
+ */
+struct PrecursorInfo {
+  /// Within-spectrum key for (source_index, precursor_index) ion attach (H2).
+  /// Absent when the source row carries a NULL precursor_index.
+  std::optional<uint64_t> precursor_index;
+
+  /// Native precursor identifier string.
+  std::string precursor_id;
+
+  /// Isolation window (target m/z and half-width offsets).
+  IsolationWindow isolation_window;
+
+  /// Activation CV parameters (e.g. MS:1000133 CID, MS:1000045 collision energy).
+  std::vector<CvParam> activation_parameters;
+
+  /// Selected ions belonging to this precursor, attached by (source_index,
+  /// precursor_index) matching.  For DDA/DIA, multiple ions are valid.
+  std::vector<SelectedIonInfo> selected_ions;
+};
+
+/**
+ * One scan window (m/z range) within a scan's scan_windows list.
+ */
+struct ScanWindow {
+  /// `MS_1000501_scan_window_lower_limit` — lower m/z bound (double).
+  std::optional<double> lower_limit;
+
+  /// `MS_1000500_scan_window_upper_limit` — upper m/z bound (double).
+  std::optional<double> upper_limit;
+
+  /// Additional CV parameters on this scan window.
+  std::vector<CvParam> parameters;
+};
+
+/**
  * Per-spectrum descriptive (scalar) metadata, read from the top-level
  * `spectrum` struct of the spectra_metadata Parquet table.
  *
@@ -92,6 +188,24 @@ struct SpectrumMetadata final {
   /// Empty when the source list is null or has zero elements.
   /// @note An empty vector means "decoded successfully, zero params".
   std::vector<CvParam> parameters;
+
+  // ---- RDR-10c additions --------------------------------------------------
+
+  /// Precursor list (empty for MS1 spectra; one entry per precursor for MS2;
+  /// may hold >1 entry for DIA / multi-precursor spectra — DIA-ready).
+  /// Each entry is joined by source_index VALUE (H1) and its selected ions are
+  /// attached by (source_index, precursor_index) matching (H2).
+  std::vector<PrecursorInfo> precursors;
+
+  /// Scan-level CV parameters (e.g. MS:1000800 mass resolving power).
+  /// Decoded from the `scan.parameters` large_list column via source_index join.
+  /// Empty when the source list is absent or has zero elements (accepted add-on).
+  std::vector<CvParam> scan_parameters;
+
+  /// Scan windows for this spectrum (m/z lower/upper bounds per window).
+  /// Decoded from `scan.scan_windows` via source_index join (accepted add-on).
+  /// Empty when no scan windows are present (e.g. for MS2 zoomed scans).
+  std::vector<ScanWindow> scan_windows;
 };
 
 } // namespace MzPeak
