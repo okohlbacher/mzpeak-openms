@@ -13,19 +13,32 @@ OpenMS-style-conformance rounds. Status verified against the code on
   small.numpress) via the existing `decode_chunked`; ground-truthed (13248fa).
 - **Phase 3 · RDR-25** ✅ detail-level / metadata-only mode
   (`Index::spectra(DetailLevel)`), no array decode (2ffd823).
-- **RDR-22** (in-memory archive) **deferred**: the feasible half (in-memory
-  *unpacked* name→bytes archive) has narrow utility; the useful half (a
-  `.mzpeak` *zip blob* in memory, `zip_source_buffer` + per-member lifetime) is
-  the large part. Do the zip-buffer version when prioritized.
+- **RDR-22** ✅ `MzPeak::open_buffer(bytes)` — read a `.mzpeak` ZIP from an
+  in-memory byte buffer via a `ZipBuffer` archive over `zip_source_buffer`
+  (8f030a5). (The reviewers' "large" worry didn't materialize — the RDR-26
+  per-member pattern maps cleanly onto a buffer source.)
+- **WRT-2** ✅ writer emits run-level `metadata{}` blocks via a typed
+  `RunMetadata::to_json()` serializer + writer overloads; round-trips through
+  `Index::metadata()` (9780a4a).
 - **RDR-28b** (chunked wavelength) **deferred**: no bundled fixture.
 - **RDR-4b** (large_list/large_string/large_list<u8> typing) **deferred**: the
   chunked decoder already casts those directly; not blocking.
 
-Remaining open (none standalone-feasible-and-high-value this round): RDR-19
-(needs OpenMS build), RDR-20 (no encrypted fixtures), RDR-21/RDR-23 (perf infra,
-no behavioral fixture), RDR-22b (zip-from-buffer), WRT-1 (writer chunked emit,
-multi-month), WRT-2 (writer metadata blocks, modest value / API change),
-RDR-14 (remote, P4).
+Remaining open — none standalone-feasible-and-valuable; each is blocked,
+no-functional-benefit, or multi-month:
+- **RDR-19** OpenMS integration — `libOpenMS` not built locally (only deps);
+  finishing the OpenMS build is a long compile, and the adapter likely belongs
+  in the OpenMS tree (see the Phase-5 note). Highest value but a deliberate,
+  separate effort.
+- **RDR-20** Parquet AES decryption — no encrypted fixtures/keys.
+- **RDR-21** LRU cache / **RDR-23** page-index — perf only; no behavioral
+  fixture and weak validation; real but modest, and RDR-21 touches the
+  data_arrays/parquet paths just changed by RDR-4a.
+- **RDR-4b** large_list/large_string/large_list<u8> typing — no functional
+  benefit today (the chunked decoder already casts those directly).
+- **RDR-28b** chunked wavelength — no fixture.
+- **WRT-1** writer chunked/numpress emit — a separate multi-month project.
+- **RDR-14** remote/cloud — P4 future.
 
 ## Done (for context — do not re-do)
 Reader: RDR-1/2/3/5/6/7/8/9/10/11/12/13/15/16/17/18/24/26/27/29. Point layout
@@ -132,8 +145,14 @@ These two are file-disjoint → parallel worktree agents.
   delta-model fit + numpress encode).
 
 ### Phase 5 — Blocked / external (document prerequisites; not implemented here)
-- **RDR-19** OpenMS `MSSpectrum`/`MSExperiment` integration — needs the OpenMS
-  build tree (uses RDR-10 + RDR-24). The actual point of the reader.
+- **RDR-19** OpenMS `MSSpectrum`/`MSExperiment` integration — uses RDR-10 +
+  RDR-24; the actual point of the reader. STATUS (checked 2026-06-14): an OpenMS
+  source tree (`~/Claude/OpenMS`) and a partial CMake build (`~/openms_build`)
+  exist locally, but `libOpenMS` is NOT built (only deps: libOpenSwathAlgo,
+  SQLiteCpp, sqlite3, yaml-cpp) — so there is nothing to link against yet.
+  Prerequisite: finish the OpenMS build (long compile). Architecture decision
+  still open: the adapter likely belongs in the OpenMS tree as an mzPeak file
+  handler rather than adding a heavy OpenMS build-dep to this library. Deferred.
 - **RDR-20** Parquet AES decryption — needs encrypted fixtures + a key path.
 - **RDR-21** LRU cache, **RDR-23** page-index — perf infra, no behavioral fixture.
 - **RDR-14** remote/cloud (HTTP-range/S3) — P4 "future".
