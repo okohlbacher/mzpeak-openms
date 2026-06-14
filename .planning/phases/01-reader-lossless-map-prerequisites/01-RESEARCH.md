@@ -489,8 +489,8 @@ No missing dependencies.
 |----------|-------|
 | Framework | Boost.Test (header-only, `BOOST_AUTO_TEST_CASE`) |
 | Config file | `meson.build` — tests registered as `test(name, executable(...))` |
-| Quick run command | `cd builddir && meson test -t 60 spectrum_metadata` (single suite) |
-| Full suite command | `cd builddir && meson test && scripts/e2e.sh` |
+| Quick run command | `cd build && meson test -t 60 spectrum_metadata` (single suite) |
+| Full suite command | `cd build && meson test && scripts/e2e.sh` |
 
 ### Phase Requirements → Test Map
 
@@ -512,9 +512,9 @@ No missing dependencies.
 
 ### Sampling Rate
 
-- **Per task commit:** `cd builddir && meson test -t 60 spectrum_metadata_test` (new test only)
-- **Per wave merge:** `cd builddir && meson test` (all unit tests)
-- **Phase gate:** `cd builddir && meson test && scripts/e2e.sh` (full suite including e2e)
+- **Per task commit:** `cd build && meson test -t 60 spectrum_metadata_test` (new test only)
+- **Per wave merge:** `cd build && meson test` (all unit tests)
+- **Phase gate:** `cd build && meson test && scripts/e2e.sh` (full suite including e2e)
 
 ### Wave 0 Gaps
 
