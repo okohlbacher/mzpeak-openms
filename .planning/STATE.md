@@ -22,11 +22,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 
 **Core value:** OpenMS can load/store `.mzpeak` into/from `MSExperiment`, and
 mzML → mzpeak → mzML through OpenMS yields an equivalent `MSExperiment`.
-**Current focus:** Phases 0 + 1 COMPLETE — next: Phase 2 (MzPeakFile::load + registration)
+**Current focus:** Phases 0/1/2 COMPLETE — next: Phase 3 (MzPeakFile::store)
 
 ## Current Position
 
-Phase: 0 + 1 COMPLETE — executing Phase 2 (MzPeakFile::load / RDR-19)
+Phase: 0/1/2 COMPLETE — executing Phase 3 (MzPeakFile::store / RDR-19)
 Plan: Phase 0 (3/3 criteria) + Phase 1 (3/3 plans) done
 Status: libOpenMS built + linkable; MzPeakFile handler scaffold exists on OpenMS
 branch `feature/mzpeak-file-handler`; ready to implement Phase 2 load.

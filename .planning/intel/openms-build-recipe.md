@@ -38,6 +38,17 @@ c++ -std=gnu++20 prog.cpp @/tmp/oinc.rsp \
   libOpenMS. cmake-built test exes already carry the right rpaths; for manual runs add
   `DYLD_FRAMEWORK_PATH=/Library/Frameworks` if needed.
 
+## Running OpenMS class tests (IMPORTANT)
+The libOpenMS build's curl rpath is not resolvable in this environment, so **every** OpenMS test
+exe (not just ours) aborts at dyld load unless the framework path is set. Always run tests as:
+```bash
+DYLD_FRAMEWORK_PATH=/Library/Frameworks <build>/src/tests/class_tests/bin/<Name>_test
+# or via ctest:
+DYLD_FRAMEWORK_PATH=/Library/Frameworks ctest --test-dir ~/openms_build -R '<Name>_test'
+```
+Bare `ctest` reports "Subprocess aborted" for ALL tests — that is the curl dyld quirk, NOT a test
+failure. With the framework path, our tests pass 100%.
+
 ## Handler integration points (where a new format wires in)
 - Header: `src/openms/include/OpenMS/FORMAT/MzPeakFile.h` (`class OPENMS_DLLAPI`, `#pragma once`,
   `$Maintainer$/$Authors$: Oliver Kohlbacher`).

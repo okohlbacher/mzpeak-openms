@@ -200,10 +200,10 @@ prevent re-planning.
 | RDR-10b | Phase 1 | DONE (Plan 01-01, 2026-06-14) |
 | RDR-10c | Phase 1 | DONE (Plan 01-02, 2026-06-14) |
 | RDR-9b | Phase 1 | DONE (Plan 01-03, 2026-06-14) |
-| INT-01 | Phase 2 | Pending |
-| INT-02 | Phase 2 | Pending |
-| INT-03 | Phase 2 | Pending |
-| INT-04 | Phase 2 | Pending |
+| INT-01 | Phase 2 | Done |
+| INT-02 | Phase 2 | Done |
+| INT-03 | Phase 2 | Done |
+| INT-04 | Phase 2 | Done |
 | INT-05 | Phase 3 | Pending |
 | INT-08 (M1, optional) | Phase 3b | Pending |
 | INT-06 | Phase 4 | Pending |

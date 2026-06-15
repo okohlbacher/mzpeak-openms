@@ -32,7 +32,7 @@ mzML→mzpeak→mzML round-trip through OpenMS (Phase 5).
 
 - [x] **Phase 0: Build & Port Prerequisites** - Build `libOpenMS` locally; port reused cores to C++20 (COMPLETE 2026-06-15)
 - [x] **Phase 1: Reader Lossless-Map Prerequisites** - Close RDR-10b/10c/9b reader metadata gaps (COMPLETE 2026-06-14)
-- [ ] **Phase 2: MzPeakFile::load + Registration** - Whole-experiment load, converter, FileTypes/FileHandler wiring, test
+- [x] **Phase 2: MzPeakFile::load + Registration** - Whole-experiment load, converter, FileTypes/FileHandler wiring, test (COMPLETE 2026-06-15)
 - [ ] **Phase 3: MzPeakFile::store** - MSExperiment → mzPeak write path with metadata emit
 - [ ] **Phase 3b: Shared CV Helper (OPTIONAL, propose to OpenMS)** - Refactor `handleCVParam_` into a shared `applyCVParam`
 - [ ] **Phase 4: Streaming transform + PeakFileOptions** - Streaming consumer with RT/mz/ms-level/metadata-only filtering
@@ -172,7 +172,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 |-------|----------------|--------|-----------|
 | 0. Build & Port Prerequisites | 3/3 | COMPLETE | 2026-06-15 |
 | 1. Reader Lossless-Map Prerequisites | 3/3 | COMPLETE | 2026-06-14 |
-| 2. MzPeakFile::load + Registration | 0/TBD | Not started | - |
+| 2. MzPeakFile::load + Registration | 3/3 | COMPLETE | 2026-06-15 |
 | 3. MzPeakFile::store | 0/TBD | Not started | - |
 | 3b. Shared CV Helper (optional) | 0/TBD | Not started | - |
 | 4. Streaming transform + PeakFileOptions | 0/TBD | Not started | - |
