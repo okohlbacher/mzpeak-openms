@@ -30,7 +30,7 @@ mzML→mzpeak→mzML round-trip through OpenMS (Phase 5).
 - Decimal phases (3.1, …): urgent insertions (marked INSERTED).
 - Phase 3b is an *optional, propose-to-OpenMS* phase off the critical path.
 
-- [ ] **Phase 0: Build & Port Prerequisites** - Build `libOpenMS` locally; port reused cores to C++20
+- [x] **Phase 0: Build & Port Prerequisites** - Build `libOpenMS` locally; port reused cores to C++20 (COMPLETE 2026-06-15)
 - [x] **Phase 1: Reader Lossless-Map Prerequisites** - Close RDR-10b/10c/9b reader metadata gaps (COMPLETE 2026-06-14)
 - [ ] **Phase 2: MzPeakFile::load + Registration** - Whole-experiment load, converter, FileTypes/FileHandler wiring, test
 - [ ] **Phase 3: MzPeakFile::store** - MSExperiment → mzPeak write path with metadata emit
@@ -170,7 +170,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → (3b optional) → 4 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 0. Build & Port Prerequisites | 0/TBD | Not started | - |
+| 0. Build & Port Prerequisites | 3/3 | COMPLETE | 2026-06-15 |
 | 1. Reader Lossless-Map Prerequisites | 3/3 | COMPLETE | 2026-06-14 |
 | 2. MzPeakFile::load + Registration | 0/TBD | Not started | - |
 | 3. MzPeakFile::store | 0/TBD | Not started | - |

@@ -22,16 +22,16 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 
 **Core value:** OpenMS can load/store `.mzpeak` into/from `MSExperiment`, and
 mzML → mzpeak → mzML through OpenMS yields an equivalent `MSExperiment`.
-**Current focus:** Phase 1 COMPLETE — next: Phase 2 (OpenMS integration)
+**Current focus:** Phases 0 + 1 COMPLETE — next: Phase 2 (MzPeakFile::load + registration)
 
 ## Current Position
 
-Phase: 1 (Reader Lossless-Map Prerequisites) — COMPLETE
-Plan: 3 of 3 (all plans done)
-Status: Phase 1 complete; ready for Phase 2 (MzPeakFile handler / RDR-19)
-Last activity: 2026-06-14 -- Plan 01-03 executed (RDR-9b auxiliary_arrays
-accessor; structural decode validated; raw-byte VALUE decode fixture-gated;
-phase gate: 30/30 green, e2e PASS, clang-format all-clean)
+Phase: 0 + 1 COMPLETE — executing Phase 2 (MzPeakFile::load / RDR-19)
+Plan: Phase 0 (3/3 criteria) + Phase 1 (3/3 plans) done
+Status: libOpenMS built + linkable; MzPeakFile handler scaffold exists on OpenMS
+branch `feature/mzpeak-file-handler`; ready to implement Phase 2 load.
+Last activity: 2026-06-15 -- Phase 0 executed (libOpenMS build + C++20 port +
+MzPeakFile stub compile-links; build recipe in intel/openms-build-recipe.md)
 
 Progress: [██████████] 100% (Phase 1)
 
@@ -124,8 +124,11 @@ decisions treated as LOCKED for this milestone). Most relevant to current work:
 
 ### Blockers/Concerns
 
-- [Phase 0] `libOpenMS` is NOT yet built locally (only deps). Finishing the build
-  is a long compile and gates all RDR-19 work.
+- [Phase 0] RESOLVED 2026-06-15 — `libOpenMS.dylib` (44M) is built at `~/openms_build/lib`
+  and linkable; build/link recipe in `intel/openms-build-recipe.md`. Required a
+  `~/OpenMS -> ~/Claude/OpenMS` symlink + stale `GIT_EXECUTABLE` cache fix.
+- [Phase 2+] RDR-10c needs an MSn+IM fixture that does not yet exist — IM decode stays
+  a documented stub; the v1 converter ships peaks + core scalars + run metadata.
 
 ## Standing Per-Phase Gates
 
