@@ -239,3 +239,100 @@ BOOST_AUTO_TEST_CASE(reads_and_validates_format_version)
 
   BOOST_CHECK_THROW(MzPeak::open(dir.path.string()), std::exception);
 }
+
+/******************************************************************************/
+// TC-03: a spectrum whose mz and intensity arrays have different lengths is
+// rejected at write time, before any Parquet I/O is performed.
+BOOST_AUTO_TEST_CASE(rejects_mismatched_mz_intensity)
+{
+  using namespace MzPeak;
+  TempDir dir;
+  // 2 m/z values but only 1 intensity value — a clear mismatch.
+  std::vector<SpectrumData> in{{{100.0, 200.0}, {10.0f}}};
+  BOOST_CHECK_THROW(write_spectra_directory(dir.path, in), std::exception);
+}
+
+/******************************************************************************/
+// TC-06: a directory with a single spectrum round-trips through the reader.
+BOOST_AUTO_TEST_CASE(single_spectrum_round_trip)
+{
+  using namespace MzPeak;
+  TempDir dir;
+  std::vector<SpectrumData> in{{{100.0, 200.5, 300.25}, {10.0f, 20.0f, 30.0f}}};
+  write_spectra_directory(dir.path, in);
+
+  Index index = MzPeak::open(dir.path.string());
+  auto spectra = index.spectra();
+  BOOST_TEST(spectra.size() == 1u);
+
+  const auto& s = spectra[0];
+  const auto& mz = s.mz();
+  const auto& it = s.intensity();
+  BOOST_TEST(mz.size() == 3u);
+  BOOST_TEST(mz[0] == 100.0, boost::test_tools::tolerance(1e-9));
+  BOOST_TEST(mz[1] == 200.5, boost::test_tools::tolerance(1e-9));
+  BOOST_TEST(mz[2] == 300.25, boost::test_tools::tolerance(1e-9));
+  BOOST_TEST(it[0] == 10.0f, boost::test_tools::tolerance(1e-6f));
+  BOOST_TEST(it[1] == 20.0f, boost::test_tools::tolerance(1e-6f));
+  BOOST_TEST(it[2] == 30.0f, boost::test_tools::tolerance(1e-6f));
+}
+
+/******************************************************************************/
+// TC-07: a spectrum with zero data points round-trips; the second spectrum
+// (index 1, 0 points) reads back with empty m/z and intensity arrays.
+BOOST_AUTO_TEST_CASE(zero_data_points_round_trip)
+{
+  using namespace MzPeak;
+  TempDir dir;
+  // Mix: one spectrum with points followed by one with none.  The non-empty
+  // spectrum ensures spectrum_count >= 2 so index 1 is reachable.
+  std::vector<SpectrumData> in{
+      {{100.0, 200.0}, {1.0f, 2.0f}},
+      {{}, {}},
+  };
+  write_spectra_directory(dir.path, in);
+
+  Index index = MzPeak::open(dir.path.string());
+  auto spectra = index.spectra();
+  BOOST_TEST(spectra.size() == 2u);
+
+  const auto& s1 = spectra[1];
+  BOOST_TEST(s1.mz().empty());
+  BOOST_TEST(s1.intensity().empty());
+}
+
+/******************************************************************************/
+// TC-10: the default SpectrumData has ms_level=1 and no retention time; those
+// defaults survive a directory round-trip through the metadata table.
+BOOST_AUTO_TEST_CASE(metadata_defaults_after_write)
+{
+  using namespace MzPeak;
+  TempDir dir;
+  std::vector<SpectrumData> in{{{100.0, 200.0}, {1.0f, 2.0f}}};
+  write_spectra_directory(dir.path, in);
+
+  Index index = MzPeak::open(dir.path.string());
+  auto spectra = index.spectra();
+  const auto& s = spectra[0];
+
+  BOOST_TEST(s.ms_level().has_value());
+  BOOST_TEST(s.ms_level().value() == 1);
+  BOOST_TEST(!s.retention_time().has_value());
+}
+
+/******************************************************************************/
+// TC-11: the point-layout writer does not produce precursor records; the
+// read-back spectrum must report an empty precursors list.
+BOOST_AUTO_TEST_CASE(precursors_absent_after_write)
+{
+  using namespace MzPeak;
+  TempDir dir;
+  std::vector<SpectrumData> in{{{100.0, 200.0}, {1.0f, 2.0f}}};
+  write_spectra_directory(dir.path, in);
+
+  Index index = MzPeak::open(dir.path.string());
+  auto spectra = index.spectra();
+  const auto& s = spectra[0];
+
+  BOOST_TEST(s.metadata().precursors.empty());
+}

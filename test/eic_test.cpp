@@ -197,3 +197,32 @@ BOOST_AUTO_TEST_CASE(eic_full_mz_window_equals_no_filter)
     BOOST_TEST(eic[i - 1].time < eic[i].time);
   }
 }
+
+/******************************************************************************/
+// TC-13: an ms_level filter for a level absent in the file (e.g. MS3) yields
+// an empty EIC, not a crash or spurious points.
+BOOST_AUTO_TEST_CASE(eic_empty_for_absent_ms_level)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+
+  // small.mzpeak has only MS1 and MS2 scans; MS3 is absent.
+  auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.0, 1.0, 3);
+  BOOST_TEST(eic.empty());
+}
+
+/******************************************************************************/
+// FC-07: extract_ion_chromatogram must throw std::invalid_argument when
+// mz_low > mz_high (inverted range).
+BOOST_AUTO_TEST_CASE(eic_rejects_inverted_mz_range)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+
+  BOOST_CHECK_THROW(spectra.extract_ion_chromatogram(410.0, 400.0, 0.0, 1.0),
+                    std::invalid_argument);
+}

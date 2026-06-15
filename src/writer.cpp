@@ -122,8 +122,8 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
   for (std::size_t i = 0; i < spectra.size(); ++i) {
     const SpectrumData& s = spectra[i];
     rows.push_back({/*index=*/static_cast<uint64_t>(i),
-                    /*id=*/"index=" + std::to_string(i),
-                    /*ms_level=*/uint8_t{1},
+                    /*id=*/s.id.value_or("index=" + std::to_string(i)),
+                    /*ms_level=*/s.ms_level,
                     /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
                     /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
                     /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
@@ -187,30 +187,47 @@ void write_spectra_directory_impl(const fs::path& dir,
                                   const RunMetadata* run_metadata)
 {
   validate(spectra, "write_spectra_directory");
-  fs::create_directories(dir);
 
-  const std::size_t total = spectra.size();
-  const bool with_peaks = any_centroid(spectra);
+  fs::path tmp_dir = dir;
+  tmp_dir += ".tmp";
 
-  // Profile points -> data table (always present; may be empty).
-  PointColumns data(flatten(spectra, /*want_centroid=*/false));
-  Util::write_point_spectra_data((dir / "spectra_data.parquet").string(),
-                                 data.spectrum_index, data.mz, data.intensity,
-                                 point_file_kv(total, data.mz.size()));
-
-  // Centroid points -> peaks table (only when present).
-  if (with_peaks) {
-    PointColumns peaks(flatten(spectra, /*want_centroid=*/true));
-    Util::write_point_spectra_data((dir / "spectra_peaks.parquet").string(),
-                                   peaks.spectrum_index, peaks.mz, peaks.intensity,
-                                   point_file_kv(total, peaks.mz.size()));
+  try {
+    fs::create_directories(tmp_dir);
+  } catch (const fs::filesystem_error& e) {
+    throw ParquetError(std::string("write_spectra_directory: ") + e.what());
   }
 
-  Util::write_spectra_metadata((dir / "spectra_metadata.parquet").string(),
-                               build_metadata_rows(spectra));
+  try {
+    const std::size_t total = spectra.size();
+    const bool with_peaks = any_centroid(spectra);
 
-  write_index_file(dir / "mzpeak_index.json",
-                   spectra_index_json(with_peaks, run_metadata));
+    // Profile points -> data table (always present; may be empty).
+    PointColumns data(flatten(spectra, /*want_centroid=*/false));
+    Util::write_point_spectra_data((tmp_dir / "spectra_data.parquet").string(),
+                                   data.spectrum_index, data.mz, data.intensity,
+                                   point_file_kv(total, data.mz.size()));
+
+    // Centroid points -> peaks table (only when present).
+    if (with_peaks) {
+      PointColumns peaks(flatten(spectra, /*want_centroid=*/true));
+      Util::write_point_spectra_data((tmp_dir / "spectra_peaks.parquet").string(),
+                                     peaks.spectrum_index, peaks.mz, peaks.intensity,
+                                     point_file_kv(total, peaks.mz.size()));
+    }
+
+    Util::write_spectra_metadata((tmp_dir / "spectra_metadata.parquet").string(),
+                                 build_metadata_rows(spectra));
+
+    write_index_file(tmp_dir / "mzpeak_index.json",
+                     spectra_index_json(with_peaks, run_metadata));
+
+    fs::rename(tmp_dir, dir);
+  } catch (...) {
+    if (fs::exists(tmp_dir)) {
+      fs::remove_all(tmp_dir);
+    }
+    throw;
+  }
 }
 
 /******************************************************************************/

@@ -475,8 +475,11 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
                         // else: unknown data_type — decode deferred.
 
                         if (element_size == 0) {
-                          // Unknown data_type: leave values empty, flag as
-                          // undecoded (decode deferred).
+                          std::fprintf(
+                              stderr,
+                              "AuxiliaryArray: unknown data_type '%s' at spectrum "
+                              "%zu; values_decoded=false\n",
+                              aa.data_type.c_str(), static_cast<std::size_t>(r));
                           aa.values_decoded = false;
                         } else {
                           // BYTE-LENGTH GUARD (T-03-01 mitigation): require

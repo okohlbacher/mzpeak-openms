@@ -7,15 +7,22 @@ directory of this repository.
 */
 
 #include "mzpeak/schema/file.h"
+#include "mzpeak/exception.h"
 
 namespace MzPeak::Schema {
 
 /******************************************************************************/
 File::File(const json::object& o)
-    : file_name(o.at("name").as_string())
-    , data_kind(data_kind_from_string(o.at("data_kind").as_string()))
-    , entity_type(entity_type_from_string(o.at("entity_type").as_string()))
 {
+  try {
+    // Accept "path" (preferred) with "name" as backward-compatible fallback.
+    file_name = std::string(o.contains("path") ? o.at("path").as_string()
+                                               : o.at("name").as_string());
+    data_kind = data_kind_from_string(o.at("data_kind").as_string());
+    entity_type = entity_type_from_string(o.at("entity_type").as_string());
+  } catch (const std::exception& e) {
+    throw MzPeak::JsonError(std::string("schema::File: ") + e.what());
+  }
 }
 
 /******************************************************************************/

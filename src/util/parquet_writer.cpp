@@ -206,7 +206,7 @@ void write_spectra_metadata_to_sink(
                    /*nullable=*/true),
       arrow::field("MS_1003059_number_of_peaks", arrow::uint64(),
                    /*nullable=*/true),
-      arrow::field("MS_1000525_spectrum_representation", arrow::utf8(),
+      arrow::field("MS_1000525_spectrum_representation", arrow::large_utf8(),
                    /*nullable=*/true),
   };
 
@@ -216,7 +216,7 @@ void write_spectra_metadata_to_sink(
       build_array<arrow::UInt8Builder>(ms_level),
       build_array<arrow::UInt64Builder>(n_points),
       build_array<arrow::UInt64Builder>(n_peaks),
-      build_array<arrow::StringBuilder>(representation),
+      build_array<arrow::LargeStringBuilder>(representation),
   };
 
   auto spectrum_result(arrow::StructArray::Make(children, spectrum_fields));

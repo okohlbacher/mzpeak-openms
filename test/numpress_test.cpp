@@ -600,3 +600,17 @@ BOOST_AUTO_TEST_CASE(decode_linear_roundtrip)
                                         << " expected " << original[i]);
   }
 }
+
+/******************************************************************************/
+// TC-09: an empty byte buffer is missing the 8-byte fixed-point header that
+// both numpress codecs require; decoding must throw rather than silently
+// returning garbage values.
+BOOST_AUTO_TEST_CASE(decode_linear_empty_throws)
+{
+  BOOST_CHECK_THROW(MzPeak::Util::numpress_decode_linear({}), std::exception);
+}
+
+BOOST_AUTO_TEST_CASE(decode_slof_empty_throws)
+{
+  BOOST_CHECK_THROW(MzPeak::Util::numpress_decode_slof({}), std::exception);
+}

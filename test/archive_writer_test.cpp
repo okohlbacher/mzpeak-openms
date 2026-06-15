@@ -162,3 +162,24 @@ BOOST_AUTO_TEST_CASE(handles_empty_input)
   BOOST_TEST(member_compression(archive.path, "spectra_data.parquet") ==
              static_cast<zip_int32_t>(ZIP_CM_STORE));
 }
+
+/******************************************************************************/
+// TC-14: when centroid spectra are written, spectra_peaks.parquet must also be
+// a STORED (uncompressed) member, matching the mzPeak archive spec.
+BOOST_AUTO_TEST_CASE(peaks_member_is_stored_uncompressed)
+{
+  using namespace MzPeak;
+
+  std::vector<SpectrumData> in{
+      {{100.0, 200.0}, {1.0f, 2.0f}, /*centroid=*/true},
+      {{150.0, 250.0, 350.0}, {3.0f, 4.0f, 5.0f}, /*centroid=*/true},
+  };
+
+  TempFile archive;
+  write_spectra_archive(archive.path, in);
+
+  BOOST_TEST(member_compression(archive.path, "spectra_peaks.parquet") ==
+             static_cast<zip_int32_t>(ZIP_CM_STORE));
+  BOOST_TEST(member_compression(archive.path, "mzpeak_index.json") ==
+             static_cast<zip_int32_t>(ZIP_CM_STORE));
+}

@@ -92,3 +92,26 @@ BOOST_AUTO_TEST_CASE(queries_work_in_metadata_only)
   std::vector<std::size_t> expected{2, 3, 4, 5};
   BOOST_TEST(sub == expected, boost::test_tools::per_element());
 }
+
+/******************************************************************************/
+// TC-12: metadata-only mode on a CHUNKED file skips all array decoding.
+// Chunked layout requires its own decode path; MetadataOnly must not attempt
+// any array I/O regardless of layout type.
+BOOST_AUTO_TEST_CASE(chunked_metadata_only_skips_arrays)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/small.chunked.mzpeak");
+  auto spectra = mzpeak.spectra(DetailLevel::MetadataOnly);
+
+  BOOST_TEST(spectra.size() == 48u);
+
+  auto s0 = spectra[0];
+  // No array data must be decoded in MetadataOnly mode.
+  BOOST_TEST(s0.mz().empty());
+  BOOST_TEST(s0.intensity().empty());
+
+  // Scalar metadata is still available.
+  BOOST_TEST(s0.ms_level().has_value());
+  BOOST_TEST(s0.ms_level().value() == 1);
+}

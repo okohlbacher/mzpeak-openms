@@ -144,3 +144,32 @@ BOOST_AUTO_TEST_CASE(all_valid_returns_unchanged)
     BOOST_TEST(out[i] == values[i], boost::test_tools::tolerance(1e-12));
   }
 }
+
+/******************************************************************************/
+// TC-08: an unpaired single null between two runs is not a valid interior-paired
+// layout; reconstruct_null_mz must return {} so callers fall back gracefully.
+BOOST_AUTO_TEST_CASE(unpaired_single_null_returns_empty)
+{
+  using namespace MzPeak::Util;
+
+  // [a0 a1 | single_null | b0 b1] — null is not paired, layout is malformed.
+  std::vector<double> values{1.0, 2.0, 0.0, 3.0, 4.0};
+  std::vector<bool> valid{true, true, false, true, true};
+  const std::vector<double> beta{0.1};
+
+  std::vector<double> out(reconstruct_null_mz(values, valid, beta));
+
+  // A non-paired layout cannot be reconstructed; must return empty.
+  BOOST_TEST(out.empty());
+}
+
+/******************************************************************************/
+// TC-08: an empty input yields an empty output immediately (no UB from
+// indexing into zero-length arrays).
+BOOST_AUTO_TEST_CASE(empty_input_returns_empty)
+{
+  using namespace MzPeak::Util;
+
+  std::vector<double> out(reconstruct_null_mz({}, {}, {}));
+  BOOST_TEST(out.empty());
+}

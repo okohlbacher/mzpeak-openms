@@ -8,7 +8,10 @@ directory of this repository.
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "mzpeak/run_metadata.h"
@@ -18,7 +21,7 @@ namespace MzPeak {
 /**
  * The m/z and intensity arrays of a single spectrum to be written.
  *
- * NOTE: This is a minimal Phase-0 writer model.  It carries only the
+ * NOTE: This is a minimal initial writer model.  It carries only the
  * two primary arrays; richer metadata and additional arrays will be
  * added as the writer matures.
  */
@@ -29,6 +32,15 @@ struct SpectrumData {
   /// `true` for a centroid (peak) spectrum (written to the peaks table),
   /// `false` for a profile spectrum (written to the data-arrays table).
   bool centroid = false;
+
+  /// MS level (1 = MS1, 2 = MS2, etc). Defaults to 1.
+  uint8_t ms_level = 1;
+
+  /// Optional retention time in seconds.
+  std::optional<double> retention_time;
+
+  /// Optional spectrum ID string; auto-generated ("index=N") when absent.
+  std::optional<std::string> id;
 };
 
 /**

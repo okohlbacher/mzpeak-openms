@@ -387,12 +387,14 @@ RunMetadata::RunMetadata(const json::object& metadata)
 }
 
 /******************************************************************************/
-// WRT-2 — inverse of the parsing ctor: emit only the typed blocks, mirroring
-// the member names the ctor reads.  Absent optionals and empty lists are left
-// out, so RunMetadata(x.to_json()) reproduces the typed fields of x.
+// WRT-2 — inverse of the parsing ctor: emit the typed blocks on top of the
+// original raw_ object so unknown keys (e.g. scan_settings_list, cv_list)
+// are preserved transparently; typed fields then override.
 json::object RunMetadata::to_json() const
 {
-  json::object o;
+  // Start from raw_ so unknown blocks (e.g. scan_settings_list, cv_list)
+  // are preserved transparently; typed fields then override.
+  json::object o = raw_;
 
   if (run_.has_value()) o["run"] = run_->to_json();
   if (file_description_.has_value())
@@ -428,6 +430,19 @@ json::object RunMetadata::to_json() const
     for (const auto& s : samples_)
       a.push_back(s.to_json());
     o["sample_list"] = std::move(a);
+  }
+
+  if (!o.contains("cv_list")) {
+    json::array default_cv;
+    json::object psi_ms;
+    psi_ms["id"] = "MS";
+    psi_ms["fullName"] =
+        "Proteomics Standards Initiative Mass Spectrometry Ontology";
+    psi_ms["version"] = "4.1.30";
+    psi_ms["URI"] =
+        "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo";
+    default_cv.push_back(psi_ms);
+    o["cv_list"] = std::move(default_cv);
   }
 
   return o;

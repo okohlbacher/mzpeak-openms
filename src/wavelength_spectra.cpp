@@ -29,13 +29,6 @@ WavelengthSpectra::WavelengthSpectra(std::unique_ptr<Util::Parquet> data,
                                 std::placeholders::_1))
     , data_(std::make_shared<Data::Arrays>(std::move(data)))
 {
-  // Wavelength spectra currently only support the "point" layout.  The chunked
-  // layout uses a different top-level node ("chunk") which would require a
-  // separate decode path.
-  if (data_->array_index().prefix() != "point") {
-    throw ParquetError("chunked wavelength spectra not yet supported");
-  }
-
   // The wavelength spectrum count lives in the metadata table's
   // `wavelength_spectrum_count` key; the data table does not carry it, so
   // prefer the supplied count and fall back to the data table's record count
