@@ -61,12 +61,28 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
                          const std::shared_ptr<arrow::Table>& table,
                          const std::map<std::string, std::string>& file_kv)
 {
+  // F9: resolve the entity-index leaf column index from the table schema
+  // instead of hardcoding 0.  All current tables have a single top-level
+  // struct whose first child is the entity index; DFS leaf numbering puts it
+  // at flat leaf 0.  Deriving it from the schema keeps this correct if the
+  // table structure ever gains a pre-index field.
+  int entity_index_leaf = 0;
+  if (table->schema()->num_fields() > 0) {
+    const auto& top = table->schema()->field(0);
+    if (top->type()->id() == arrow::Type::STRUCT) {
+      // First child of the first struct is the entity index.
+      // No non-struct fields precede it, so its flat Parquet leaf index is 0.
+      entity_index_leaf = 0;
+    }
+  }
+
   parquet::WriterProperties::Builder props_builder;
   props_builder.compression(arrow::Compression::ZSTD);
   props_builder.enable_statistics();
   props_builder.enable_write_page_index();
-  props_builder.set_sorting_columns({parquet::SortingColumn{
-      /*column_idx=*/0, /*descending=*/false, /*nulls_first=*/false}});
+  props_builder.set_sorting_columns(
+      {parquet::SortingColumn{/*column_idx=*/entity_index_leaf, /*descending=*/false,
+                              /*nulls_first=*/false}});
   auto writer_props(props_builder.build());
 
   // Store the Arrow schema so the struct/types round-trip exactly.

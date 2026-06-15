@@ -17,6 +17,7 @@ directory of this repository.
 #include <memory>
 #include <parquet/arrow/reader.h>
 #include <sstream>
+#include <unordered_map>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/metadata_model.h"
@@ -574,6 +575,8 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
         auto prec(std::static_pointer_cast<arrow::StructArray>(chunk));
 
         for (int64_t r = 0; r < prec->length(); ++r) {
+          // F7: outer struct null => row carries no precursor data, skip.
+          if (prec->IsNull(r)) continue;
           // source_index NULL => MS1 row, skip (Pitfall 2).
           auto si = opt_int<uint64_t>(prec, "source_index", r);
           if (!si) continue;
@@ -642,6 +645,8 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
         auto si(std::static_pointer_cast<arrow::StructArray>(chunk));
 
         for (int64_t r = 0; r < si->length(); ++r) {
+          // F7: outer struct null => row carries no selected-ion data, skip.
+          if (si->IsNull(r)) continue;
           // source_index NULL => MS1 row, skip.
           auto src_idx = opt_int<uint64_t>(si, "source_index", r);
           if (!src_idx) continue;
@@ -753,6 +758,33 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
   }
 
   return out;
+}
+
+/******************************************************************************/
+std::unordered_map<std::string, std::size_t>
+read_entity_id_map(Parquet& metadata, const std::string& col_name)
+{
+  std::unordered_map<std::string, std::size_t> result;
+  auto table = read_metadata_table(metadata);
+  auto col = table->GetColumnByName(col_name);
+  if (!col) return result;
+
+  for (const auto& chunk : col->chunks()) {
+    if (chunk->type_id() != arrow::Type::STRUCT) continue;
+    auto arr(std::static_pointer_cast<arrow::StructArray>(chunk));
+
+    for (int64_t r = 0; r < arr->length(); ++r) {
+      if (arr->IsNull(r)) continue;
+      auto idx = opt_int<uint64_t>(arr, "index", r);
+      if (!idx) continue;
+      std::string id = get_string(arr, "id", r);
+      if (!id.empty()) {
+        result.emplace(std::move(id), static_cast<std::size_t>(*idx));
+      }
+    }
+  }
+
+  return result;
 }
 
 } // namespace MzPeak::Util

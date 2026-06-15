@@ -10,6 +10,8 @@ directory of this repository.
 
 #include <cstdint>
 #include <map>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "mzpeak/spectrum_metadata.h"
@@ -50,5 +52,14 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata);
  * strings/vectors as documented on SpectrumMetadata.
  */
 std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata);
+
+/**
+ * Read the native-id → entity-index map from a metadata Parquet table whose
+ * top-level column is named @p col_name (e.g. "chromatogram" or
+ * "wavelength_spectrum").  Only rows with a non-null, non-empty `id` field are
+ * inserted.  Used by Chromatograms::by_id() and WavelengthSpectra::by_id().
+ */
+std::unordered_map<std::string, std::size_t>
+read_entity_id_map(Parquet& metadata, const std::string& col_name);
 
 } // namespace MzPeak::Util

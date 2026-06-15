@@ -10,9 +10,11 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "mzpeak/open.h"
+#include "mzpeak/schema/buffer_format.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
 
@@ -123,4 +125,19 @@ BOOST_AUTO_TEST_CASE(reads_numpress_chunked_spectrum)
       BOOST_TEST(std::abs(a - b) / std::abs(b) < 2e-3f);
     }
   }
+}
+
+/******************************************************************************/
+// TC-16: buffer_format_from_string() must return BufferFormat::Point for any
+// unrecognised encoding CURIE.  New vocabulary entries written by a future
+// mzPeak version appear as unknown strings here; falling back to Point
+// preserves forward-compatibility instead of throwing or asserting.
+BOOST_AUTO_TEST_CASE(unknown_buffer_format_curie_falls_back_to_point)
+{
+  using MzPeak::Schema::buffer_format_from_string;
+  using MzPeak::Schema::BufferFormat;
+
+  BOOST_CHECK(buffer_format_from_string("MS:9999999") == BufferFormat::Point);
+  BOOST_CHECK(buffer_format_from_string("not_a_real_format") == BufferFormat::Point);
+  BOOST_CHECK(buffer_format_from_string("") == BufferFormat::Point);
 }
