@@ -146,10 +146,10 @@ struct Zip::Impl {
   }
 
   /**************************************************************************/
-  void error_open(const fs::path& path, const std::optional<int>& errnum)
+  void error_open(const fs::path& member, const std::optional<int>& errnum)
   {
-    std::string msg("failed to open file in zip archive ");
-    msg += path.string() + ": ";
+    std::string msg("failed to open member '" + member.string() +
+                    "' in zip archive '" + path_.string() + "': ");
     error(msg, errnum);
   }
 

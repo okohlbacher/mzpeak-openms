@@ -80,6 +80,23 @@ BOOST_AUTO_TEST_CASE(reads_identically_from_buffer)
 }
 
 /******************************************************************************/
+// RDR-22 — an empty buffer has no ZIP central directory; libzip rejects it
+// during zip_open_from_source, so open_buffer must throw std::invalid_argument.
+BOOST_AUTO_TEST_CASE(empty_buffer_throws)
+{
+  BOOST_CHECK_THROW(MzPeak::open_buffer({}), std::invalid_argument);
+}
+
+/******************************************************************************/
+// RDR-22 — 64 zero bytes are not a valid ZIP file; libzip rejects the buffer,
+// so open_buffer must throw std::invalid_argument.
+BOOST_AUTO_TEST_CASE(all_zeros_buffer_throws)
+{
+  std::vector<std::byte> zeros(64, std::byte{0});
+  BOOST_CHECK_THROW(MzPeak::open_buffer(std::move(zeros)), std::invalid_argument);
+}
+
+/******************************************************************************/
 // RDR-22 — the same for has_uv.mzpeak, exercising wavelength spectra read
 // from a buffer.
 BOOST_AUTO_TEST_CASE(reads_wavelength_spectra_from_buffer)

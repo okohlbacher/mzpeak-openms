@@ -150,3 +150,50 @@ BOOST_AUTO_TEST_CASE(batch_out_of_range_yields_empty)
   BOOST_TEST(batch[1].intensity().empty());
   BOOST_TEST(batch[2].mz().size() == 485u); // index 2
 }
+
+/******************************************************************************/
+// RDR-17: out-of-range m/z window.  A window whose lo bound exceeds the
+// maximum m/z value present in any spectrum returns an EIC where every
+// intensity is 0.0.  The dense-trace policy still emits one point per
+// selected scan, so the vector length equals the number of selected scans
+// (8 MS2 scans in the RT window [0.011, 0.11]).
+BOOST_AUTO_TEST_CASE(eic_empty_for_out_of_range_mz)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+
+  auto eic = spectra.extract_ion_chromatogram(99999.0, 100000.0, 0.011, 0.11, 2);
+
+  // Dense-trace policy: one point per selected MS2 scan even when the window
+  // is entirely empty.
+  BOOST_TEST(eic.size() == 8u);
+  for (const auto& p : eic) {
+    BOOST_TEST(p.intensity == 0.0);
+  }
+}
+
+/******************************************************************************/
+// RDR-17: full m/z window equals no filter.  A window [0, 1e9] covers every
+// peak in every spectrum.  Over the eight MS2 scans in RT [0.011, 0.11] the
+// EIC must contain exactly 8 points, all intensities must be non-negative, and
+// the points must be in strictly ascending RT order.
+BOOST_AUTO_TEST_CASE(eic_full_mz_window_equals_no_filter)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+
+  auto eic = spectra.extract_ion_chromatogram(0.0, 1e9, 0.011, 0.11, 2);
+
+  BOOST_TEST(eic.size() == 8u);
+  for (const auto& p : eic) {
+    BOOST_TEST(p.intensity >= 0.0);
+  }
+  // Verify strictly ascending RT order.
+  for (std::size_t i = 1; i < eic.size(); ++i) {
+    BOOST_TEST(eic[i - 1].time < eic[i].time);
+  }
+}

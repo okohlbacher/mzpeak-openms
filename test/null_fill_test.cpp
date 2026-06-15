@@ -93,3 +93,54 @@ BOOST_AUTO_TEST_CASE(predict_and_median_helpers)
   BOOST_TEST(estimate_median_delta(v, 0, v.size()) == 2.0,
              boost::test_tools::tolerance(1e-12));
 }
+
+/******************************************************************************/
+// When every position is null (no real values exist), no runs are ever entered
+// and the output vector stays empty.  size 0 != n=3 → return {}.
+BOOST_AUTO_TEST_CASE(all_null_returns_empty)
+{
+  using namespace MzPeak::Util;
+
+  std::vector<double> values{0.0, 0.0, 0.0};
+  std::vector<bool> valid{false, false, false};
+  const std::vector<double> beta{0.1};
+
+  std::vector<double> out(reconstruct_null_mz(values, valid, beta));
+
+  BOOST_TEST(out.empty());
+}
+
+/******************************************************************************/
+// values.size() != valid.size() must return {} immediately to prevent
+// out-of-bounds access; no reconstruction should be attempted.
+BOOST_AUTO_TEST_CASE(mismatched_sizes_returns_empty)
+{
+  using namespace MzPeak::Util;
+
+  std::vector<double> values{100.0, 100.1, 100.2}; // 3 elements
+  std::vector<bool> valid{true, true};             // 2 elements — mismatch
+  const std::vector<double> beta{0.1};
+
+  std::vector<double> out(reconstruct_null_mz(values, valid, beta));
+
+  BOOST_TEST(out.empty());
+}
+
+/******************************************************************************/
+// When all positions are valid, no null-fill logic fires; the function simply
+// copies every real value in order and returns a vector equal to the input.
+BOOST_AUTO_TEST_CASE(all_valid_returns_unchanged)
+{
+  using namespace MzPeak::Util;
+
+  const std::vector<double> values{1.0, 2.0, 3.0, 4.0, 5.0};
+  std::vector<bool> valid(values.size(), true);
+  const std::vector<double> beta{0.1};
+
+  std::vector<double> out(reconstruct_null_mz(values, valid, beta));
+
+  BOOST_TEST(out.size() == values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    BOOST_TEST(out[i] == values[i], boost::test_tools::tolerance(1e-12));
+  }
+}
