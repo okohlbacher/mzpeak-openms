@@ -17,7 +17,7 @@ std::string data_kind_to_string(DataKind dk)
 
   switch (dk) {
   case DataArray:
-    return "data_arrays";
+    return "data arrays";
   case Peaks:
     return "peaks";
   case Metadata:

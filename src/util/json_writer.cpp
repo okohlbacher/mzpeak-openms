@@ -76,7 +76,7 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
 
   for (const auto& file : files) {
     json::object o;
-    o["path"] = file.name;
+    o["name"] = file.name;
     o["format"] = "parquet";
     o["entity_type"] = file.entity_type;
     o["data_kind"] = file.data_kind;
