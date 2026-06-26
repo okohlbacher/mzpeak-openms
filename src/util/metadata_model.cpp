@@ -349,6 +349,8 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
     auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
 
     for (int64_t r = 0; r < spectrum->length(); ++r) {
+      // F7: outer struct null => children are unreliable, skip the row.
+      if (spectrum->IsNull(r)) continue;
       if (index->IsNull(r)) continue;
 
       SpectrumMetadata m;
