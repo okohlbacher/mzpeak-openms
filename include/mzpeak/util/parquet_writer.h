@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -88,6 +89,8 @@ struct SpectrumMetaRow {
   uint64_t index;
   std::string id;
   uint8_t ms_level;
+  std::optional<double> retention_time;
+  std::optional<int> polarity;
   uint64_t number_of_data_points;
   uint64_t number_of_peaks;
   /// MS_1000525 spectrum representation CURIE: "MS:1000128" (profile) or

@@ -708,8 +708,8 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
         auto scan(std::static_pointer_cast<arrow::StructArray>(chunk));
 
         for (int64_t r = 0; r < scan->length(); ++r) {
-          // source_index NULL: skip (scan rows for MS1 have valid source_index
-          // in small.mzpeak — every scan row has a non-null source_index).
+          // F7: outer struct null => row carries no scan data, skip.
+          if (scan->IsNull(r)) continue;
           auto src_idx = opt_int<uint64_t>(scan, "source_index", r);
           if (!src_idx) continue;
 

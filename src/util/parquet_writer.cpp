@@ -51,6 +51,28 @@ std::shared_ptr<arrow::Array> build_array(const std::vector<T>& values)
 }
 
 /******************************************************************************/
+// Build a nullable Arrow array from a vector of optionals.  Missing values
+// become Arrow nulls; present values are appended as-is.
+template <typename Builder, typename T>
+std::shared_ptr<arrow::Array>
+build_optional_array(const std::vector<std::optional<T>>& values)
+{
+  Builder builder;
+  check(builder.Reserve(static_cast<int64_t>(values.size())), "reserve array");
+  for (const auto& v : values) {
+    if (v.has_value()) {
+      check(builder.Append(static_cast<typename Builder::value_type>(*v)),
+            "append value");
+    } else {
+      check(builder.AppendNull(), "append null");
+    }
+  }
+  std::shared_ptr<arrow::Array> array;
+  check(builder.Finish(&array), "finish array");
+  return array;
+}
+
+/******************************************************************************/
 // Write an Arrow table to a Parquet sink with the project's standard
 // properties: ZSTD, statistics, page index, store_schema, a sorting column
 // on the first leaf (the entity index), a bounded row-group size, and
@@ -194,12 +216,16 @@ void write_spectra_metadata_to_sink(
   std::vector<uint64_t> index;
   std::vector<std::string> id;
   std::vector<uint8_t> ms_level;
+  std::vector<std::optional<double>> time;
+  std::vector<std::optional<int>> polarity;
   std::vector<uint64_t> n_points;
   std::vector<uint64_t> n_peaks;
   std::vector<std::string> representation;
   index.reserve(rows.size());
   id.reserve(rows.size());
   ms_level.reserve(rows.size());
+  time.reserve(rows.size());
+  polarity.reserve(rows.size());
   n_points.reserve(rows.size());
   n_peaks.reserve(rows.size());
   representation.reserve(rows.size());
@@ -207,6 +233,8 @@ void write_spectra_metadata_to_sink(
     index.push_back(r.index);
     id.push_back(r.id);
     ms_level.push_back(r.ms_level);
+    time.push_back(r.retention_time);
+    polarity.push_back(r.polarity);
     n_points.push_back(r.number_of_data_points);
     n_peaks.push_back(r.number_of_peaks);
     representation.push_back(r.representation);
@@ -218,6 +246,8 @@ void write_spectra_metadata_to_sink(
       arrow::field("index", arrow::uint64(), /*nullable=*/true),
       arrow::field("id", arrow::large_utf8(), /*nullable=*/true),
       arrow::field("MS_1000511_ms_level", arrow::uint8(), /*nullable=*/true),
+      arrow::field("time", arrow::float64(), /*nullable=*/true),
+      arrow::field("MS_1000465_scan_polarity", arrow::int32(), /*nullable=*/true),
       arrow::field("MS_1003060_number_of_data_points", arrow::uint64(),
                    /*nullable=*/true),
       arrow::field("MS_1003059_number_of_peaks", arrow::uint64(),
@@ -230,6 +260,8 @@ void write_spectra_metadata_to_sink(
       build_array<arrow::UInt64Builder>(index),
       build_array<arrow::LargeStringBuilder>(id),
       build_array<arrow::UInt8Builder>(ms_level),
+      build_optional_array<arrow::DoubleBuilder>(time),
+      build_optional_array<arrow::Int32Builder>(polarity),
       build_array<arrow::UInt64Builder>(n_points),
       build_array<arrow::UInt64Builder>(n_peaks),
       build_array<arrow::LargeStringBuilder>(representation),

@@ -39,6 +39,9 @@ struct SpectrumData {
   /// Optional retention time in seconds.
   std::optional<double> retention_time;
 
+  /// Optional scan polarity: 1 = positive, -1 = negative.
+  std::optional<int> polarity;
+
   /// Optional spectrum ID string; auto-generated ("index=N") when absent.
   std::optional<std::string> id;
 };

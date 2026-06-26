@@ -14,6 +14,7 @@ directory of this repository.
 #include <zip.h>
 
 #include "mzpeak/exception.h"
+#include "mzpeak/schema/data_kind.h"
 #include "mzpeak/util/json_writer.h"
 #include "mzpeak/util/parquet_writer.h"
 #include "mzpeak/writer.h"
@@ -91,19 +92,31 @@ bool any_centroid(const std::vector<SpectrumData>& spectra)
                              [](const SpectrumData& s) { return s.centroid; });
 }
 
+bool any_profile(const std::vector<SpectrumData>& spectra)
+{
+  return std::ranges::any_of(spectra,
+                             [](const SpectrumData& s) { return !s.centroid; });
+}
+
 /******************************************************************************/
 // mzpeak_index.json describing the data + metadata tables (+ peaks if present).
 // WRT-2: when `run_metadata` is non-null, its serialized run-level blocks are
 // merged into the emitted `metadata{}` alongside `version`.
-std::string spectra_index_json(bool with_peaks,
+std::string spectra_index_json(bool with_data,
+                               bool with_peaks,
                                const RunMetadata* run_metadata = nullptr)
 {
-  std::vector<Util::IndexFileEntry> files{
-      {"spectra_data.parquet", "spectrum", "data arrays"},
-      {"spectra_metadata.parquet", "spectrum", "metadata"},
-  };
+  using Schema::DataKind;
+  std::vector<Util::IndexFileEntry> files;
+  if (with_data) {
+    files.push_back({"spectra_data.parquet", "spectrum",
+                     Schema::data_kind_to_string(DataKind::DataArray)});
+  }
+  files.push_back({"spectra_metadata.parquet", "spectrum",
+                   Schema::data_kind_to_string(DataKind::Metadata)});
   if (with_peaks) {
-    files.push_back({"spectra_peaks.parquet", "spectrum", "peaks"});
+    files.push_back({"spectra_peaks.parquet", "spectrum",
+                     Schema::data_kind_to_string(DataKind::Peaks)});
   }
   if (run_metadata != nullptr) {
     return Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json());
@@ -124,6 +137,8 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
     rows.push_back({/*index=*/static_cast<uint64_t>(i),
                     /*id=*/s.id.value_or("index=" + std::to_string(i)),
                     /*ms_level=*/s.ms_level,
+                    /*retention_time=*/s.retention_time,
+                    /*polarity=*/s.polarity,
                     /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
                     /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
                     /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
@@ -199,15 +214,16 @@ void write_spectra_directory_impl(const fs::path& dir,
 
   try {
     const std::size_t total = spectra.size();
+    const bool with_data = any_profile(spectra);
     const bool with_peaks = any_centroid(spectra);
 
-    // Profile points -> data table (always present; may be empty).
-    PointColumns data(flatten(spectra, /*want_centroid=*/false));
-    Util::write_point_spectra_data((tmp_dir / "spectra_data.parquet").string(),
-                                   data.spectrum_index, data.mz, data.intensity,
-                                   point_file_kv(total, data.mz.size()));
+    if (with_data) {
+      PointColumns data(flatten(spectra, /*want_centroid=*/false));
+      Util::write_point_spectra_data((tmp_dir / "spectra_data.parquet").string(),
+                                     data.spectrum_index, data.mz, data.intensity,
+                                     point_file_kv(total, data.mz.size()));
+    }
 
-    // Centroid points -> peaks table (only when present).
     if (with_peaks) {
       PointColumns peaks(flatten(spectra, /*want_centroid=*/true));
       Util::write_point_spectra_data((tmp_dir / "spectra_peaks.parquet").string(),
@@ -219,8 +235,11 @@ void write_spectra_directory_impl(const fs::path& dir,
                                  build_metadata_rows(spectra));
 
     write_index_file(tmp_dir / "mzpeak_index.json",
-                     spectra_index_json(with_peaks, run_metadata));
+                     spectra_index_json(with_data, with_peaks, run_metadata));
 
+    // Remove any existing target before the atomic rename (M10: POSIX rename
+    // returns ENOTEMPTY for non-empty directories).
+    if (fs::exists(dir)) fs::remove_all(dir);
     fs::rename(tmp_dir, dir);
   } catch (...) {
     if (fs::exists(tmp_dir)) {
@@ -240,14 +259,18 @@ void write_spectra_archive_impl(const fs::path& zip_path,
   validate(spectra, "write_spectra_archive");
 
   const std::size_t total = spectra.size();
+  const bool with_data = any_profile(spectra);
   const bool with_peaks = any_centroid(spectra);
 
   // Encode all members in memory first.  These strings back the libzip
   // sources and MUST stay alive until zip_close returns.
-  PointColumns data(flatten(spectra, /*want_centroid=*/false));
-  std::string data_bytes(
-      Util::point_spectra_data_bytes(data.spectrum_index, data.mz, data.intensity,
-                                     point_file_kv(total, data.mz.size())));
+  std::string data_bytes;
+  if (with_data) {
+    PointColumns data(flatten(spectra, /*want_centroid=*/false));
+    data_bytes =
+        Util::point_spectra_data_bytes(data.spectrum_index, data.mz, data.intensity,
+                                       point_file_kv(total, data.mz.size()));
+  }
 
   std::string peaks_bytes;
   if (with_peaks) {
@@ -259,7 +282,7 @@ void write_spectra_archive_impl(const fs::path& zip_path,
 
   std::string metadata_bytes(
       Util::spectra_metadata_bytes(build_metadata_rows(spectra)));
-  std::string index_json(spectra_index_json(with_peaks, run_metadata));
+  std::string index_json(spectra_index_json(with_data, with_peaks, run_metadata));
 
   int errnum = 0;
   zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
@@ -275,7 +298,9 @@ void write_spectra_archive_impl(const fs::path& zip_path,
   // Add the members as STORED.  On any error, discard the (unwritten) archive
   // so no partial file is left behind, then rethrow.
   try {
-    add_stored_member(archive, "spectra_data.parquet", data_bytes);
+    if (with_data) {
+      add_stored_member(archive, "spectra_data.parquet", data_bytes);
+    }
     if (with_peaks) {
       add_stored_member(archive, "spectra_peaks.parquet", peaks_bytes);
     }

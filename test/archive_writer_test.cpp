@@ -159,8 +159,8 @@ BOOST_AUTO_TEST_CASE(handles_empty_input)
   Index index = MzPeak::open(archive.path.string());
   BOOST_TEST(index.spectra().size() == 0);
 
-  BOOST_TEST(member_compression(archive.path, "spectra_data.parquet") ==
-             static_cast<zip_int32_t>(ZIP_CM_STORE));
+  // No profile spectra => no spectra_data.parquet written (H3: skip empty table).
+  BOOST_TEST(member_compression(archive.path, "spectra_data.parquet") == -1);
 }
 
 /******************************************************************************/

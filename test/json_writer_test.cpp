@@ -97,7 +97,7 @@ BOOST_AUTO_TEST_CASE(mzpeak_index_round_trips)
   for (const auto& fv : file_array) {
     BOOST_TEST(fv.is_object());
     const json::object& fo = fv.as_object();
-    BOOST_TEST((fo.contains("name") && fo.at("name").is_string()));
+    BOOST_TEST((fo.contains("path") && fo.at("path").is_string()));
 
     // Constructs via the JSON ctor without throwing.
     Schema::File file(fo);
