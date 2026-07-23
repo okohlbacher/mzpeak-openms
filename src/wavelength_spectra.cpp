@@ -8,11 +8,10 @@ directory of this repository.
 
 #include <functional>
 #include <memory>
-#include <string>
-#include <unordered_map>
+#include <ranges>
 
-#include "mzpeak/exception.h"
-#include "mzpeak/query.h"
+#include "mzpeak/data/signals.h"
+#include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/util/enumerable_proxy.h"
 #include "mzpeak/wavelength_spectra.h"
 #include "mzpeak/wavelength_spectrum.h"
@@ -20,51 +19,42 @@ directory of this repository.
 namespace MzPeak {
 
 /******************************************************************************/
-WavelengthSpectra::WavelengthSpectra() {}
+WavelengthSpectra::WavelengthSpectra()
+    : EnumerableProxy(
+          0,
+          std::bind(std::mem_fn(&WavelengthSpectra::fetch),
+                    this,
+                    std::placeholders::_1))
+{
+}
 
 /******************************************************************************/
-WavelengthSpectra::WavelengthSpectra(
-    std::unique_ptr<Util::Parquet> data,
-    std::optional<std::size_t> count,
-    std::unordered_map<std::string, std::size_t> id_to_index)
-    : EnumerableProxy(0,
-                      std::bind(std::mem_fn(&WavelengthSpectra::fetch),
-                                this,
-                                std::placeholders::_1))
-    , data_(std::make_shared<Data::Arrays>(std::move(data)))
-    , id_to_index_(std::move(id_to_index))
+WavelengthSpectra::WavelengthSpectra(std::unique_ptr<Data::Signals> data,
+                                      std::optional<std::size_t> count)
+    : EnumerableProxy(
+          0,
+          std::bind(std::mem_fn(&WavelengthSpectra::fetch),
+                    this,
+                    std::placeholders::_1))
+    , data_(std::move(data))
 {
-  // The wavelength spectrum count lives in the metadata table's
-  // `wavelength_spectrum_count` key; the data table does not carry it, so
-  // prefer the supplied count and fall back to the data table's record count
-  // otherwise.
   resize(count.value_or(data_->record_count()));
 }
 
 /******************************************************************************/
-WavelengthSpectrum WavelengthSpectra::by_id(const std::string& id) const
+WavelengthSpectrum WavelengthSpectra::fetch(uint64_t index)
 {
-  auto it = id_to_index_.find(id);
-  if (it == id_to_index_.end()) {
-    throw ParquetError("no wavelength spectrum with id '" + id + "'");
-  }
-  return fetch(it->second);
-}
+  using enum Schema::PSI::ArrayType;
+  std::vector<Data::ArrayIndex::Dimension> dims =
+      data_->array_index()->dimensions() |
+      std::views::filter([](auto& d) {
+        return d.array_type == ElectromagneticRadiation ||
+               d.array_type == Intensity;
+      }) |
+      std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
 
-/******************************************************************************/
-WavelengthSpectrum WavelengthSpectra::fetch(std::size_t index) const
-{
-  auto array_index(data_->array_index());
-  auto fields = data_->columns_to_fields(array_index.columns());
-
-  // RDR-4a: the index column is unsigned 64-bit.
-  auto dest = data_->field("wavelength_spectrum_index");
-  if (!dest.has_value()) return WavelengthSpectrum(array_index, nullptr);
-
-  Query query = Query::Builder(*dest).eq<uint64_t>(static_cast<uint64_t>(index));
-  auto map = data_->read_arrays(query, fields);
-
-  return WavelengthSpectrum(array_index, std::move(map));
+  std::unique_ptr<Util::Slice> slice = data_->select(dims, data_->index().eq(index));
+  return WavelengthSpectrum(index, data_, dims, std::move(slice));
 }
 
 } // namespace MzPeak

@@ -6,63 +6,31 @@ directory of this repository.
 
 */
 
-#include <string>
 #include <vector>
 
-#include "mzpeak/data/encoding.h"
-#include "mzpeak/exception.h"
-#include "mzpeak/schema/psi/data_type.h"
+#include "mzpeak/schema/psi/array_type.h"
+#include "mzpeak/util/delta_estimator.h"
 #include "mzpeak/wavelength_spectrum.h"
 
 namespace MzPeak {
 
 /******************************************************************************/
-inline std::vector<WavelengthSpectrum::wavelength_type>
-decode_wavelength(const Schema::ArrayIndex& index, Data::array_map_type& map)
+WavelengthSpectrum::WavelengthSpectrum(
+    uint64_t index,
+    std::shared_ptr<Data::Signals> data,
+    const std::vector<Data::ArrayIndex::Dimension>& dims,
+    std::unique_ptr<Util::Slice> slice)
+    : index_(index)
+    , decoder_(std::move(data), std::move(slice), Util::DeltaEstimator<double>({}))
+    , wavelength_()
+    , intensity_()
 {
-  // The wavelength axis is the PSI "wavelength array" (MS:1000617), which the
-  // ArrayType enum models as ElectromagneticRadiation.  In this file it is
-  // stored as 32-bit floating point (data_type MS:1000521), so it must be
-  // decoded with the Float32 encoding (decoding it as Float64 would misread
-  // the underlying Arrow FloatArray and yield garbage).  The public API
-  // exposes wavelengths as double, so widen the decoded float32 values.
-  Data::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
-  auto raw(enc.decode_array(Schema::PSI::ArrayType::ElectromagneticRadiation));
-
-  std::vector<WavelengthSpectrum::wavelength_type> res;
-  res.reserve(raw.size());
-  for (float v : raw)
-    res.push_back(static_cast<double>(v));
-  return res;
-}
-
-/******************************************************************************/
-inline std::vector<WavelengthSpectrum::intensity_type>
-decode_intensity(const Schema::ArrayIndex& index, Data::array_map_type& map)
-{
-  Data::Encoding<Schema::PSI::DataType::Float32> enc(map, index);
-  return enc.decode_array(Schema::PSI::ArrayType::Intensity);
-}
-
-/******************************************************************************/
-WavelengthSpectrum::WavelengthSpectrum(const Schema::ArrayIndex& idx,
-                                       std::unique_ptr<Data::array_map_type> map)
-    : array_index_(idx)
-    , map_(std::move(map))
-    , wavelength_(decode_wavelength(array_index_, *map_))
-    , intensity_(decode_intensity(array_index_, *map_))
-{
-  // wavelength and intensity are paired sample arrays; a length mismatch means
-  // the decode dropped or duplicated points and the spectrum is corrupt.
-  // Surface it rather than returning mismatched arrays (mirrors Spectrum).
-  // Either array may legitimately be empty (an absent index yields two empty
-  // arrays; some layouts carry only one of the two).
-  if (!wavelength_.empty() && !intensity_.empty() &&
-      wavelength_.size() != intensity_.size()) {
-    throw ParquetError("wavelength spectrum wavelength and intensity length "
-                       "mismatch: " +
-                       std::to_string(wavelength_.size()) + " vs " +
-                       std::to_string(intensity_.size()));
+  for (auto& dim : dims) {
+    if (dim.array_type == Schema::PSI::ArrayType::ElectromagneticRadiation) {
+      decoder_.decimal(dim, wavelength_);
+    } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {
+      decoder_.decimal(dim, intensity_);
+    }
   }
 }
 
@@ -78,18 +46,6 @@ const std::vector<WavelengthSpectrum::intensity_type>&
 WavelengthSpectrum::intensity() const
 {
   return intensity_;
-}
-
-/******************************************************************************/
-const Data::array_map_type& WavelengthSpectrum::raw_encoded_arrays() const
-{
-  return *map_;
-}
-
-/******************************************************************************/
-const Schema::ArrayIndex& WavelengthSpectrum::array_index() const
-{
-  return array_index_;
 }
 
 } // namespace MzPeak

@@ -161,15 +161,10 @@ test_names = [
     'archive_writer',
     'arrow',
     'chromatograms',
-    'chunked',
-    'chunked_chromatograms',
-    'detail_level',
     'directory',
-    'eic',
     'executor',
     'group',
     'index',
-    'index_metadata',
     'parquet',
     'record_count',
     'json_writer',
@@ -180,12 +175,9 @@ test_names = [
     'query',
     'roundtrip',
     'spectra',
-    'spectra_query',
-    'unsigned_index',
     'util',
     'wavelength_spectra',
     'writer',
-    'writer_metadata',
     'zip',
 ]
 
@@ -198,18 +190,6 @@ foreach test : test_names
                     link_with : libmzpeak_so),
          verbose : false)
 endforeach
-
-# spectrum_metadata requires a generous timeout: its RDR-10c multi-row sweep
-# opens small.mzpeak multiple times across 18 test cases.  Use 120s to give
-# headroom on slower CI machines (plan 01-02 multi-row coverage addition).
-test('spectrum_metadata',
-     executable('spectrum_metadata_test',
-                'test/spectrum_metadata_test.cpp',
-                include_directories : include,
-                dependencies : deps,
-                link_with : libmzpeak_so),
-     timeout : 120,
-     verbose : false)
 
 # Full end-to-end integration test: drives the whole reader API over every
 # bundled fixture plus a reverse round trip through the writer.  It decodes

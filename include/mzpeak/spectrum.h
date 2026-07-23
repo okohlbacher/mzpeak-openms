@@ -22,13 +22,6 @@ namespace MzPeak {
 // Forward declaration.
 class Spectra;
 
-/// RDR-25: how much of a spectrum a read should materialize.  `Full` decodes
-/// the m/z + intensity arrays (the default, unchanged behavior); `MetadataOnly`
-/// returns only the per-spectrum scalar metadata and touches no array data —
-/// a large speedup for metadata-only scans.  Mirrors the Rust reader's
-/// `set_detail_level`.
-enum class DetailLevel { Full, MetadataOnly };
-
 /**
  * Access to a single spectrum in an MzPeak file.
  */
@@ -65,15 +58,6 @@ protected:
            const std::vector<Data::ArrayIndex::Dimension>&,
            std::unique_ptr<Util::Slice>,
            std::shared_ptr<Metadata::Table>);
-
-  /// RDR-25: tag selecting the no-decode construction path below.
-  struct MetadataOnlyTag {};
-
-  /// RDR-25: metadata-only constructor.  Leaves `mz_`/`intensity_` empty and
-  /// `map_`/`array_index_` default, carrying only the scalar `metadata`.  No
-  /// Parquet array is read and no decode runs — `mz()`/`intensity()` return
-  /// empty vectors while `metadata()` and its accessors work normally.
-  Spectrum(MetadataOnlyTag, SpectrumMetadata metadata);
 
 private:
   uint64_t index_;

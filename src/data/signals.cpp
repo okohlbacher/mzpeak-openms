@@ -6,12 +6,16 @@ top-level directory of this repository.
 
 */
 
+#include "mzpeak/data/signals.h"
+
 #include <arrow/record_batch.h>
+#include <bit>
 #include <memory>
 #include <parquet/arrow/reader.h>
+#include <parquet/statistics.h>
 
 #include "mzpeak/data/array_index.h"
-#include "mzpeak/data/signals.h"
+#include "mzpeak/schema/entity_type.h"
 #include "mzpeak/util/executor.h"
 #include "mzpeak/util/planner.h"
 #include "mzpeak/util/projection.h"
@@ -38,10 +42,15 @@ std::shared_ptr<ArrayIndex> Signals::Impl::parse_array_index() const
   Util::Parquet::file_metadata_t fmd(parquet_->file_metadata());
   EntityType entity_type = parquet_->index_file().entity_type;
 
-  std::string num_key(Schema::entity_type_to_string(entity_type) + "_count");
+  // Normalize entity type name: replace spaces with underscores for KV keys
+  // (e.g. "wavelength spectrum" → "wavelength_spectrum_count").
+  std::string et_key = Schema::entity_type_to_string(entity_type);
+  std::ranges::replace(et_key, ' ', '_');
+
+  std::string num_key(et_key + "_count");
   std::optional<std::size_t> num_entities(parquet_->kv_size_t(fmd, num_key));
 
-  std::string index_key(Schema::entity_type_to_string(entity_type) + "_array_index");
+  std::string index_key(et_key + "_array_index");
   auto index_str(parquet_->kv_string(fmd, index_key));
   if (!index_str.has_value()) throw ParquetError("missing array_index");
 
@@ -80,25 +89,47 @@ std::size_t Signals::record_count() const
   auto ne(impl_->array_index_->num_entities());
   if (ne.has_value()) return *ne;
 
-  // The first column should be the index.
-  //
-  // FIXME: Is there a better way to do this?
-  // const Schema::ArrayIndex::Column& index(impl_->array_index_.columns()[0]);
-  // std::optional<int> col_idx(impl_->array_index_.column_index(index));
-  // if (!col_idx.has_value()) throw ParquetError("missing column: " + index.path);
-  //
-  // std::optional<Util::Parquet::Stats> stats(
-  //     impl_->parquet_->statistics(-1, *col_idx));
-  //
-  // if (stats.has_value()) {
-  //   auto tptr(Util::parquet_statistics_cast<Schema::PSI::DataType::Int64>(
-  //       *stats->column, *stats->stats));
-  //
-  //   return tptr->max();
-  // }
+  // Fall back to scanning row-group max statistics on the entity-index column.
+  // The index is 0-based and contiguous so COUNT = max_index + 1.
+  const std::string prefix = impl_->array_index_->prefix();
+  const std::string index_col = [&]() -> std::string {
+    switch (impl_->array_index_->entity_type()) {
+    case Schema::EntityType::Chromatogram:
+      return "chromatogram_index";
+    case Schema::EntityType::WavelengthSpectrum:
+      return "wavelength_spectrum_index";
+    default:
+      return "spectrum_index";
+    }
+  }();
 
-  // FIXME: Should we scan the file at this point?
-  throw ParquetError("no num_entities cache and no column statistics!");
+  auto dest = impl_->parquet_->field(prefix, index_col);
+  if (!dest.has_value()) {
+    throw ParquetError("record_count: missing " + prefix + "." + index_col +
+                       " column");
+  }
+  const int col = dest->second->absolute_index();
+  auto fmd = impl_->parquet_->file_metadata();
+  if (fmd->num_row_groups() == 0) return 0;
+
+  int64_t max_signed = -1;
+  for (int g = 0; g < fmd->num_row_groups(); ++g) {
+    auto chunk = fmd->RowGroup(g)->ColumnChunk(col);
+    if (!chunk->is_stats_set()) continue;
+    auto stats = chunk->statistics();
+    if (!stats || !stats->HasMinMax()) continue;
+    auto typed = std::dynamic_pointer_cast<parquet::Int64Statistics>(stats);
+    if (!typed) continue;
+    max_signed = std::max(max_signed, typed->max());
+  }
+
+  if (max_signed < 0) {
+    if (fmd->num_rows() == 0) return 0;
+    throw ParquetError("record_count: no statistics for " + prefix + "." +
+                       index_col);
+  }
+  // The index column is unsigned 64-bit stored with a signed physical type.
+  return static_cast<std::size_t>(std::bit_cast<uint64_t>(max_signed)) + 1;
 }
 
 /******************************************************************************/
@@ -117,7 +148,9 @@ const std::shared_ptr<Schema::GroupMap>& Signals::groups() const
 Util::Query::Builder Signals::index() const
 {
   auto entity_type = impl_->array_index_->entity_type();
-  auto field_name = Schema::entity_type_to_string(entity_type) + "_index";
+  std::string field_name = Schema::entity_type_to_string(entity_type);
+  std::ranges::replace(field_name, ' ', '_');
+  field_name += "_index";
   auto index_field = field(field_name);
 
   if (!index_field.has_value()) {

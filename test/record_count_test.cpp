@@ -6,7 +6,7 @@ directory of this repository.
 
 */
 
-// RDR-11: exercise Arrays::record_count()'s statistics fallback.
+// RDR-11: exercise Signals::record_count()'s statistics fallback.
 //
 // All the bundled .mzpeak files carry the `spectrum_count` KV, so the
 // fallback never runs against them.  To drive it we synthesise two standalone
@@ -24,8 +24,8 @@ directory of this repository.
 #include <string>
 #include <vector>
 
-#include "mzpeak/data/arrays.h"
-#include "mzpeak/directory.h"
+#include "mzpeak/data/signals.h"
+#include "mzpeak/io/directory.h"
 #include "mzpeak/schema/entity_type.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/util/parquet.h"
@@ -43,11 +43,11 @@ struct TempFile {
   std::string path;
 };
 
-// Build a Data::Arrays reader over a freshly written Parquet file living in the
+// Build a Data::Signals reader over a freshly written Parquet file living in the
 // current directory (the meson test cwd).  `file_kv` is forwarded verbatim, so
 // callers control whether the `spectrum_count` KV is present.
-MzPeak::Data::Arrays make_reader(const std::string& file_name,
-                                 const std::map<std::string, std::string>& file_kv)
+MzPeak::Data::Signals make_reader(const std::string& file_name,
+                                  const std::map<std::string, std::string>& file_kv)
 {
   using namespace MzPeak;
 
@@ -61,14 +61,14 @@ MzPeak::Data::Arrays make_reader(const std::string& file_name,
 
   // Re-open the file through the public reader stack so record_count() runs
   // against a real ArrayIndex + column statistics, exactly as in production.
-  Directory dir(".");
-  std::unique_ptr<File> data(dir.read_file(file_name));
+  IO::Directory dir(".");
+  std::unique_ptr<IO::File> data(dir.read_file(file_name));
 
   Schema::File schema_file(file_name);
   schema_file.entity_type = Schema::EntityType::Spectrum;
 
   auto parquet(std::make_unique<Util::Parquet>(std::move(data), schema_file));
-  return Data::Arrays(std::move(parquet));
+  return Data::Signals(std::move(parquet));
 }
 
 // A minimal valid array_index JSON.  The ArrayIndex constructor only prepends

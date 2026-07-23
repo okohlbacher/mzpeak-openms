@@ -97,7 +97,7 @@ std::vector<MzPeak::SpectrumData> read_first_sorted(const std::string& path,
   return out;
 }
 
-/// Drive the full reader API over one fixture and assert internal consistency.
+/// Drive the reader API over one fixture and assert internal consistency.
 /// `expected` is the known spectrum count when we have one (nullopt = just
 /// require a non-empty file).
 void exercise_reader(const std::string& path, std::optional<std::size_t> expected)
@@ -109,84 +109,10 @@ void exercise_reader(const std::string& path, std::optional<std::size_t> expecte
   BOOST_TEST(n > 0u);
   if (expected) BOOST_TEST(n == *expected);
 
-  // Every spectrum must read with paired m/z and intensity arrays.  This is
-  // the one full decode pass over the fixture; capture the retention times so
-  // the EIC check below need not decode everything a second time.
-  std::size_t with_time = 0;
-  std::string first_id;
-  std::size_t first_mz_size = 0;
-  std::vector<double> times;
   for (std::size_t i = 0; i < n; ++i) {
     auto s = spectra[i];
     BOOST_TEST(s.mz().size() == s.intensity().size());
-    if (i == 0) {
-      first_id = s.metadata().id;
-      first_mz_size = s.mz().size();
-      BOOST_TEST(s.metadata().index == 0u);
-    }
-    if (s.retention_time().has_value()) {
-      ++with_time;
-      times.push_back(s.retention_time().value());
-    }
   }
-
-  // RDR-15: by-id access round-trips when ids are present.
-  if (!first_id.empty()) {
-    auto idx = spectra.index_for_id(first_id);
-    BOOST_TEST(idx.has_value());
-    if (idx) {
-      BOOST_TEST(*idx == 0u);
-      auto s = spectra.by_id(first_id);
-      BOOST_TEST(s.mz().size() == first_mz_size);
-    }
-    // An id that cannot exist yields nullopt (and by_id throws).
-    BOOST_TEST(!spectra.index_for_id("\x01 no such id").has_value());
-    BOOST_CHECK_THROW(spectra.by_id("\x01 no such id"), std::exception);
-  }
-
-  // RDR-16: a fully-open RT range selects exactly the time-bearing spectra,
-  // in ascending order.
-  auto in_range = spectra.indices_in_time_range(-1e30, 1e30);
-  BOOST_TEST(in_range.size() == with_time);
-  BOOST_TEST(std::ranges::is_sorted(in_range));
-
-  // RDR-17: an EIC over a narrow RT window (derived from the times captured
-  // above, so we decode only a handful of scans) yields exactly the scans the
-  // RT index selects for the same window, in ascending time order.  The full
-  // m/z range makes it a total-ion trace over those scans.
-  if (!times.empty()) {
-    std::ranges::sort(times);
-    double lo = times.front();
-    double hi = times[std::min<std::size_t>(2, times.size() - 1)];
-    auto window = spectra.indices_in_time_range(lo, hi);
-    auto eic = spectra.extract_ion_chromatogram(-1e30, 1e30, lo, hi);
-    BOOST_TEST(eic.size() == window.size());
-    for (std::size_t i = 1; i < eic.size(); ++i) {
-      BOOST_TEST(eic[i - 1].time <= eic[i].time);
-    }
-  }
-
-  // RDR-18: batch read preserves input order and bounds out-of-range indices.
-  std::vector<std::size_t> req{n - 1, 0u, n - 1};
-  auto batch = spectra.get_spectra_batch(req);
-  BOOST_TEST(batch.size() == req.size());
-  {
-    auto s0 = spectra[0];
-    auto slast = spectra[n - 1];
-    BOOST_TEST(batch[0].mz().size() == slast.mz().size());
-    BOOST_TEST(batch[1].mz().size() == s0.mz().size());
-  }
-  auto oob = spectra.get_spectra_batch({n + 100});
-  BOOST_TEST(oob.size() == 1u);
-  BOOST_TEST(oob[0].mz().empty());
-
-  // NOTE: the auxiliary chromatogram / wavelength tables are validated in the
-  // per-fixture cases below rather than here, because their reader support is
-  // currently uneven across fixtures (see docs/reader-backlog.md, RDR-28):
-  // chunked-layout chromatograms now decode (small.chunked / small.numpress,
-  // RDR-28a), as do point chromatograms including has_uv's multi-intensity
-  // case (RDR-29).  Chunked-layout WAVELENGTH spectra remain deferred
-  // (RDR-28b).  This e2e codifies the capability that exists today.
 }
 
 /// Reverse round trip: read a fixture, write the first `cap` spectra back out

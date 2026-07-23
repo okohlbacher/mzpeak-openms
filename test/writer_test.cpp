@@ -315,24 +315,6 @@ BOOST_AUTO_TEST_CASE(metadata_defaults_after_write)
   auto spectra = index.spectra();
   const auto& s = spectra[0];
 
-  BOOST_TEST(s.ms_level().has_value());
-  BOOST_TEST(s.ms_level().value() == 1);
-  BOOST_TEST(!s.retention_time().has_value());
+  BOOST_TEST(s.ms_level() == uint8_t(1));
 }
 
-/******************************************************************************/
-// TC-11: the point-layout writer does not produce precursor records; the
-// read-back spectrum must report an empty precursors list.
-BOOST_AUTO_TEST_CASE(precursors_absent_after_write)
-{
-  using namespace MzPeak;
-  TempDir dir;
-  std::vector<SpectrumData> in{{{100.0, 200.0}, {1.0f, 2.0f}}};
-  write_spectra_directory(dir.path, in);
-
-  Index index = MzPeak::open(dir.path.string());
-  auto spectra = index.spectra();
-  const auto& s = spectra[0];
-
-  BOOST_TEST(s.metadata().precursors.empty());
-}

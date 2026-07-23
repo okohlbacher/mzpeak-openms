@@ -8,10 +8,12 @@ directory of this repository.
 
 #pragma once
 
+#include "mzpeak/chromatograms.h"
 #include "mzpeak/io/archive.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/util/parquet.h"
+#include "mzpeak/wavelength_spectra.h"
 
 namespace MzPeak {
 
@@ -41,13 +43,18 @@ public:
 
   /**
    * Access the spectra in the file.
-   *
-   * RDR-25: @p detail_level selects how much of each spectrum a fetch
-   * materializes.  `Full` (the default) decodes the m/z + intensity arrays;
-   * `MetadataOnly` returns per-spectrum scalar metadata with empty arrays and
-   * reads no array data — a speedup for metadata-only scans.
    */
-  Spectra spectra(DetailLevel detail_level = DetailLevel::Full) const;
+  Spectra spectra() const;
+
+  /**
+   * Access the chromatograms in the file.
+   */
+  Chromatograms chromatograms() const;
+
+  /**
+   * Access the wavelength spectra in the file.
+   */
+  WavelengthSpectra wavelength_spectra() const;
 
   /**
    * Open a Parquet file directly.

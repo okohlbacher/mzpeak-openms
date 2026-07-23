@@ -11,8 +11,10 @@ directory of this repository.
 #include <memory>
 #include <vector>
 
-#include "mzpeak/data/arrays.h"
-#include "mzpeak/schema/psi/data_type.h"
+#include "mzpeak/data/array_index.h"
+#include "mzpeak/data/encoding.h"
+#include "mzpeak/data/signals.h"
+#include "mzpeak/util/slice.h"
 
 namespace MzPeak {
 
@@ -24,21 +26,13 @@ class Chromatograms;
  */
 class Chromatogram final {
 public:
-  /// Ensure types stay in sync.  The time array (MS:1000595) is stored as
-  /// 64-bit floating point (MS:1000523).
-  using time_type =
-      Schema::PSI::data_type_traits<Schema::PSI::DataType::Float64>::value_type;
+  using time_type = double;
+  using intensity_type = float;
 
-  /// Ensure types stay in sync.  The intensity array (MS:1000515) is stored
-  /// as 32-bit floating point (MS:1000521).
-  using intensity_type =
-      Schema::PSI::data_type_traits<Schema::PSI::DataType::Float32>::value_type;
-
-  // Special members are implicit (rule of zero): copyable AND movable, so
-  // returning a Chromatogram by value moves its arrays rather than copying.
+  // Special members are implicit (rule of zero): copyable AND movable.
 
   /**
-   * Time values (the MS:1000595 time array).
+   * Time values (the MS:1000595 relative-time-offset array).
    */
   const std::vector<time_type>& time() const;
 
@@ -47,30 +41,19 @@ public:
    */
   const std::vector<intensity_type>& intensity() const;
 
-  /**
-   * Raw access to the remaining values stored in the MzPeak file for this
-   * chromatogram.  These values need to be decoded using the Encoding class
-   * (the array index will also be needed).
-   *
-   * NOTE: time and intensity values have been decoded already; use the
-   * corresponding methods in this class to fetch those values instead.
-   */
-  const Data::array_map_type& raw_encoded_arrays() const;
-
-  /**
-   * The array index for this chromatogram.
-   */
-  const Schema::ArrayIndex& array_index() const;
-
 protected:
   friend class Chromatograms;
 
-  /// Internal constructor.
-  Chromatogram(const Schema::ArrayIndex&, std::unique_ptr<Data::array_map_type>);
+  Chromatogram(uint64_t index,
+               std::shared_ptr<Data::Signals>,
+               const std::vector<Data::ArrayIndex::Dimension>&,
+               std::unique_ptr<Util::Slice>);
 
 private:
-  Schema::ArrayIndex array_index_;
-  std::shared_ptr<Data::array_map_type> map_;
+  using decoder_type = Data::Encoding::Decoder<double>;
+
+  uint64_t index_;
+  decoder_type decoder_;
   std::vector<time_type> time_;
   std::vector<intensity_type> intensity_;
 };

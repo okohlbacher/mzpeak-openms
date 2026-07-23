@@ -12,6 +12,9 @@ in the LICENSE file found in the top-level directory of this project.
 #include <memory>
 #include <ranges>
 
+#include "mzpeak/index.h"
+#include "mzpeak/open.h"
+#include "mzpeak/schema/file.h"
 #include "mzpeak/schema/group.h"
 #include "mzpeak/util/compat.h" // IWYU pragma: keep
 #include "mzpeak/util/query.h"
@@ -143,21 +146,21 @@ BOOST_AUTO_TEST_CASE(less_equal_predicate_matches_correctly)
   auto dest = parquet->field("point", "spectrum_index");
   BOOST_TEST(dest.has_value());
 
-  // Build a "spectrum_index <= 5" query.
-  Query le = Query::Builder(*dest).le<int64_t>(5);
+  // Build a "spectrum_index <= 5" query (uint64 column).
+  Util::Query le = Util::Query::Builder(*dest).le<uint64_t>(5);
 
   // Scalar callback: return a fixed value regardless of destination.
-  auto value = [](int64_t x) {
-    return [x](Query::destination_t) -> Query::Result<Query::value_t> {
-      return Query::Result<Query::value_t>(Query::value_t{x});
+  auto value = [](uint64_t x) {
+    return [x](Schema::Column) -> Util::Query::Result<Util::Query::value_t> {
+      return Util::Query::Result<Util::Query::value_t>(Util::Query::value_t{x});
     };
   };
 
   // Range callback: return a fixed [min, max] range regardless of destination.
-  auto range = [](int64_t lo, int64_t hi) {
-    return [lo, hi](Query::destination_t) -> Query::Result<Query::range_t> {
-      return Query::Result<Query::range_t>(
-          Query::range_t{std::pair<int64_t, int64_t>{lo, hi}});
+  auto range = [](uint64_t lo, uint64_t hi) {
+    return [lo, hi](Schema::Column) -> Util::Query::Result<Util::Query::range_t> {
+      return Util::Query::Result<Util::Query::range_t>(
+          Util::Query::range_t{std::pair<uint64_t, uint64_t>{lo, hi}});
     };
   };
 
@@ -203,39 +206,39 @@ BOOST_AUTO_TEST_CASE(negation_applies_to_compound_queries)
   BOOST_TEST(dest.has_value());
 
   // Scalar callback: return a fixed value regardless of destination.
-  auto value = [](int64_t x) {
-    return [x](Query::destination_t) -> Query::Result<Query::value_t> {
-      return Query::Result<Query::value_t>(Query::value_t{x});
+  auto value = [](uint64_t x) {
+    return [x](Schema::Column) -> Util::Query::Result<Util::Query::value_t> {
+      return Util::Query::Result<Util::Query::value_t>(Util::Query::value_t{x});
     };
   };
 
   // AND branch: (x == 3) && (x >= 1)
-  Query both =
-      Query::Builder(*dest).eq<int64_t>(3) && Query::Builder(*dest).ge<int64_t>(1);
+  Util::Query both =
+      Util::Query::Builder(*dest).eq<uint64_t>(3).and_then(Util::Query::Builder(*dest).ge<uint64_t>(1));
   auto both3 = both.eval(value(3));
   BOOST_TEST(both3.has_value());
   BOOST_TEST(both3.value() == true); // 3 == 3 && 3 >= 1
 
-  auto notboth3 = (!both).eval(value(3));
+  auto notboth3 = both.negate().eval(value(3));
   BOOST_TEST(notboth3.has_value());
   BOOST_TEST(notboth3.value() == false); // negation must invert the AND
 
-  auto notboth7 = (!both).eval(value(7));
+  auto notboth7 = both.negate().eval(value(7));
   BOOST_TEST(notboth7.has_value());
   BOOST_TEST(notboth7.value() == true); // 7 != 3 -> AND false -> negated true
 
   // OR branch: (x == 3) || (x == 5)
-  Query either =
-      Query::Builder(*dest).eq<int64_t>(3) || Query::Builder(*dest).eq<int64_t>(5);
+  Util::Query either =
+      Util::Query::Builder(*dest).eq<uint64_t>(3).or_else(Util::Query::Builder(*dest).eq<uint64_t>(5));
   auto either3 = either.eval(value(3));
   BOOST_TEST(either3.has_value());
   BOOST_TEST(either3.value() == true); // 3 == 3
 
-  auto noteither3 = (!either).eval(value(3));
+  auto noteither3 = either.negate().eval(value(3));
   BOOST_TEST(noteither3.has_value());
   BOOST_TEST(noteither3.value() == false); // negation must invert the OR
 
-  auto noteither7 = (!either).eval(value(7));
+  auto noteither7 = either.negate().eval(value(7));
   BOOST_TEST(noteither7.has_value());
   BOOST_TEST(noteither7.value() == true); // 7 in neither -> OR false -> negated true
 }

@@ -6,11 +6,14 @@ directory of this repository.
 
 */
 
+#include "mzpeak/index.h"
+
+#include <arrow/util/key_value_metadata.h>
+#include <charconv>
 #include <memory>
 
 #include "mzpeak/data/signals.h"
 #include "mzpeak/exception.h"
-#include "mzpeak/index.h"
 #include "mzpeak/io/archive.h"
 #include "mzpeak/metadata/table.h"
 
@@ -130,19 +133,43 @@ void Index::Impl::parse_index()
 /******************************************************************************/
 Spectra Index::spectra() const
 {
-  auto data_it = impl_->find_file("spectra_data.parquet");
-  auto meta_it = impl_->find_file("spectra_metadata.parquet");
+  using enum Schema::DataKind;
 
-  if (data_it == impl_->files_.end()) {
-    throw ParquetError("missing files: spectra_data.parquet");
+  const Schema::File* data_file = nullptr;
+  const Schema::File* meta_file = nullptr;
+
+  for (const auto& file : impl_->files_) {
+    if (file.entity_type != Schema::EntityType::Spectrum) continue;
+    if (file.data_kind == DataArray || file.data_kind == Peaks) {
+      // Prefer DataArray (profile); fall back to Peaks (centroid-only).
+      if (!data_file || file.data_kind == DataArray) data_file = &file;
+    } else if (file.data_kind == Metadata) {
+      meta_file = &file;
+    }
+  }
+
+  if (!data_file) return Spectra(); // no spectrum data
+
+  const Schema::File* peaks_file = nullptr;
+  for (const auto& file : impl_->files_) {
+    if (file.entity_type == Schema::EntityType::Spectrum &&
+        file.data_kind == Peaks && data_file->data_kind == DataArray) {
+      peaks_file = &file;
+    }
+  }
+
+  std::unique_ptr<Metadata::Table> meta = nullptr;
+  if (meta_file) {
+    meta = std::make_unique<Metadata::Table>(parquet(*meta_file));
   }
 
   std::unique_ptr<Data::Signals> data =
-      std::make_unique<Data::Signals>(parquet(*data_it));
-  std::unique_ptr<Metadata::Table> meta = nullptr;
+      std::make_unique<Data::Signals>(parquet(*data_file));
 
-  if (meta_it != impl_->files_.end()) {
-    meta = std::make_unique<Metadata::Table>(parquet(*meta_it));
+  if (peaks_file) {
+    std::unique_ptr<Data::Signals> peaks =
+        std::make_unique<Data::Signals>(parquet(*peaks_file));
+    return Spectra(std::move(data), std::move(peaks), std::move(meta));
   }
 
   return Spectra(std::move(data), std::move(meta));
@@ -151,10 +178,6 @@ Spectra Index::spectra() const
 /******************************************************************************/
 WavelengthSpectra Index::wavelength_spectra() const
 {
-  // Resolve the wavelength spectrum tables by entity_type + data_kind (not by
-  // file name): the wavelength/intensity points live in the `data arrays`
-  // table.  The count lives in the metadata table's `wavelength_spectrum_count`
-  // key (the data table does not carry it).
   using enum Schema::DataKind;
 
   const Schema::File* data = nullptr;
@@ -162,7 +185,8 @@ WavelengthSpectra Index::wavelength_spectra() const
   for (const auto& file : impl_->files_) {
     if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
     if (file.data_kind == DataArray) data = &file;
-    else if (file.data_kind == Metadata) metadata = &file;
+    else if (file.data_kind == Metadata)
+      metadata = &file;
   }
 
   if (!data) return WavelengthSpectra();
@@ -185,7 +209,43 @@ WavelengthSpectra Index::wavelength_spectra() const
     }
   }
 
-  return WavelengthSpectra(parquet(*data), count);
+  return WavelengthSpectra(std::make_unique<Data::Signals>(parquet(*data)), count);
+}
+
+/******************************************************************************/
+Chromatograms Index::chromatograms() const
+{
+  using enum Schema::DataKind;
+
+  const Schema::File* data = nullptr;
+  const Schema::File* metadata = nullptr;
+  for (const auto& file : impl_->files_) {
+    if (file.entity_type != Schema::EntityType::Chromatogram) continue;
+    if (file.data_kind == DataArray) data = &file;
+    else if (file.data_kind == Metadata)
+      metadata = &file;
+  }
+
+  if (!data) return Chromatograms();
+
+  std::optional<std::size_t> count;
+  if (metadata) {
+    auto md(parquet(*metadata));
+    auto fmd(md->file_metadata());
+    if (fmd) {
+      if (auto kv = fmd->key_value_metadata()) {
+        auto result(kv->Get("chromatogram_count"));
+        if (result.ok()) {
+          std::size_t r{};
+          const std::string& s(result.ValueOrDie());
+          auto [ptr, ec]{std::from_chars(s.data(), s.data() + s.size(), r)};
+          if (ec == std::errc()) count = r;
+        }
+      }
+    }
+  }
+
+  return Chromatograms(std::make_unique<Data::Signals>(parquet(*data)), count);
 }
 
 /******************************************************************************/

@@ -11,8 +11,10 @@ directory of this repository.
 #include <memory>
 #include <vector>
 
-#include "mzpeak/data/arrays.h"
-#include "mzpeak/schema/psi/data_type.h"
+#include "mzpeak/data/array_index.h"
+#include "mzpeak/data/encoding.h"
+#include "mzpeak/data/signals.h"
+#include "mzpeak/util/slice.h"
 
 namespace MzPeak {
 
@@ -28,19 +30,10 @@ class WavelengthSpectra;
  */
 class WavelengthSpectrum final {
 public:
-  /// Ensure types stay in sync.  The wavelength array (MS:1000617) is stored
-  /// as 64-bit floating point (MS:1000523).
-  using wavelength_type =
-      Schema::PSI::data_type_traits<Schema::PSI::DataType::Float64>::value_type;
+  using wavelength_type = double;
+  using intensity_type = float;
 
-  /// Ensure types stay in sync.  The intensity array (MS:1000515) is stored
-  /// as 32-bit floating point (MS:1000521).
-  using intensity_type =
-      Schema::PSI::data_type_traits<Schema::PSI::DataType::Float32>::value_type;
-
-  // Special members are implicit (rule of zero): copyable AND movable, so
-  // returning a WavelengthSpectrum by value moves its arrays rather than
-  // copying.
+  // Special members are implicit (rule of zero): copyable AND movable.
 
   /**
    * Wavelength values (the MS:1000617 wavelength array).
@@ -52,31 +45,19 @@ public:
    */
   const std::vector<intensity_type>& intensity() const;
 
-  /**
-   * Raw access to the remaining values stored in the MzPeak file for this
-   * wavelength spectrum.  These values need to be decoded using the Encoding
-   * class (the array index will also be needed).
-   *
-   * NOTE: wavelength and intensity values have been decoded already; use the
-   * corresponding methods in this class to fetch those values instead.
-   */
-  const Data::array_map_type& raw_encoded_arrays() const;
-
-  /**
-   * The array index for this wavelength spectrum.
-   */
-  const Schema::ArrayIndex& array_index() const;
-
 protected:
   friend class WavelengthSpectra;
 
-  /// Internal constructor.
-  WavelengthSpectrum(const Schema::ArrayIndex&,
-                     std::unique_ptr<Data::array_map_type>);
+  WavelengthSpectrum(uint64_t index,
+                     std::shared_ptr<Data::Signals>,
+                     const std::vector<Data::ArrayIndex::Dimension>&,
+                     std::unique_ptr<Util::Slice>);
 
 private:
-  Schema::ArrayIndex array_index_;
-  std::shared_ptr<Data::array_map_type> map_;
+  using decoder_type = Data::Encoding::Decoder<double>;
+
+  uint64_t index_;
+  decoder_type decoder_;
   std::vector<wavelength_type> wavelength_;
   std::vector<intensity_type> intensity_;
 };

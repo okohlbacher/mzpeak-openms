@@ -12,7 +12,7 @@ directory of this repository.
 #include <algorithm>
 #include <boost/json.hpp>
 
-#include "mzpeak/schema/array_index.h"
+#include "mzpeak/data/array_index.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/util/json_writer.h"
 
@@ -23,12 +23,12 @@ using namespace MzPeak;
 // Mirror the reader's parse entry point (see parse_array_index in
 // src/util/parquet.cpp): parse the string and hand the object to the
 // public ArrayIndex constructor, which is the actual parsing code path.
-static Schema::ArrayIndex parse_array_index(const std::string& str,
-                                            Schema::EntityType entity_type)
+static Data::ArrayIndex parse_array_index(const std::string& str,
+                                          Schema::EntityType entity_type)
 {
   json::value v(json::parse(str));
   BOOST_TEST(v.is_object());
-  return Schema::ArrayIndex(entity_type, v.as_object());
+  return Data::ArrayIndex(entity_type, v.as_object());
 }
 
 /******************************************************************************/
@@ -36,23 +36,22 @@ BOOST_AUTO_TEST_CASE(point_spectra_array_index_round_trips)
 {
   const std::string js = Util::point_spectra_array_index_json();
 
-  Schema::ArrayIndex ai = parse_array_index(js, Schema::EntityType::Spectrum);
+  Data::ArrayIndex ai = parse_array_index(js, Schema::EntityType::Spectrum);
 
   BOOST_TEST(ai.prefix() == "point");
 
-  const auto& columns = ai.columns();
-  BOOST_TEST(columns.size() == 3u);
+  const auto& entries = ai.entries();
+  // spectrum_index is a synthetic entry, not in the data entries list.
+  BOOST_TEST(entries.size() == 2u);
 
-  auto find = [&](const std::string& path) -> const Schema::ArrayIndex::Column* {
-    auto it = std::ranges::find(columns, path, &Schema::ArrayIndex::Column::path);
-    return it == columns.end() ? nullptr : &*it;
+  auto find = [&](const std::string& path) -> const Data::ArrayIndex::Entry* {
+    auto it = std::ranges::find(entries, path, &Data::ArrayIndex::Entry::path);
+    return it == entries.end() ? nullptr : &*it;
   };
 
-  const auto* index = find("point.spectrum_index");
   const auto* mz = find("point.mz");
   const auto* intensity = find("point.intensity");
 
-  BOOST_TEST((index != nullptr), "missing point.spectrum_index column");
   BOOST_TEST((mz != nullptr), "missing point.mz column");
   BOOST_TEST((intensity != nullptr), "missing point.intensity column");
 
