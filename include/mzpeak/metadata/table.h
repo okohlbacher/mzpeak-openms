@@ -8,9 +8,12 @@ directory of this repository.
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
 
 #include "mzpeak/schema/group.h"
+#include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/parquet.h"
 #include "mzpeak/util/projection.h"
 
@@ -42,6 +45,15 @@ public:
   std::unique_ptr<Util::Slice> indexed(uint64_t,
                                        const std::shared_ptr<Schema::Group>&,
                                        const Util::Projection&) const;
+
+  /**
+   * Read the full per-spectrum descriptive metadata map (RT, precursors,
+   * selected ions, scan windows, ion mobility) keyed by spectrum.index.
+   *
+   * Reads the whole metadata Parquet table once — the caller is expected to
+   * cache the result (the table is small, ~1 MB for 32k spectra).
+   */
+  std::map<uint64_t, SpectrumMetadata> read_spectrum_metadata() const;
 
 private:
   struct Impl;

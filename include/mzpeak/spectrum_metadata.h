@@ -41,11 +41,10 @@ struct IsolationWindow {
 /**
  * One selected ion within a precursor entry.
  *
- * Ion-mobility fields (`ion_mobility_value`, `ion_mobility_type`) are present
- * in the schema but NULL in every bundled fixture.  They are retained as
- * typed members to preserve the API shape; their decode path is DEFERRED until
- * a fixture with populated IM values is available (see RDR-10c ion-mobility in
- * STATE.md Deferred Items).  Callers must treat them as always-nullopt for now.
+ * Ion-mobility fields (`ion_mobility_value`, `ion_mobility_type`) are read from
+ * the selected_ion struct.  They are NULL in every bundled fixture, so the
+ * decode is null-safe but UNVERIFIED at the value level; value-level
+ * correctness is fixture-gated on a real diaPASEF/timsTOF run.
  */
 struct SelectedIonInfo {
   /// `MS_1000744_selected_ion_mz` — selected-ion m/z (double).
@@ -57,12 +56,12 @@ struct SelectedIonInfo {
   /// `MS_1000042_intensity` — selected-ion intensity (float).
   std::optional<float> intensity;
 
-  /// Ion mobility value (double) — NULL in ALL bundled fixtures.
-  /// @note DEFERRED: decode path awaits an IM fixture; always nullopt today.
+  /// Ion mobility value (double) — read from selected_ion.ion_mobility_value.
+  /// NULL in ALL bundled fixtures; value-level decode is fixture-gated.
   std::optional<double> ion_mobility_value;
 
-  /// Ion mobility type (string) — NULL in ALL bundled fixtures.
-  /// @note DEFERRED: decode path awaits an IM fixture; always nullopt today.
+  /// Ion mobility type (string) — read from selected_ion.ion_mobility_type.
+  /// NULL in ALL bundled fixtures; value-level decode is fixture-gated.
   std::optional<std::string> ion_mobility_type;
 
   /// Additional CV parameters on this selected-ion entry.
@@ -221,7 +220,10 @@ struct SpectrumMetadata final {
   /// `MS_1000511_ms_level` (e.g. 1 for MS1, 2 for MS2).
   std::optional<int> ms_level;
 
-  /// `time` — the scan / retention time (seconds, as stored).
+  /// Retention time in SECONDS.  Sourced from `scan.MS_1000016_scan_start_time`
+  /// (annotated UO_0000031 = minutes) and multiplied by 60; falls back to
+  /// `spectrum.time` (also minutes) when the scan facet is absent.  OpenMS/mzML
+  /// convention is seconds — a silent minutes/seconds mismatch is a 60x error.
   std::optional<double> retention_time;
 
   /// `MS_1000465_scan_polarity` (+1 positive, -1 negative).
@@ -302,6 +304,16 @@ struct SpectrumMetadata final {
   /// Decoded from `scan.scan_windows` via source_index join (accepted add-on).
   /// Empty when no scan windows are present (e.g. for MS2 zoomed scans).
   std::vector<ScanWindow> scan_windows;
+
+  /// Scan-level ion mobility value (`scan.ion_mobility_value`, e.g. 1/K0 for
+  /// diaPASEF/timsTOF).  NULL in every bundled fixture, so the decode path is
+  /// exercised only for null-safety; value-level correctness is fixture-gated
+  /// on a real IM run (see handoff acceptance test).
+  std::optional<double> ion_mobility;
+
+  /// Scan-level ion mobility type (`scan.ion_mobility_type`).  NULL in every
+  /// bundled fixture (see `ion_mobility`).
+  std::optional<std::string> ion_mobility_type;
 };
 
 } // namespace MzPeak

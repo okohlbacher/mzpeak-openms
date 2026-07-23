@@ -175,6 +175,7 @@ test_names = [
     'query',
     'roundtrip',
     'spectra',
+    'spectrum_metadata',
     'util',
     'wavelength_spectra',
     'writer',

@@ -44,9 +44,15 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata);
  * multiple precursors per spectrum and multiple selected ions per precursor).
  * Unmatched source_index values are logged to stderr (no silent loss).
  *
- * Ion-mobility fields (ion_mobility_value/type) are NULL in every bundled
- * fixture and are DEFERRED; they are left as nullopt stubs on SelectedIonInfo
- * and the scan struct (see STATE.md Deferred Items RDR-10c ion-mobility).
+ * Ion-mobility fields (ion_mobility_value/type) are read from both the
+ * selected_ion struct (SelectedIonInfo) and the scan struct (SpectrumMetadata::
+ * ion_mobility/ion_mobility_type).  They are NULL in every bundled fixture, so
+ * the decode is exercised for null-safety only; value-level correctness is
+ * fixture-gated on a real diaPASEF/timsTOF run.
+ *
+ * Retention time (SpectrumMetadata::retention_time) is in SECONDS: sourced from
+ * scan.MS_1000016_scan_start_time (UO_0000031 = minutes) ×60, with spectrum.time
+ * as a fallback (also minutes).
  *
  * Nullable source values map to absent std::optional fields or empty
  * strings/vectors as documented on SpectrumMetadata.

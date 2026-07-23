@@ -6,11 +6,13 @@ directory of this repository.
 
 */
 
+#include "mzpeak/metadata/table.h"
+
 #include <parquet/api/reader.h>
 
 #include "mzpeak/exception.h"
-#include "mzpeak/metadata/table.h"
 #include "mzpeak/schema/group.h"
+#include "mzpeak/util/metadata_model.h"
 #include "mzpeak/util/parquet.h"
 
 namespace MzPeak::Metadata {
@@ -76,6 +78,12 @@ Table::indexed(uint64_t index,
 
   auto plan = impl_->parquet_->planner(q).plan();
   return impl_->parquet_->executor(projection).execute(plan);
+}
+
+/******************************************************************************/
+std::map<uint64_t, SpectrumMetadata> Table::read_spectrum_metadata() const
+{
+  return Util::read_spectra_metadata(*impl_->parquet_);
 }
 
 } // namespace MzPeak::Metadata

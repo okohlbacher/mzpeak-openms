@@ -6,6 +6,8 @@ directory of this repository.
 
 */
 
+#include "mzpeak/util/metadata_model.h"
+
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
@@ -20,7 +22,6 @@ directory of this repository.
 #include <unordered_map>
 
 #include "mzpeak/exception.h"
-#include "mzpeak/util/metadata_model.h"
 
 namespace MzPeak::Util {
 
@@ -105,6 +106,24 @@ std::optional<float> opt_float(const std::shared_ptr<arrow::StructArray>& s,
   if (!field || field->IsNull(row)) return std::nullopt;
   if (field->type_id() != arrow::Type::FLOAT) return std::nullopt;
   return std::static_pointer_cast<arrow::FloatArray>(field)->Value(row);
+}
+
+/// Optional string field (large_string or string); nullopt if absent/null.
+/// Distinct from get_string (which flattens null to empty) because ion-mobility
+/// type must preserve the null-vs-empty distinction.
+std::optional<std::string> opt_string(const std::shared_ptr<arrow::StructArray>& s,
+                                      const char* name,
+                                      int64_t row)
+{
+  auto field(s->GetFieldByName(name));
+  if (!field || field->IsNull(row)) return std::nullopt;
+  if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+    return large->GetString(row);
+  }
+  if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+    return str->GetString(row);
+  }
+  return std::nullopt;
 }
 
 /// String field (large_string or string); empty string if absent/null.
@@ -357,7 +376,11 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
       m.index = index->Value(r);
       m.id = get_string(spectrum, "id", r);
       m.ms_level = opt_int<int>(spectrum, "MS_1000511_ms_level", r);
-      m.retention_time = opt_double(spectrum, "time", r);
+      // RT: `spectrum.time` is in minutes (same value/unit as
+      // scan.MS_1000016_scan_start_time, UO_0000031).  Convert to seconds here
+      // as a fallback; PASS 4 overrides from the unit-annotated scan field when
+      // present.  ponytail: single ×60 site per pass, no unit-conversion class.
+      if (auto t = opt_double(spectrum, "time", r)) m.retention_time = *t * 60.0;
       m.polarity = opt_int<int>(spectrum, "MS_1000465_scan_polarity", r);
       m.representation =
           get_string(spectrum, "MS_1000525_spectrum_representation", r);
@@ -670,8 +693,11 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
               opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
           ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
           ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
-          // ion_mobility_value / ion_mobility_type: DEFERRED (NULL in all
-          // fixtures; deferred note in SelectedIonInfo header documentation).
+          // Ion mobility: null in all bundled fixtures, so this reads as nullopt
+          // everywhere today — the decode is null-safe and value-level
+          // correctness is fixture-gated on a real IM run (handoff P1).
+          ion.ion_mobility_value = opt_double(si, "ion_mobility_value", r);
+          ion.ion_mobility_type = opt_string(si, "ion_mobility_type", r);
           ion.parameters = read_cv_params_from_list(si, "parameters", r);
 
           // H2: attach by (source_index, precursor_index) — NOT precursors.back().
@@ -726,6 +752,20 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 
           it->second.scan_parameters =
               read_cv_params_from_list(scan, "parameters", r);
+
+          // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
+          // unit-annotated field (UO_0000031 = minutes).  Override the PASS 1
+          // spectrum.time fallback when present.  ×60 -> seconds (handoff P0;
+          // a silent minutes/seconds mismatch is a 60x error).
+          if (auto sst =
+                  opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r)) {
+            it->second.retention_time = static_cast<double>(*sst) * 60.0;
+          }
+
+          // Scan-level ion mobility (handoff P1): null in all bundled fixtures,
+          // so null-safe today; value-level correctness is fixture-gated.
+          it->second.ion_mobility = opt_double(scan, "ion_mobility_value", r);
+          it->second.ion_mobility_type = opt_string(scan, "ion_mobility_type", r);
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
           auto sw_field = scan->GetFieldByName("scan_windows");

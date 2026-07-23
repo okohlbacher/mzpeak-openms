@@ -8,7 +8,12 @@ top-level directory of this repository.
 
 #pragma once
 
+#include <cstdint>
+#include <map>
+#include <memory>
+
 #include "mzpeak/spectrum.h"
+#include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/enumerable_proxy.h"
 
 // Forward declarations:
@@ -44,6 +49,11 @@ private:
   std::shared_ptr<Data::Signals> data_;
   std::shared_ptr<Data::Signals> peaks_; // centroid-only file (optional)
   std::shared_ptr<Metadata::Table> meta_;
+
+  // Cached per-spectrum descriptive metadata (RT, precursors, ion mobility, …),
+  // built lazily on first fetch from meta_ and shared into each Spectrum.  Null
+  // until built, and stays null when there is no metadata table.
+  std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map_;
 
   // Function to fetch a specific spectrum.
   Spectrum fetch(uint64_t);

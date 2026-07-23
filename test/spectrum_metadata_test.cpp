@@ -445,6 +445,73 @@ BOOST_AUTO_TEST_CASE(scan_windows_present_on_ms1_spectrum)
 }
 
 // ============================================================================
+// Handoff (OpenDIAlyzer): retention time in SECONDS + ion mobility.
+// Ground truth verified via pyarrow against small.mzpeak.
+// ============================================================================
+
+/******************************************************************************/
+// P0 — retention_time() is in SECONDS.  small.mzpeak stores scan_start_time in
+// MINUTES (UO_0000031); the reader multiplies by 60.
+// Ground truth (pyarrow): index 0 -> 0.004935 min -> 0.296100 s,
+//                         index 2 -> 0.011218 min -> 0.673100 s.
+BOOST_AUTO_TEST_CASE(retention_time_is_seconds)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+
+  std::optional<double> rt0, rt2;
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    if (s.metadata().index == 0) rt0 = s.retention_time();
+    if (s.metadata().index == 2) rt2 = s.retention_time();
+  }
+  BOOST_TEST_REQUIRE(rt0.has_value());
+  BOOST_TEST_REQUIRE(rt2.has_value());
+  BOOST_TEST(std::abs(rt0.value() - 0.296100) < 1e-4);
+  BOOST_TEST(std::abs(rt2.value() - 0.673100) < 1e-4);
+  // Sanity: seconds, not minutes — must be > the raw minutes value.
+  BOOST_TEST(rt0.value() > 0.05);
+}
+
+/******************************************************************************/
+// P1 — ion mobility: NULL in every bundled fixture, so both the scan-level
+// accessor and the selected-ion field must read as nullopt without crashing
+// (null-safe decode; value-level correctness is fixture-gated on a real IM run).
+BOOST_AUTO_TEST_CASE(ion_mobility_null_safe_in_small)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    BOOST_TEST(!s.ion_mobility().has_value());
+    BOOST_TEST(!s.ion_mobility_type().has_value());
+    for (const auto& p : s.precursors()) {
+      for (const auto& ion : p.selected_ions) {
+        BOOST_TEST(!ion.ion_mobility_value.has_value());
+        BOOST_TEST(!ion.ion_mobility_type.has_value());
+      }
+    }
+  }
+}
+
+/******************************************************************************/
+// Handoff critical requirement: reading metadata must NOT decode peaks.
+// We can only assert the observable contract here — metadata (RT, precursors)
+// is available and correct without ever calling mz()/intensity().
+BOOST_AUTO_TEST_CASE(metadata_available_without_peak_decode)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+  std::size_t ms2 = 0;
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    // Touch only metadata accessors; never mz()/intensity().
+    if (s.retention_time().has_value() && !s.precursors().empty()) ++ms2;
+  }
+  BOOST_TEST(ms2 == 34u); // all 34 MS2 carry a precursor (pyarrow verified)
+}
+
+// ============================================================================
 // RDR-9b: auxiliary_arrays structural tests (validated).
 //
 // Every bundled fixture has number_of_auxiliary_arrays == 0; the auxiliary_arrays

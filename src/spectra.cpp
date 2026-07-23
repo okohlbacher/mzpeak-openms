@@ -75,9 +75,15 @@ Spectrum Spectra::fetch(uint64_t index)
       }) |
       std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
 
-  std::unique_ptr<Util::Slice> slice =
-      signals->select(dims, signals->index().eq(index));
-  return Spectrum(index, signals, dims, std::move(slice), meta_);
+  // Build (once) and share the descriptive-metadata cache.  Reading it here is
+  // cheap relative to peak decode, and Spectrum keeps peak decode lazy so a
+  // metadata-only pass never touches the signal arrays.
+  if (!md_map_ && meta_) {
+    md_map_ = std::make_shared<const std::map<uint64_t, SpectrumMetadata>>(
+        meta_->read_spectrum_metadata());
+  }
+
+  return Spectrum(index, signals, std::move(dims), meta_, md_map_);
 }
 
 } // namespace MzPeak

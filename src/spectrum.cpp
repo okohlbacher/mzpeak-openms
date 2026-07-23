@@ -6,47 +6,82 @@ top-level directory of this repository.
 
 */
 
-#include <memory>
-#include <vector>
-
 #include "mzpeak/spectrum.h"
+
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace MzPeak {
 
 /******************************************************************************/
-Spectrum::Spectrum(uint64_t index,
-                   std::shared_ptr<Data::Signals> data,
-                   const std::vector<Data::ArrayIndex::Dimension>& dims,
-                   std::unique_ptr<Util::Slice> slice,
-                   std::shared_ptr<Metadata::Table> metadata)
+Spectrum::Spectrum(
+    uint64_t index,
+    std::shared_ptr<Data::Signals> data,
+    std::vector<Data::ArrayIndex::Dimension> dims,
+    std::shared_ptr<Metadata::Table> metadata,
+    std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map)
     : index_(index)
     , md_table_(std::move(metadata))
-    , md_spec_(md_table_, index_)
-    , decoder_(std::move(data),
-               std::move(slice),
-               Util::DeltaEstimator<double>(md_spec_.delta_model()))
-    , mz_()
-    , intensity_()
+    , md_map_(std::move(md_map))
+    , signals_(std::move(data))
+    , dims_(std::move(dims))
 {
-  for (auto& dim : dims) {
-    if (dim.array_type == Schema::PSI::ArrayType::Mz) {
-      decoder_.decimal(dim, mz_);
-    } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {
-      decoder_.decimal(dim, intensity_);
-    } else {
-      // FIXME: should we throw an exception here?
-      continue;
-    }
-  }
 }
 
 /******************************************************************************/
-const std::vector<double>& Spectrum::mz() const { return mz_; }
+void Spectrum::decode_() const
+{
+  if (decoded_) return;
+
+  // The signal-file read for this spectrum happens here (not at construction)
+  // so a metadata-only pass never touches the peak data.
+  std::shared_ptr<Util::Slice> slice =
+      signals_->select(dims_, signals_->index().eq(index_));
+
+  // The delta model (for null-marking reconstruction) lives in the metadata
+  // table and is read per-spectrum here — also deferred to first peak access.
+  Metadata::Spectrum md_spec(md_table_, index_);
+  decoder_type decoder(signals_, std::move(slice),
+                       Util::DeltaEstimator<double>(md_spec.delta_model()));
+
+  for (const auto& dim : dims_) {
+    if (dim.array_type == Schema::PSI::ArrayType::Mz) {
+      decoder.decimal(dim, mz_);
+    } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {
+      decoder.decimal(dim, intensity_);
+    }
+  }
+  decoded_ = true;
+}
 
 /******************************************************************************/
-const std::vector<float>& Spectrum::intensity() const { return intensity_; }
+const std::vector<double>& Spectrum::mz() const
+{
+  decode_();
+  return mz_;
+}
 
 /******************************************************************************/
-uint8_t Spectrum::ms_level() const { return md_spec_.ms_level().value_or(0u); }
+const std::vector<float>& Spectrum::intensity() const
+{
+  decode_();
+  return intensity_;
+}
+
+/******************************************************************************/
+const SpectrumMetadata& Spectrum::metadata() const
+{
+  static const SpectrumMetadata empty{};
+  if (!md_map_) return empty;
+  auto it = md_map_->find(index_);
+  return it == md_map_->end() ? empty : it->second;
+}
+
+/******************************************************************************/
+uint8_t Spectrum::ms_level() const
+{
+  return static_cast<uint8_t>(metadata().ms_level.value_or(0));
+}
 
 } // namespace MzPeak
