@@ -301,7 +301,7 @@ struct ColMinMax final {
 
 // We don't support string searches right now.
 template <>
-Query::Result<Query::range_t> ColMinMax::operator()<psi::DataType::ASCII>() const
+Query::Result<Query::range_t> ColMinMax::operator()<Util::Type::ByteArray>() const
 {
   return Query::Result<Query::range_t>::fail();
 }
@@ -310,7 +310,7 @@ Query::Result<Query::range_t> ColMinMax::operator()<psi::DataType::ASCII>() cons
 // the min/max raw values from statistics/page-index are bit-pattern signed.
 // bit_cast them to uint64_t so the range type matches the predicate value type.
 template <>
-Query::Result<Query::range_t> ColMinMax::operator()<psi::DataType::UInt64>() const
+Query::Result<Query::range_t> ColMinMax::operator()<Util::Type::UInt64>() const
 {
   using R = Query::Result<Query::range_t>;
 
