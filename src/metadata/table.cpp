@@ -23,6 +23,9 @@ struct Table::Impl {
   ~Impl();
 
   std::unique_ptr<Util::Parquet> parquet_;
+  std::unique_ptr<Util::Parquet> scans_;
+  std::unique_ptr<Util::Parquet> precursors_;
+  std::unique_ptr<Util::Parquet> selected_ions_;
   std::optional<std::size_t> n_entries;
 };
 
@@ -81,9 +84,33 @@ Table::indexed(uint64_t index,
 }
 
 /******************************************************************************/
+void Table::add_facet(Schema::DataKind kind, std::unique_ptr<Util::Parquet> p)
+{
+  using enum Schema::DataKind;
+  switch (kind) {
+  case Scans:
+    impl_->scans_ = std::move(p);
+    break;
+  case Precursors:
+    impl_->precursors_ = std::move(p);
+    break;
+  case SelectedIons:
+    impl_->selected_ions_ = std::move(p);
+    break;
+  default:
+    break; // not a facet; ignore
+  }
+}
+
+/******************************************************************************/
 std::map<uint64_t, SpectrumMetadata> Table::read_spectrum_metadata() const
 {
-  return Util::read_spectra_metadata(*impl_->parquet_);
+  Util::SpectraMetadataFiles files;
+  files.primary = impl_->parquet_.get();
+  files.scans = impl_->scans_.get();
+  files.precursors = impl_->precursors_.get();
+  files.selected_ions = impl_->selected_ions_.get();
+  return Util::read_spectra_metadata(files);
 }
 
 } // namespace MzPeak::Metadata

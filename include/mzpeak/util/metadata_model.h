@@ -60,6 +60,30 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata);
 std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata);
 
 /**
+ * The Parquet files that together carry one entity's metadata.
+ *
+ * Older writers nest every facet as a struct column of @ref primary, so the
+ * facet members stay null.  Newer writers give each facet its own file with
+ * flat columns; those are joined to @ref primary by `source_index` VALUE.
+ *
+ * Non-owning: the caller keeps the Parquet objects alive for the call.
+ */
+struct SpectraMetadataFiles {
+  Parquet* primary = nullptr;
+  Parquet* scans = nullptr;
+  Parquet* precursors = nullptr;
+  Parquet* selected_ions = nullptr;
+};
+
+/**
+ * Read per-spectrum metadata from a primary file plus any separate facet files.
+ * Handles both the nested single-table layout and the split-file layout; see
+ * @ref SpectraMetadataFiles.
+ */
+std::map<uint64_t, SpectrumMetadata>
+read_spectra_metadata(const SpectraMetadataFiles&);
+
+/**
  * Read the native-id → entity-index map from a metadata Parquet table whose
  * top-level column is named @p col_name (e.g. "chromatogram" or
  * "wavelength_spectrum").  Only rows with a non-null, non-empty `id` field are
