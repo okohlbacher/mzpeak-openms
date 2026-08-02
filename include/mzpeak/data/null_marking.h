@@ -145,13 +145,15 @@ std::optional<T> Decoder<T, U>::operator()(int64_t index)
     throw("FIXME: assertion failed");
   };
 
-  if (index != 0 && prior_.index == index - 1) {
-    // We are in a run of NULL values and can use the estimated value
-    // and delta from the last NULL to estimate the current NULL.
-    prior_.index = index;
-    prior_.value = prior_.value + prior_.delta;
-    return prior_.value;
-  } else if (!ranges_.empty() && next_range_ != ranges_.end()) {
+  // NOTE: every null is anchored to its own nearest run below.  There is
+  // deliberately NO "continue extrapolating from the previous null" shortcut:
+  // null marking flanks each real run with a zero-intensity point, so a gap is
+  // normally a PAIR of nulls that belong to DIFFERENT runs — the first to the
+  // run on its left, the second to the run on its right.  Extrapolating the
+  // second null from the first walked the left run's delta across the gap and
+  // produced an m/z that was still monotonic but grossly wrong (small.mzpeak
+  // spectrum 0 position 8 returned 202.6086 instead of 204.7593).
+  if (!ranges_.empty() && next_range_ != ranges_.end()) {
     // We want the next range that ends on this null, or starts just
     // after this run of nulls.  This should be the range pointed to
     // by `next_range_` or the the range right after it.

@@ -30,11 +30,21 @@ BOOST_AUTO_TEST_CASE(can_read_spectra)
   BOOST_TEST(mz[0] == 202.607, boost::test_tools::tolerance(0.001));
   BOOST_TEST(mz[mz.size() - 1] == 1999.840, boost::test_tools::tolerance(0.001));
 
-  // Test some NULL values.
-  BOOST_TEST(mz[7] == 202.608, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(mz[8] == 202.609, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(mz[14] == 204.761, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(mz[15] == 204.762, boost::test_tools::tolerance(0.001));
+  // Null-marked m/z values.  Nulls come in PAIRS that separate two runs of real
+  // values; each null is reconstructed from the run it adjoins — the first from
+  // the run on its left, the second from the run on its right.
+  //
+  // Ground truth is the Rust reference reader
+  // (hupo-mzpeak examples/read_spectrum small.mzpeak 0), which emits
+  // 202.60831465843808 / 204.75933490116418 / 204.76085793161354 /
+  // 204.77812053474582 at these positions.  Position 8 is NOT 202.6086 — that
+  // is what extrapolating the second null from the first used to produce.
+  BOOST_TEST(mz[7] == 202.6083147, boost::test_tools::tolerance(1e-6));
+  BOOST_TEST(mz[8] == 204.7593349, boost::test_tools::tolerance(1e-6));
+  // Same pattern around the next gap: position 13 = 204.76060409341508,
+  // position 16 = 204.77837441952326.
+  BOOST_TEST(mz[14] == 204.7608579, boost::test_tools::tolerance(1e-6));
+  BOOST_TEST(mz[15] == 204.7781206, boost::test_tools::tolerance(1e-6));
 
   // The m/z values should be monotonically increasing.
   for (std::size_t i : std::views::iota(1ul, mz.size())) {
