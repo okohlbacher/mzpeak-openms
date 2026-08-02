@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -122,5 +123,22 @@ void write_spectra_metadata(const std::string& path,
  * bytes (used by the ZIP archive writer).
  */
 std::string spectra_metadata_bytes(const std::vector<SpectrumMetaRow>& rows);
+
+/**
+ * Write the per-facet spectrum metadata files (scans / precursors /
+ * selected ions) that accompany spectra_metadata.parquet in the split layout.
+ *
+ * The reference reader requires all three members to be present even when a
+ * writer has nothing to put in them, so the precursor and selected-ion tables
+ * are emitted with their schema and zero rows.  The scan table carries one row
+ * per spectrum so retention time is reachable from the scan facet as well.
+ */
+void write_spectra_metadata_facets(const std::string& dir,
+                                   const std::vector<SpectrumMetaRow>& rows);
+
+/// In-memory sibling of @ref write_spectra_metadata_facets: returns the Parquet
+/// bytes for {scans, precursors, selected_ions} in that order.
+std::array<std::string, 3>
+spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows);
 
 } // namespace MzPeak::Util

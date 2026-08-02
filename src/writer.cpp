@@ -6,18 +6,19 @@ directory of this repository.
 
 */
 
+#include "mzpeak/writer.h"
+
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <numeric>
 #include <string>
-
 #include <zip.h>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/schema/data_kind.h"
 #include "mzpeak/util/json_writer.h"
 #include "mzpeak/util/parquet_writer.h"
-#include "mzpeak/writer.h"
 
 namespace MzPeak {
 
@@ -114,6 +115,14 @@ std::string spectra_index_json(bool with_data,
   }
   files.push_back({"spectra_metadata.parquet", "spectrum",
                    Schema::data_kind_to_string(DataKind::Metadata)});
+  // The reference reader requires all three facet members to be present, even
+  // when this writer has nothing to put in the precursor/selected-ion ones.
+  files.push_back({"spectra_metadata_scans.parquet", "spectrum",
+                   Schema::data_kind_to_string(DataKind::Scans)});
+  files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
+                   Schema::data_kind_to_string(DataKind::Precursors)});
+  files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
+                   Schema::data_kind_to_string(DataKind::SelectedIons)});
   if (with_peaks) {
     files.push_back({"spectra_peaks.parquet", "spectrum",
                      Schema::data_kind_to_string(DataKind::Peaks)});
@@ -233,6 +242,8 @@ void write_spectra_directory_impl(const fs::path& dir,
 
     Util::write_spectra_metadata((tmp_dir / "spectra_metadata.parquet").string(),
                                  build_metadata_rows(spectra));
+    Util::write_spectra_metadata_facets(tmp_dir.string(),
+                                        build_metadata_rows(spectra));
 
     write_index_file(tmp_dir / "mzpeak_index.json",
                      spectra_index_json(with_data, with_peaks, run_metadata));
@@ -282,6 +293,8 @@ void write_spectra_archive_impl(const fs::path& zip_path,
 
   std::string metadata_bytes(
       Util::spectra_metadata_bytes(build_metadata_rows(spectra)));
+  std::array<std::string, 3> facet_bytes(
+      Util::spectra_metadata_facet_bytes(build_metadata_rows(spectra)));
   std::string index_json(spectra_index_json(with_data, with_peaks, run_metadata));
 
   int errnum = 0;
@@ -305,6 +318,11 @@ void write_spectra_archive_impl(const fs::path& zip_path,
       add_stored_member(archive, "spectra_peaks.parquet", peaks_bytes);
     }
     add_stored_member(archive, "spectra_metadata.parquet", metadata_bytes);
+    add_stored_member(archive, "spectra_metadata_scans.parquet", facet_bytes[0]);
+    add_stored_member(archive, "spectra_metadata_precursors.parquet",
+                      facet_bytes[1]);
+    add_stored_member(archive, "spectra_metadata_selected_ions.parquet",
+                      facet_bytes[2]);
     add_stored_member(archive, "mzpeak_index.json", index_json);
   } catch (...) {
     zip_discard(archive);

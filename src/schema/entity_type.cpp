@@ -20,7 +20,8 @@ std::string entity_type_to_string(EntityType et)
   case Chromatogram:
     return "chromatogram";
   case WavelengthSpectrum:
-    return "wavelength spectrum";
+    // Current spelling; the space form is still accepted when parsing.
+    return "wavelength_spectrum";
   case Other:
     return "other";
   }

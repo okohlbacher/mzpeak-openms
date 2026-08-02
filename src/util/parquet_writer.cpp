@@ -6,6 +6,8 @@ directory of this repository.
 
 */
 
+#include "mzpeak/util/parquet_writer.h"
+
 #include <algorithm>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/builder_binary.h>
@@ -23,7 +25,6 @@ directory of this repository.
 #include <parquet/types.h>
 
 #include "mzpeak/exception.h"
-#include "mzpeak/util/parquet_writer.h"
 
 namespace MzPeak::Util {
 
@@ -240,43 +241,34 @@ void write_spectra_metadata_to_sink(
     representation.push_back(r.representation);
   }
 
-  // `index` MUST be the first child: the reference reader accesses it
-  // positionally and selects rows via its page index.
-  arrow::FieldVector spectrum_fields{
+  // Emit the FLAT layout: plain column names at the top level, with the CV term
+  // declared in the index's `column_mapping` instead of baked into the name.
+  // `index` MUST come first — the reference reader accesses it positionally and
+  // selects rows via its page index.
+  auto schema(arrow::schema({
       arrow::field("index", arrow::uint64(), /*nullable=*/true),
       arrow::field("id", arrow::large_utf8(), /*nullable=*/true),
-      arrow::field("MS_1000511_ms_level", arrow::uint8(), /*nullable=*/true),
+      arrow::field("ms_level", arrow::uint8(), /*nullable=*/true),
       arrow::field("time", arrow::float64(), /*nullable=*/true),
-      arrow::field("MS_1000465_scan_polarity", arrow::int32(), /*nullable=*/true),
-      arrow::field("MS_1003060_number_of_data_points", arrow::uint64(),
+      arrow::field("scan_polarity", arrow::int8(), /*nullable=*/true),
+      arrow::field("number_of_data_points", arrow::uint64(), /*nullable=*/true),
+      arrow::field("number_of_peaks", arrow::uint64(), /*nullable=*/true),
+      arrow::field("spectrum_representation", arrow::utf8(),
                    /*nullable=*/true),
-      arrow::field("MS_1003059_number_of_peaks", arrow::uint64(),
-                   /*nullable=*/true),
-      arrow::field("MS_1000525_spectrum_representation", arrow::large_utf8(),
-                   /*nullable=*/true),
-  };
+  }));
 
-  std::vector<std::shared_ptr<arrow::Array>> children{
+  std::vector<std::shared_ptr<arrow::Array>> columns{
       build_array<arrow::UInt64Builder>(index),
       build_array<arrow::LargeStringBuilder>(id),
       build_array<arrow::UInt8Builder>(ms_level),
       build_optional_array<arrow::DoubleBuilder>(time),
-      build_optional_array<arrow::Int32Builder>(polarity),
+      build_optional_array<arrow::Int8Builder>(polarity),
       build_array<arrow::UInt64Builder>(n_points),
       build_array<arrow::UInt64Builder>(n_peaks),
-      build_array<arrow::LargeStringBuilder>(representation),
+      build_array<arrow::StringBuilder>(representation),
   };
 
-  auto spectrum_result(arrow::StructArray::Make(children, spectrum_fields));
-  if (!spectrum_result.ok()) {
-    throw ParquetError("build spectrum struct: " +
-                       spectrum_result.status().ToString());
-  }
-  std::shared_ptr<arrow::Array> spectrum_array(spectrum_result.ValueOrDie());
-
-  auto schema(arrow::schema(
-      {arrow::field("spectrum", spectrum_array->type(), /*nullable=*/true)}));
-  auto table(arrow::Table::Make(schema, {spectrum_array}));
+  auto table(arrow::Table::Make(schema, columns));
 
   write_table_to_sink(sink, table, /*file_kv=*/{});
 }
@@ -349,6 +341,107 @@ std::string spectra_metadata_bytes(const std::vector<SpectrumMetaRow>& rows)
   write_spectra_metadata_to_sink(sink, rows);
 
   return finish_to_string(sink);
+}
+
+/******************************************************************************/
+namespace {
+
+/// Build the scans facet: one row per spectrum, carrying retention time.
+std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& rows)
+{
+  std::vector<uint64_t> source_index, scan_index;
+  std::vector<std::optional<float>> scan_start_time;
+  for (const auto& r : rows) {
+    source_index.push_back(r.index);
+    scan_index.push_back(0);
+    scan_start_time.push_back(
+        r.retention_time
+            ? std::optional<float>(static_cast<float>(*r.retention_time))
+            : std::nullopt);
+  }
+  auto schema(arrow::schema({
+      arrow::field("source_index", arrow::uint64(), true),
+      arrow::field("scan_index", arrow::uint64(), true),
+      arrow::field("scan_start_time", arrow::float32(), true),
+  }));
+  return arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(source_index),
+               build_array<arrow::UInt64Builder>(scan_index),
+               build_optional_array<arrow::FloatBuilder>(scan_start_time)});
+}
+
+/// Precursor / selected-ion facets: schema only.  This writer does not carry
+/// precursor information yet, but the members must exist for the reference
+/// reader to open the archive at all.
+std::shared_ptr<arrow::Table> empty_precursors_table()
+{
+  auto schema(arrow::schema({
+      arrow::field("source_index", arrow::uint64(), true),
+      arrow::field("precursor_index", arrow::uint64(), true),
+  }));
+  std::vector<uint64_t> none;
+  return arrow::Table::Make(schema, {build_array<arrow::UInt64Builder>(none),
+                                     build_array<arrow::UInt64Builder>(none)});
+}
+
+std::shared_ptr<arrow::Table> empty_selected_ions_table()
+{
+  auto schema(arrow::schema({
+      arrow::field("source_index", arrow::uint64(), true),
+      arrow::field("precursor_index", arrow::uint64(), true),
+      arrow::field("selected_ion_mz", arrow::float64(), true),
+  }));
+  std::vector<uint64_t> none;
+  std::vector<std::optional<double>> nonef;
+  return arrow::Table::Make(schema,
+                            {build_array<arrow::UInt64Builder>(none),
+                             build_array<arrow::UInt64Builder>(none),
+                             build_optional_array<arrow::DoubleBuilder>(nonef)});
+}
+
+std::string table_bytes(const std::shared_ptr<arrow::Table>& table)
+{
+  auto sink_result(arrow::io::BufferOutputStream::Create());
+  if (!sink_result.ok()) {
+    throw ParquetError("create buffer: " + sink_result.status().ToString());
+  }
+  auto sink(sink_result.ValueOrDie());
+  write_table_to_sink(sink, table, /*file_kv=*/{});
+  auto buf(sink->Finish());
+  if (!buf.ok()) throw ParquetError("finish buffer: " + buf.status().ToString());
+  return (*buf)->ToString();
+}
+
+void write_table_to_path(const std::string& path,
+                         const std::shared_ptr<arrow::Table>& table)
+{
+  auto sink_result(arrow::io::FileOutputStream::Open(path));
+  if (!sink_result.ok()) {
+    throw ParquetError("open output file " + path + ": " +
+                       sink_result.status().ToString());
+  }
+  write_table_to_sink(sink_result.ValueOrDie(), table, /*file_kv=*/{});
+}
+
+} // namespace
+
+/******************************************************************************/
+void write_spectra_metadata_facets(const std::string& dir,
+                                   const std::vector<SpectrumMetaRow>& rows)
+{
+  write_table_to_path(dir + "/spectra_metadata_scans.parquet", scans_table(rows));
+  write_table_to_path(dir + "/spectra_metadata_precursors.parquet",
+                      empty_precursors_table());
+  write_table_to_path(dir + "/spectra_metadata_selected_ions.parquet",
+                      empty_selected_ions_table());
+}
+
+/******************************************************************************/
+std::array<std::string, 3>
+spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows)
+{
+  return {table_bytes(scans_table(rows)), table_bytes(empty_precursors_table()),
+          table_bytes(empty_selected_ions_table())};
 }
 
 } // namespace MzPeak::Util

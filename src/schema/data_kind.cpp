@@ -17,7 +17,10 @@ std::string data_kind_to_string(DataKind dk)
 
   switch (dk) {
   case DataArray:
-    return "data arrays";
+    // Emit the CURRENT spelling.  Upstream renamed "data arrays" to
+    // "data_arrays" (issue #26); readers that only know the old form treat the
+    // file as unknown and silently ignore it.  Parsing still accepts both.
+    return "data_arrays";
   case Peaks:
     return "peaks";
   case Metadata:
