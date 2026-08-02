@@ -376,10 +376,12 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
       m.index = index->Value(r);
       m.id = get_string(spectrum, "id", r);
       m.ms_level = opt_int<int>(spectrum, "MS_1000511_ms_level", r);
-      // RT: `spectrum.time` is in minutes (same value/unit as
-      // scan.MS_1000016_scan_start_time, UO_0000031).  Convert to seconds here
-      // as a fallback; PASS 4 overrides from the unit-annotated scan field when
-      // present.  ponytail: single ×60 site per pass, no unit-conversion class.
+      // RT: `spectrum.time` is in minutes — the spec makes this normative
+      // ("The time unit MUST be minutes", UO_0000031; docs/schemas/spectra.md),
+      // and it holds the same value as scan.MS_1000016_scan_start_time.
+      // Convert to seconds here as a fallback; PASS 4 overrides from the
+      // unit-annotated scan field when present.
+      // ponytail: single ×60 site per pass, no unit-conversion class.
       if (auto t = opt_double(spectrum, "time", r)) m.retention_time = *t * 60.0;
       m.polarity = opt_int<int>(spectrum, "MS_1000465_scan_polarity", r);
       m.representation =
@@ -754,9 +756,10 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
               read_cv_params_from_list(scan, "parameters", r);
 
           // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
-          // unit-annotated field (UO_0000031 = minutes).  Override the PASS 1
-          // spectrum.time fallback when present.  ×60 -> seconds (handoff P0;
-          // a silent minutes/seconds mismatch is a 60x error).
+          // unit-annotated field (UO_0000031 = minutes — normative MUST, see
+          // docs/schemas/spectra.md).  Override the PASS 1 spectrum.time
+          // fallback when present.  ×60 -> seconds (handoff P0; a silent
+          // minutes/seconds mismatch is a 60x error).
           if (auto sst =
                   opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r)) {
             it->second.retention_time = static_cast<double>(*sst) * 60.0;
