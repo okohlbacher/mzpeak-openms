@@ -314,6 +314,12 @@ struct SpectrumMetadata final {
   /// Scan-level ion mobility type (`scan.ion_mobility_type`).  NULL in every
   /// bundled fixture (see `ion_mobility`).
   std::optional<std::string> ion_mobility_type;
+
+  /// `mz_delta_model` — the WLS beta coefficients used to reconstruct
+  /// null-marked m/z values.  Carried here so peak decode needs no second,
+  /// per-spectrum metadata query (that query relied on a `spectrum` struct
+  /// group, which the flat layout does not have).  Empty when absent.
+  std::vector<double> mz_delta_model;
 };
 
 } // namespace MzPeak

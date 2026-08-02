@@ -528,6 +528,23 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
       // RDR-10b CvParam list.
       m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
+      // Delta model for null-marking reconstruction (large_list<double>).
+      if (auto dm = resolve_field(*spectrum, "mz_delta_model")) {
+        if (!dm->IsNull(r)) {
+          auto ll = std::dynamic_pointer_cast<arrow::LargeListArray>(dm);
+          auto sl = std::dynamic_pointer_cast<arrow::ListArray>(dm);
+          if (ll || sl) {
+            auto vals = std::static_pointer_cast<arrow::DoubleArray>(
+                ll ? ll->values() : sl->values());
+            int64_t off = ll ? ll->value_offset(r) : sl->value_offset(r);
+            int64_t len = ll ? ll->value_length(r) : sl->value_length(r);
+            m.mz_delta_model.reserve(static_cast<std::size_t>(len));
+            for (int64_t k = 0; k < len; ++k)
+              m.mz_delta_model.push_back(vals->Value(off + k));
+          }
+        }
+      }
+
       // -------------------------------------------------------------------
       // RDR-9b: auxiliary_arrays (large_list<struct>) — PART A (structural,
       // VALIDATED) + PART B (raw-byte VALUE decode, FIXTURE-GATED FOLLOW-UP).

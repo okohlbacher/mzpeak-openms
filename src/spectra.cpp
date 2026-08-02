@@ -64,21 +64,14 @@ void Spectra::load_metadata_()
 Spectrum Spectra::fetch(uint64_t index)
 {
   // Dispatch to the peaks file when metadata says this is a centroid spectrum.
+  // Read from the cached metadata map rather than re-querying the metadata file
+  // per spectrum: the old projection needed a `spectrum` struct group, which the
+  // flat layout does not have, so it silently fell through to the profile table.
   std::shared_ptr<Data::Signals> signals = data_;
-  if (peaks_ && meta_) {
-    auto grp = meta_->group("spectrum");
-    if (grp) {
-      Util::Projection proj;
-      auto peaks_col = proj.project(grp, Schema::Group::CVType("MS", "1003059"));
-      if (peaks_col.has_value()) {
-        auto slice = meta_->indexed(index, grp, proj);
-        if (slice) {
-          std::optional<uint64_t> n_peaks;
-          slice->singleton<Util::Decoders::Scalar<uint64_t, uint64_t>>(*peaks_col,
-                                                                       n_peaks);
-          if (n_peaks.has_value() && *n_peaks > 0) signals = peaks_;
-        }
-      }
+  if (peaks_ && md_map_) {
+    auto it = md_map_->find(index);
+    if (it != md_map_->end() && it->second.number_of_peaks.value_or(0) > 0) {
+      signals = peaks_;
     }
   }
 
