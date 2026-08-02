@@ -30,6 +30,7 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
     , meta_(std::move(meta))
 {
   resize(data_->record_count());
+  load_metadata_();
 }
 
 /******************************************************************************/
@@ -44,6 +45,19 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
 {
   // Both files share the same spectrum_count KV; read it from data_.
   resize(data_->record_count());
+  load_metadata_();
+}
+
+/******************************************************************************/
+void Spectra::load_metadata_()
+{
+  // Built here rather than lazily on first fetch(): the descriptive metadata is
+  // small (~1 MB for 32k spectra), almost every access path needs it, and a
+  // lazily-published cache was a data race between concurrent fetch() calls.
+  // Peak decode stays lazy — that is the expensive part.
+  if (!meta_) return;
+  md_map_ = std::make_shared<const std::map<uint64_t, SpectrumMetadata>>(
+      meta_->read_spectrum_metadata());
 }
 
 /******************************************************************************/
@@ -74,14 +88,6 @@ Spectrum Spectra::fetch(uint64_t index)
                d.array_type == Schema::PSI::ArrayType::Intensity;
       }) |
       std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
-
-  // Build (once) and share the descriptive-metadata cache.  Reading it here is
-  // cheap relative to peak decode, and Spectrum keeps peak decode lazy so a
-  // metadata-only pass never touches the signal arrays.
-  if (!md_map_ && meta_) {
-    md_map_ = std::make_shared<const std::map<uint64_t, SpectrumMetadata>>(
-        meta_->read_spectrum_metadata());
-  }
 
   return Spectrum(index, signals, std::move(dims), meta_, md_map_);
 }

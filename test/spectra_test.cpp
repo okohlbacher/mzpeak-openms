@@ -9,6 +9,10 @@ directory of this repository.
 #define BOOST_TEST_MODULE Spectra
 #include <boost/test/included/unit_test.hpp>
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
@@ -124,4 +128,50 @@ BOOST_AUTO_TEST_CASE(decodes_intensity_as_float32)
   BOOST_TEST(inten.size() == 13589);
   BOOST_TEST(inten[1] == 1938.1174f, boost::test_tools::tolerance(0.01f));
   BOOST_TEST(inten[2] == 2572.8389f, boost::test_tools::tolerance(0.01f));
+}
+
+/******************************************************************************/
+// Thread safety: the lazy peak decode must run exactly once and must not race.
+//
+// Before std::call_once guarded it, `decoded_`/`mz_`/`intensity_` were plain
+// mutable members written from a const method, so concurrent mz() calls on one
+// Spectrum (or on copies sharing it) were a data race — undefined behaviour
+// that can hand back a half-filled vector. Copies also each re-read the file.
+//
+// Hammering one Spectrum plus copies of it from many threads is the cheapest
+// thing that fails if the synchronisation regresses; run under TSan for the
+// strong version.
+BOOST_AUTO_TEST_CASE(concurrent_peak_decode_is_safe_and_happens_once)
+{
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+
+  // One spectrum, copied before any decode has happened.  Copies share the
+  // decode state, so exactly one of these threads performs the read.
+  auto original = spectra[0];
+  constexpr int kThreads = 16;
+  std::vector<MzPeak::Spectrum> copies(kThreads, original);
+
+  std::atomic<int> mismatches{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&copies, t, &mismatches] {
+      const auto& mz = copies[static_cast<std::size_t>(t)].mz();
+      const auto& inten = copies[static_cast<std::size_t>(t)].intensity();
+      if (mz.size() != 13589 || inten.size() != 13589) ++mismatches;
+      // Spot-check reconstructed and real values seen by every thread.
+      if (std::abs(mz[8] - 204.7593349) > 1e-6) ++mismatches;
+      if (std::abs(static_cast<double>(inten[1]) - 1938.1174) > 0.01) ++mismatches;
+    });
+  }
+  for (auto& th : threads)
+    th.join();
+
+  BOOST_TEST(mismatches.load() == 0);
+
+  // The original observes the same decode its copies triggered.
+  BOOST_TEST(original.mz().size() == 13589u);
+  BOOST_TEST(std::abs(original.mz()[8] - 204.7593349) < 1e-6);
 }

@@ -51,9 +51,13 @@ private:
   std::shared_ptr<Metadata::Table> meta_;
 
   // Cached per-spectrum descriptive metadata (RT, precursors, ion mobility, …),
-  // built lazily on first fetch from meta_ and shared into each Spectrum.  Null
-  // until built, and stays null when there is no metadata table.
+  // read once at construction and shared into every Spectrum.  Stays null when
+  // there is no metadata table.
   std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map_;
+
+  // Populate md_map_ from meta_.  Called from the constructors so that fetch()
+  // never publishes it lazily (that was a data race between threads).
+  void load_metadata_();
 
   // Function to fetch a specific spectrum.
   Spectrum fetch(uint64_t);

@@ -11,6 +11,7 @@ top-level directory of this repository.
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,18 +31,34 @@ class Spectra;
 
 /**
  * Access to a single spectrum in an MzPeak file.
+ *
+ * @note THREAD SAFETY.  A `Spectrum` is safe to *read* concurrently: the lazy
+ * peak decode behind mz()/intensity() is serialised with `std::call_once`, and
+ * copies of a `Spectrum` share one decode, so the arrays are materialised
+ * exactly once no matter how many copies or threads ask for them.
+ *
+ * What is NOT safe is driving one `Spectra` (or the `Data::Signals` behind it)
+ * from several threads at once: decoding two DIFFERENT spectra concurrently
+ * still funnels through the same Parquet reader, whose thread-safety is not
+ * established.  **Use one `Spectra` per thread.**
  */
 class Spectrum final {
 public:
   /// The type of decoder used.
   using decoder_type = Data::Encoding::Decoder<double>;
 
-  // Special members are implicit (rule of zero): copyable AND movable, so
-  // returning a Spectrum by value moves its arrays rather than copying.
+  // Special members are implicit (rule of zero): copyable AND movable.  The
+  // decoded peak arrays live in a shared_ptr, so copying is cheap and copies
+  // share the decode rather than each repeating the file read.
 
   /**
    * Mass-to-charge values.  Decodes the peak arrays on first access (lazy):
    * calling only the metadata accessors below never touches the peak data.
+   *
+   * @warning The returned reference is owned by this `Spectrum`.  Because
+   * `Spectra::operator[]` yields a Spectrum BY VALUE, writing
+   * `const auto& mz = spectra[0].mz();` dangles — bind the spectrum to a named
+   * local first: `auto s = spectra[0]; const auto& mz = s.mz();`
    */
   const std::vector<double>& mz() const;
 
@@ -60,6 +77,11 @@ public:
    * Full per-spectrum descriptive metadata (RT, precursors, isolation windows,
    * selected ions, scan windows, ion mobility).  Resolved from the cached
    * spectra_metadata table WITHOUT decoding the peak arrays.
+   *
+   * @warning Same lifetime rule as mz(): the reference is kept alive by this
+   * `Spectrum` (and the `Spectra` that produced it), so
+   * `const auto& md = run.spectra()[3].metadata();` dangles — both temporaries
+   * die at the end of the statement.  Bind a named local first.
    */
   const SpectrumMetadata& metadata() const;
 
@@ -94,9 +116,20 @@ protected:
            std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map);
 
 private:
-  /// Read + decode the peak arrays into mz_/intensity_ on first access
-  /// (idempotent).  This is the ONLY place the signal (peak) file is touched, so
-  /// metadata-only iteration never reads peak data.
+  /// The lazily-decoded peak arrays, plus the flag that serialises the decode.
+  /// Held behind a shared_ptr so that copying a Spectrum is cheap, copies share
+  /// one decode, and `std::once_flag` (neither copyable nor movable) does not
+  /// leak into Spectrum's own special members.
+  struct Peaks {
+    std::once_flag once;
+    std::vector<double> mz;
+    std::vector<float> intensity;
+  };
+
+  /// Read + decode the peak arrays into peaks_ on first access.  Runs at most
+  /// once per Spectrum (and its copies) even under concurrent callers.  This is
+  /// the ONLY place the signal (peak) file is touched, so metadata-only
+  /// iteration never reads peak data.
   void decode_() const;
 
   uint64_t index_;
@@ -107,9 +140,7 @@ private:
   std::shared_ptr<Data::Signals> signals_;
   std::vector<Data::ArrayIndex::Dimension> dims_;
 
-  mutable bool decoded_ = false;
-  mutable std::vector<double> mz_;
-  mutable std::vector<float> intensity_;
+  std::shared_ptr<Peaks> peaks_;
 };
 
 } // namespace MzPeak
