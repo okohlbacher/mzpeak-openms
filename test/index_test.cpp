@@ -11,6 +11,7 @@ directory of this repository.
 
 #include <ranges>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/index.h"
 #include "mzpeak/open.h"
 
@@ -101,4 +102,19 @@ BOOST_AUTO_TEST_CASE(older_layout_has_no_facets_or_column_mapping)
     BOOST_TEST((f.data_kind != MzPeak::Schema::DataKind::Precursors));
     BOOST_TEST((f.data_kind != MzPeak::Schema::DataKind::SelectedIons));
   }
+}
+
+/******************************************************************************/
+// Until the split-metadata layout is fully supported, reading one must FAIL
+// LOUDLY rather than quietly hand back an empty metadata map.
+//
+// Every accessor in this library fails soft (absent fields read back as
+// nullopt/""/empty), so an empty map is indistinguishable from a real file with
+// no metadata: ms_level 0, no retention time, no precursors. That is a
+// scientifically wrong answer that looks plausible — strictly worse than an
+// error. Fail fast at Spectra construction instead.
+BOOST_AUTO_TEST_CASE(split_metadata_layout_is_rejected_not_silently_empty)
+{
+  auto index = MzPeak::open("../test/files/v2/small.mzpeak");
+  BOOST_CHECK_THROW(index.spectra(), MzPeak::ParquetError);
 }

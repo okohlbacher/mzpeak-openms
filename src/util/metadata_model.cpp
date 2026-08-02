@@ -357,7 +357,24 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
   // PASS 1: spectrum column — build `out` keyed by spectrum.index VALUE.
   // -------------------------------------------------------------------
   std::shared_ptr<arrow::ChunkedArray> col(spectrum_column_from_table(table));
-  if (!col) return out;
+  if (!col) {
+    // No `spectrum` struct column.  Distinguish "not a spectrum metadata table"
+    // (fine, return nothing) from the newer split-metadata layout, where the
+    // fields are flat top-level columns and the facets live in sibling files.
+    //
+    // Failing loudly here is deliberate.  Every accessor in this library fails
+    // soft — absent fields read back as nullopt/""/empty — so silently
+    // returning an empty map would report ms_level 0, no retention time and no
+    // precursors for a perfectly good file.  That is a scientifically wrong
+    // answer that looks plausible, which is far worse than an error.
+    if (table->GetColumnByName("index") != nullptr) {
+      throw ParquetError(
+          "spectra metadata uses the split-metadata layout (flat columns plus "
+          "separate scans/precursors/selected_ions files), which this reader "
+          "does not support yet");
+    }
+    return out;
+  }
 
   for (const auto& chunk : col->chunks()) {
     if (chunk->type_id() != arrow::Type::STRUCT) continue;
