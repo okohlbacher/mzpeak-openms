@@ -72,6 +72,36 @@ BOOST_AUTO_TEST_CASE(reads_profile_arrays_beyond_first_spectrum)
 }
 
 /******************************************************************************/
+// Regression: null-marked INTENSITY values must decode to 0, not be run through
+// the m/z delta-model interpolator.
+//
+// small.mzpeak spectrum 0 has 2376 nulls in both the mz and intensity columns
+// at identical positions (7, 8, 14, 15, 21, 22, ... — pyarrow verified).  The
+// reference writer tags the intensity array MS:1003902, which the PSI-MS CV
+// defines as the m/z-INTERPOLATING transform, so keying the delta-model
+// decision off the transform accession interpolated intensity and produced
+// physically impossible negative values (-827.55 at position 8, -2721.54 at 15).
+// Null-marking reconstruction must follow sorting_rank == 0 instead.
+BOOST_AUTO_TEST_CASE(null_marked_intensity_reads_as_zero_not_interpolated)
+{
+  auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = mzpeak.spectra();
+  auto spectrum = spectra[0];
+  const auto& inten = spectrum.intensity();
+  BOOST_TEST_REQUIRE(inten.size() == 13589u);
+
+  // Positions that are null in the source intensity column must read as 0.
+  for (std::size_t i : {7u, 8u, 14u, 15u, 21u, 22u}) {
+    BOOST_TEST(inten[i] == 0.0f);
+  }
+
+  // And no intensity anywhere may be negative.
+  for (std::size_t i = 0; i < inten.size(); ++i) {
+    BOOST_TEST(inten[i] >= 0.0f);
+  }
+}
+
+/******************************************************************************/
 // Regression: intensity was decoded as Int32 while the array is float32, so
 // the FloatArray bytes were reinterpreted as integers (garbage).  Spectrum 0
 // reads correctly regardless of the slice bug, isolating the type fix.

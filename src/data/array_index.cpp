@@ -6,10 +6,11 @@ directory of this repository.
 
 */
 
+#include "mzpeak/data/array_index.h"
+
 #include <algorithm>
 #include <ranges>
 
-#include "mzpeak/data/array_index.h"
 #include "mzpeak/exception.h"
 #include "mzpeak/schema/buffer_format.h"
 #include "mzpeak/schema/entity_type.h"
@@ -19,10 +20,20 @@ namespace MzPeak::Data {
 /******************************************************************************/
 bool ArrayIndex::Dimension::needs_delta_model() const
 {
-  bool from_transform = transform.has_value() && transform->needs_delta_model();
-  return from_transform || std::ranges::any_of(entries, [](const auto& e) {
-           return e.sorting_rank.has_value() && e.sorting_rank.value() == 0;
-         });
+  // Null-marking reconstruction applies to the sorting-rank-0 array (m/z) ONLY;
+  // parallel nulls in intensity arrays are read as 0 (spec signal-data.md).
+  //
+  // Deliberately NOT keyed off the transform accession.  The PSI-MS CV defines
+  // MS:1003902 as the m/z-interpolating variant of MS:1003901, but the mzPeak
+  // reference implementation writes them with the opposite sense (its
+  // NULL_INTERPOLATE is MS:1003901, NULL_ZERO is MS:1003902) and every bundled
+  // fixture follows suit — tagging the INTENSITY array MS:1003902.  Trusting
+  // the accession therefore ran intensity through the delta-model interpolator
+  // and produced negative intensities at null positions.  sorting_rank is the
+  // one signal both sides agree on.
+  return std::ranges::any_of(entries, [](const auto& e) {
+    return e.sorting_rank.has_value() && e.sorting_rank.value() == 0;
+  });
 }
 
 /******************************************************************************/
