@@ -33,10 +33,18 @@ EntityType entity_type_from_string(const std::string_view& s)
 {
   using enum EntityType;
 
+  // The two spellings of `WavelengthSpectrum` are for backwards compatibility:
+  // upstream renamed the space form to the underscore form, mirroring the
+  // `data arrays` -> `data_arrays` rename handled in data_kind.cpp.  Accepting
+  // only one silently degrades every entry to `Other`, which makes the whole
+  // wavelength collection come back empty (has_uv.mzpeak: 520 rows).
+
   if (s == "spectrum") {
     return Spectrum;
   } else if (s == "chromatogram") {
     return Chromatogram;
+  } else if (s == "wavelength_spectrum") {
+    return WavelengthSpectrum;
   } else if (s == "wavelength spectrum") {
     return WavelengthSpectrum;
   } else {
