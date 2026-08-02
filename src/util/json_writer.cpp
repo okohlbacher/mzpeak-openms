@@ -77,9 +77,14 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
   for (const auto& file : files) {
     json::object o;
     o["name"] = file.name;
-    o["format"] = "parquet";
     o["entity_type"] = file.entity_type;
     o["data_kind"] = file.data_kind;
+    // Present in every current upstream index entry, so emit them for schema
+    // parity.  NOTE: adding them did NOT change the reference reader's
+    // behaviour in the T2 cross-implementation check, so they are not the
+    // reason it cannot find our arrays — do not read this as a fix.
+    o["column_mapping"] = json::array();
+    o["parameters"] = json::array();
     file_array.push_back(std::move(o));
   }
 
