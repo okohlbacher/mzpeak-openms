@@ -22,6 +22,12 @@ std::string data_kind_to_string(DataKind dk)
     return "peaks";
   case Metadata:
     return "metadata";
+  case Scans:
+    return "scans";
+  case Precursors:
+    return "precursors";
+  case SelectedIons:
+    return "selected_ions";
   case Proprietary:
     return "proprietary";
   case Other:
@@ -47,6 +53,12 @@ DataKind data_kind_from_string(const std::string_view& s)
     return Peaks;
   } else if (s == "metadata") {
     return Metadata;
+  } else if (s == "scans") {
+    return Scans;
+  } else if (s == "precursors") {
+    return Precursors;
+  } else if (s == "selected_ions") {
+    return SelectedIons;
   } else if (s == "proprietary") {
     return Proprietary;
   } else {

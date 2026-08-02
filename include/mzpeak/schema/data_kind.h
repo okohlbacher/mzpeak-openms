@@ -27,6 +27,19 @@ enum class DataKind {
   /// Metadata relating to one of the other files.
   Metadata,
 
+  /// Scan facet of an entity's metadata, in its own file.  Joined to the
+  /// primary Metadata file by `source_index` VALUE.  (Newer writers split the
+  /// metadata facets across files instead of nesting them as struct columns of
+  /// a single table.)
+  Scans,
+
+  /// Precursor facet of an entity's metadata, in its own file.  See Scans.
+  Precursors,
+
+  /// Selected-ion facet of an entity's metadata, in its own file.  Joined to
+  /// Precursors by (source_index, precursor_index).  See Scans.
+  SelectedIons,
+
   /// Non-standard file that can't be decoded by this library.
   /// However, users of this library can access the raw bytes of
   /// this file.
