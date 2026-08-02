@@ -29,10 +29,22 @@ std::string point_spectra_array_index_json();
 /**
  * A single entry in the mzpeak_index.json `files` array.
  */
+/// One `column_mapping` entry: binds a plain column path to its CV term.  The
+/// reference reader resolves metadata columns THROUGH this mapping — a column
+/// that is absent from it is logged as "unspecified" and effectively ignored,
+/// so omitting the mapping silently loses the field.
+struct IndexColumnMapping {
+  std::string name;
+  std::string path;
+  std::string accession;
+  std::string unit; // empty => null
+};
+
 struct IndexFileEntry {
   std::string name;
   std::string entity_type;
   std::string data_kind;
+  std::vector<IndexColumnMapping> column_mapping;
 };
 
 /**

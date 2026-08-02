@@ -270,7 +270,12 @@ void write_spectra_metadata_to_sink(
 
   auto table(arrow::Table::Make(schema, columns));
 
-  write_table_to_sink(sink, table, /*file_kv=*/{});
+  // Upstream carries spectrum_count on the metadata members too, not just on
+  // the signal file.  Without it the reference reader has no count to size the
+  // spectrum set from.
+  std::map<std::string, std::string> file_kv{
+      {"spectrum_count", std::to_string(rows.size())}};
+  write_table_to_sink(sink, table, file_kv);
 }
 
 } // namespace
@@ -399,28 +404,30 @@ std::shared_ptr<arrow::Table> empty_selected_ions_table()
                              build_optional_array<arrow::DoubleBuilder>(nonef)});
 }
 
-std::string table_bytes(const std::shared_ptr<arrow::Table>& table)
+std::string table_bytes(const std::shared_ptr<arrow::Table>& table,
+                        const std::map<std::string, std::string>& file_kv)
 {
   auto sink_result(arrow::io::BufferOutputStream::Create());
   if (!sink_result.ok()) {
     throw ParquetError("create buffer: " + sink_result.status().ToString());
   }
   auto sink(sink_result.ValueOrDie());
-  write_table_to_sink(sink, table, /*file_kv=*/{});
+  write_table_to_sink(sink, table, file_kv);
   auto buf(sink->Finish());
   if (!buf.ok()) throw ParquetError("finish buffer: " + buf.status().ToString());
   return (*buf)->ToString();
 }
 
 void write_table_to_path(const std::string& path,
-                         const std::shared_ptr<arrow::Table>& table)
+                         const std::shared_ptr<arrow::Table>& table,
+                         const std::map<std::string, std::string>& file_kv)
 {
   auto sink_result(arrow::io::FileOutputStream::Open(path));
   if (!sink_result.ok()) {
     throw ParquetError("open output file " + path + ": " +
                        sink_result.status().ToString());
   }
-  write_table_to_sink(sink_result.ValueOrDie(), table, /*file_kv=*/{});
+  write_table_to_sink(sink_result.ValueOrDie(), table, file_kv);
 }
 
 } // namespace
@@ -429,19 +436,25 @@ void write_table_to_path(const std::string& path,
 void write_spectra_metadata_facets(const std::string& dir,
                                    const std::vector<SpectrumMetaRow>& rows)
 {
-  write_table_to_path(dir + "/spectra_metadata_scans.parquet", scans_table(rows));
+  std::map<std::string, std::string> kv{
+      {"spectrum_count", std::to_string(rows.size())}};
+  write_table_to_path(dir + "/spectra_metadata_scans.parquet", scans_table(rows),
+                      kv);
   write_table_to_path(dir + "/spectra_metadata_precursors.parquet",
-                      empty_precursors_table());
+                      empty_precursors_table(), kv);
   write_table_to_path(dir + "/spectra_metadata_selected_ions.parquet",
-                      empty_selected_ions_table());
+                      empty_selected_ions_table(), kv);
 }
 
 /******************************************************************************/
 std::array<std::string, 3>
 spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows)
 {
-  return {table_bytes(scans_table(rows)), table_bytes(empty_precursors_table()),
-          table_bytes(empty_selected_ions_table())};
+  std::map<std::string, std::string> kv{
+      {"spectrum_count", std::to_string(rows.size())}};
+  return {table_bytes(scans_table(rows), kv),
+          table_bytes(empty_precursors_table(), kv),
+          table_bytes(empty_selected_ions_table(), kv)};
 }
 
 } // namespace MzPeak::Util

@@ -79,11 +79,22 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
     o["name"] = file.name;
     o["entity_type"] = file.entity_type;
     o["data_kind"] = file.data_kind;
-    // Present in every current upstream index entry, so emit them for schema
-    // parity.  NOTE: adding them did NOT change the reference reader's
-    // behaviour in the T2 cross-implementation check, so they are not the
-    // reason it cannot find our arrays — do not read this as a fix.
-    o["column_mapping"] = json::array();
+    // The reference reader resolves metadata columns through this mapping; a
+    // column missing from it is reported as "unspecified column" and ignored.
+    json::array mapping;
+    for (const auto& m : file.column_mapping) {
+      json::object e;
+      e["name"] = m.name;
+      e["path"] = m.path;
+      e["accession"] = m.accession;
+      if (m.unit.empty()) {
+        e["unit"] = nullptr;
+      } else {
+        e["unit"] = m.unit;
+      }
+      mapping.push_back(std::move(e));
+    }
+    o["column_mapping"] = std::move(mapping);
     o["parameters"] = json::array();
     file_array.push_back(std::move(o));
   }

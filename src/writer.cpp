@@ -113,12 +113,22 @@ std::string spectra_index_json(bool with_data,
     files.push_back({"spectra_data.parquet", "spectrum",
                      Schema::data_kind_to_string(DataKind::DataArray)});
   }
-  files.push_back({"spectra_metadata.parquet", "spectrum",
-                   Schema::data_kind_to_string(DataKind::Metadata)});
+  files.push_back(
+      {"spectra_metadata.parquet",
+       "spectrum",
+       Schema::data_kind_to_string(DataKind::Metadata),
+       {{"ms level", "ms_level", "MS:1000511", ""},
+        {"scan polarity", "scan_polarity", "MS:1000465", ""},
+        {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
+        {"number of data points", "number_of_data_points", "MS:1003060", ""},
+        {"number of peaks", "number_of_peaks", "MS:1003059", ""}}});
   // The reference reader requires all three facet members to be present, even
   // when this writer has nothing to put in the precursor/selected-ion ones.
-  files.push_back({"spectra_metadata_scans.parquet", "spectrum",
-                   Schema::data_kind_to_string(DataKind::Scans)});
+  files.push_back(
+      {"spectra_metadata_scans.parquet",
+       "spectrum",
+       Schema::data_kind_to_string(DataKind::Scans),
+       {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
   files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
                    Schema::data_kind_to_string(DataKind::Precursors)});
   files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
