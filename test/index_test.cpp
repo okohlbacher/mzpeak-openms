@@ -105,16 +105,91 @@ BOOST_AUTO_TEST_CASE(older_layout_has_no_facets_or_column_mapping)
 }
 
 /******************************************************************************/
-// Until the split-metadata layout is fully supported, reading one must FAIL
-// LOUDLY rather than quietly hand back an empty metadata map.
-//
-// Every accessor in this library fails soft (absent fields read back as
-// nullopt/""/empty), so an empty map is indistinguishable from a real file with
-// no metadata: ms_level 0, no retention time, no precursors. That is a
-// scientifically wrong answer that looks plausible — strictly worse than an
-// error. Fail fast at Spectra construction instead.
-BOOST_AUTO_TEST_CASE(split_metadata_layout_is_rejected_not_silently_empty)
+// The split-metadata layout must produce the SAME metadata as the older nested
+// layout.  test/files/v2/small.mzpeak is the upstream regeneration of
+// test/files/small.mzpeak, so every field below is cross-checked against the
+// old fixture rather than against hardcoded numbers — that catches a rename
+// silently reading back as nullopt, which is how this layout fails.
+BOOST_AUTO_TEST_CASE(split_metadata_layout_matches_the_nested_layout)
 {
-  auto index = MzPeak::open("../test/files/v2/small.mzpeak");
-  BOOST_CHECK_THROW(index.spectra(), MzPeak::ParquetError);
+  auto v1 = MzPeak::open("../test/files/small.mzpeak").spectra();
+  auto v2 = MzPeak::open("../test/files/v2/small.mzpeak").spectra();
+  BOOST_TEST_REQUIRE(v1.size() == v2.size());
+
+  std::size_t compared = 0, with_precursor = 0;
+  for (std::size_t i = 0; i < v1.size(); ++i) {
+    auto a = v1[i];
+    auto b = v2[i];
+    const auto& ma = a.metadata();
+    const auto& mb = b.metadata();
+
+    BOOST_TEST(ma.index == mb.index);
+    BOOST_TEST((ma.ms_level == mb.ms_level));
+    BOOST_TEST(ma.representation == mb.representation);
+    BOOST_TEST((ma.number_of_data_points == mb.number_of_data_points));
+    BOOST_TEST((ma.number_of_peaks == mb.number_of_peaks));
+
+    // Retention time in SECONDS: the newer layout declares the unit
+    // (UO:0000031, minutes) in column_mapping instead of the column name.
+    BOOST_TEST_REQUIRE(ma.retention_time.has_value() ==
+                       mb.retention_time.has_value());
+    if (ma.retention_time)
+      BOOST_TEST(std::abs(*ma.retention_time - *mb.retention_time) < 1e-6);
+
+    // Precursors: exercises the isolation_window_target and peak_intensity
+    // renames, which a plain de-prefixing port would miss.
+    BOOST_TEST_REQUIRE(ma.precursors.size() == mb.precursors.size());
+    if (!ma.precursors.empty()) {
+      ++with_precursor;
+      const auto& pa = ma.precursors[0];
+      const auto& pb = mb.precursors[0];
+      BOOST_TEST((pa.isolation_window.target_mz == pb.isolation_window.target_mz));
+      BOOST_TEST(
+          (pa.isolation_window.lower_offset == pb.isolation_window.lower_offset));
+      BOOST_TEST(
+          (pa.isolation_window.upper_offset == pb.isolation_window.upper_offset));
+      BOOST_TEST_REQUIRE(pa.selected_ions.size() == pb.selected_ions.size());
+      if (!pa.selected_ions.empty()) {
+        BOOST_TEST((pa.selected_ions[0].selected_ion_mz ==
+                    pb.selected_ions[0].selected_ion_mz));
+        BOOST_TEST((pa.selected_ions[0].intensity == pb.selected_ions[0].intensity));
+      }
+    }
+
+    // Scan windows come from the separate scans file in the newer layout.
+    BOOST_TEST_REQUIRE(ma.scan_windows.size() == mb.scan_windows.size());
+    if (!ma.scan_windows.empty()) {
+      BOOST_TEST((ma.scan_windows[0].lower_limit == mb.scan_windows[0].lower_limit));
+      BOOST_TEST((ma.scan_windows[0].upper_limit == mb.scan_windows[0].upper_limit));
+    }
+    ++compared;
+  }
+  BOOST_TEST(compared == 48u);
+  // 34 MS2 carry a precursor; if the facet join silently produced nothing this
+  // would be 0 while every per-spectrum check above still passed.
+  BOOST_TEST(with_precursor == 34u);
+}
+
+/******************************************************************************/
+// Peak decode must work on the split layout too: the profile/centroid dispatch
+// used to re-query the metadata file through a `spectrum` struct group, which
+// the flat layout does not have.
+BOOST_AUTO_TEST_CASE(split_metadata_layout_decodes_peaks)
+{
+  auto v1 = MzPeak::open("../test/files/small.mzpeak").spectra();
+  auto v2 = MzPeak::open("../test/files/v2/small.mzpeak").spectra();
+
+  for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2)}) {
+    auto a = v1[i];
+    auto b = v2[i];
+    const auto& mza = a.mz();
+    const auto& mzb = b.mz();
+    BOOST_TEST_REQUIRE(mza.size() == mzb.size());
+    for (std::size_t k = 0; k < mza.size(); ++k) {
+      if (std::abs(mza[k] - mzb[k]) > 1e-9) {
+        BOOST_TEST(mza[k] == mzb[k]); // report the first offender
+        break;
+      }
+    }
+  }
 }

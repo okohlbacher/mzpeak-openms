@@ -12,6 +12,7 @@ directory of this repository.
 #include <map>
 #include <memory>
 
+#include "mzpeak/schema/data_kind.h"
 #include "mzpeak/schema/group.h"
 #include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/parquet.h"
@@ -26,6 +27,11 @@ class Table final {
 public:
   /// Constructor.
   Table(std::unique_ptr<Util::Parquet>);
+
+  /// Attach a facet file (scans / precursors / selected ions) that belongs to
+  /// this entity's metadata.  Newer writers split the facets into their own
+  /// files; older ones nest them as struct columns and never call this.
+  void add_facet(Schema::DataKind, std::unique_ptr<Util::Parquet>);
 
   /// Destructor.
   ~Table();

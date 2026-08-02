@@ -161,6 +161,16 @@ Spectra Index::spectra() const
   std::unique_ptr<Metadata::Table> meta = nullptr;
   if (meta_file) {
     meta = std::make_unique<Metadata::Table>(parquet(*meta_file));
+
+    // Newer writers put each metadata facet in its own file; attach them so the
+    // reader can join them by source_index.  Older writers have none of these.
+    for (const auto& file : impl_->files_) {
+      if (file.entity_type != Schema::EntityType::Spectrum) continue;
+      if (file.data_kind == Scans || file.data_kind == Precursors ||
+          file.data_kind == SelectedIons) {
+        meta->add_facet(file.data_kind, parquet(file));
+      }
+    }
   }
 
   std::unique_ptr<Data::Signals> data =

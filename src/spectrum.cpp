@@ -42,11 +42,12 @@ void Spectrum::decode_() const
     std::shared_ptr<Util::Slice> slice =
         signals_->select(dims_, signals_->index().eq(index_));
 
-    // The delta model (for null-marking reconstruction) lives in the metadata
-    // table and is read per-spectrum here — also deferred to first peak access.
-    Metadata::Spectrum md_spec(md_table_, index_);
+    // The delta model comes from the already-cached metadata map.  It used to be
+    // re-queried per spectrum through Metadata::Spectrum, which needs a
+    // `spectrum` struct GROUP in the Parquet schema — the flat layout has none,
+    // so that query silently produced a garbage slice and a corrupt array.
     decoder_type decoder(signals_, std::move(slice),
-                         Util::DeltaEstimator<double>(md_spec.delta_model()));
+                         Util::DeltaEstimator<double>(metadata().mz_delta_model));
 
     for (const auto& dim : dims_) {
       if (dim.array_type == Schema::PSI::ArrayType::Mz) {
