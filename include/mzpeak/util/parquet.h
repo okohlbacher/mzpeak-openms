@@ -87,6 +87,12 @@ public:
    * Returned by shared_ptr, not by reference: the cache evicts, and a reference
    * into it would dangle the moment a caller fetched a second group while still
    * holding the first.
+   *
+   * @note An arrow::Array sliced out of these batches SHARES their buffers, so
+   * anything retaining such a slice keeps the whole decoded row group alive.
+   * Spectrum copies its values out and drops the slice; Chromatogram keeps its
+   * decoder, and so keeps a group resident for as long as the caller holds it.
+   * That is bounded by how many entities the caller holds, not by the run.
    */
   using RowGroupBatches = std::vector<std::shared_ptr<arrow::RecordBatch>>;
   std::shared_ptr<const RowGroupBatches> row_group(int32_t);
