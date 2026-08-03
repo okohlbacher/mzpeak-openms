@@ -76,6 +76,12 @@ build_optional_array(const std::vector<std::optional<T>>& values)
 /******************************************************************************/
 // Number of DFS leaves under a type.  A primitive is one leaf; a group is the
 // sum of its children.
+//
+// A LIST counts as its element's leaves, which is what Parquet does too: a
+// `large_list<struct<a:int32, b:int32>>` written by Arrow occupies leaves 0 and
+// 1, putting a following `index` column at leaf 2.  Verified against a written
+// file rather than reasoned about, because the metadata tables carry exactly
+// that shape and a miscount here declares the wrong column sorted.
 int leaf_count(const arrow::DataType& type)
 {
   if (type.num_fields() == 0) return 1;
