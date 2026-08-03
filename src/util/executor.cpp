@@ -112,8 +112,6 @@ struct EqualityScan {
     auto typed =
         std::static_pointer_cast<typename type_traits<T>::array_type>(array);
 
-    // The caller leaves the mask unsized so a path that does not need one never
-    // pays for it.
     want_rows.assign(static_cast<std::size_t>(typed->length()), true);
     for (int64_t i = 0; i < typed->length(); ++i) {
       // A null never compares equal, and the general path treats an unreadable
@@ -130,9 +128,8 @@ struct EqualityScan {
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
                                          std::shared_ptr<arrow::RecordBatch>& batch)
 {
-  // Fast path FIRST, and only then the mask.  Allocating and initialising a
-  // bit per row of the page, for every entity, cost more than the search it was
-  // there to record -- and on the sorted path it was thrown away unread.
+  // Each path sizes the mask itself, so a fast path that declines costs no
+  // allocation before the general path takes over.
   std::vector<bool> want_rows;
 
   if (auto equality = plan.query.as_equality()) {

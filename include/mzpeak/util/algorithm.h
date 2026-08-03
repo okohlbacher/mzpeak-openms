@@ -82,8 +82,9 @@ template <typename T> T median_delta(const std::vector<T>& values, T or_else)
 /**
  * Intersect an absolute row range with one record batch.
  *
- * @param range_offset,range_length  the range, in absolute file rows.
- * @param batch_start                the batch's first absolute row.
+ * @param range_offset,range_length  the range, in rows relative to the start of the
+ * row group.
+ * @param batch_start                the batch's first row within the row group.
  * @param batch_rows                 the batch's row count.
  * @return `{offset, length}` RELATIVE to the batch; length is 0 when the two
  *         do not overlap.

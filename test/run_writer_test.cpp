@@ -14,6 +14,7 @@ directory of this repository.
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <parquet/api/reader.h>
 
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/open.h"
@@ -374,4 +375,49 @@ BOOST_AUTO_TEST_CASE(entity_count_is_derived_when_the_file_declares_none)
 
   // No metadata table, so the descriptive record is empty rather than absent.
   BOOST_TEST(chromatograms[0].metadata().id.empty());
+}
+
+/******************************************************************************/
+// Every emitted table declares its entity index as the sorted leaf.
+//
+// The leaf position is DERIVED from the schema, and a shape this writer does
+// not recognise declares NOTHING rather than guessing at leaf 0 -- a reader may
+// believe the declaration and binary search on it, and searching an unsorted
+// column finds one run and silently misses the rest.  This pins the derivation
+// against a future change to any table's shape.
+BOOST_AUTO_TEST_CASE(every_table_declares_its_entity_index_sorted)
+{
+  Scratch scratch("mzp-test-sorting");
+
+  MzPeak::RunContents run;
+  MzPeak::SpectrumData s;
+  s.mz = {100.0, 200.0};
+  s.intensity = {1.0f, 2.0f};
+  s.id = "scan=1";
+  run.spectra.push_back(s);
+  run.chromatograms.push_back(make_tic());
+  run.wavelength_spectra.push_back(make_uv());
+  MzPeak::write_run_directory(scratch.path, run);
+
+  std::size_t checked = 0;
+  for (const auto& entry : fs::directory_iterator(scratch.path)) {
+    if (entry.path().extension() != ".parquet") continue;
+
+    auto reader = parquet::ParquetFileReader::OpenFile(entry.path().string());
+    auto metadata = reader->metadata();
+    BOOST_TEST_REQUIRE(metadata->num_row_groups() > 0);
+
+    const auto sorting = metadata->RowGroup(0)->sorting_columns();
+    BOOST_TEST_REQUIRE(sorting.size() == 1u,
+                       "no sorting column declared in " << entry.path().filename());
+    BOOST_TEST(sorting[0].column_idx == 0);
+    BOOST_TEST(!sorting[0].descending);
+    BOOST_TEST(!sorting[0].nulls_first);
+    ++checked;
+  }
+
+  // Spectra, chromatograms and UV each contribute data plus metadata plus
+  // facets; a derivation that silently stopped matching would show up here as a
+  // smaller count long before it showed up as a wrong answer.
+  BOOST_TEST(checked >= 9u);
 }
