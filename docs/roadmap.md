@@ -22,6 +22,19 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 - **Thread safety** — lazy peak decode serialised with `std::call_once` and
   shared across copies; ThreadSanitizer reports 0 races.
 
+## Resolved: the imaging point-count difference was a harness bug
+
+`Example_Processed.img.mzpeak` appeared to decode 2837 points against the
+reference's 3007. It does not. The reference example writes an MGF block
+*before* its `Raw Data:` section, and the comparison script skipped only one
+line — so 170 MGF header lines were being counted as data points. Extracting
+from `Raw Data:` onward gives 2837 on both sides, with m/z agreeing to 6.1e-05
+(the imaging file stores float32 coordinates).
+
+Only that fixture is affected: for `small.mzpeak` the reference emits
+`Raw Data:` as its first line, so the earlier point/chunked comparisons against
+it stand unchanged.
+
 ## Fixed since the review
 
 - Multi-scan spectra report their earliest scan (92b8372).
@@ -35,6 +48,14 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
   per Arrow record batch. Point and chunked decoding are now bit-identical, and
   the reconstructed-point error against the reference fell from 2.5e-06 to
   8.5e-07 Da.
+- Unrecoverable null shapes are rejected instead of synthesised: a lone
+  interior null is refused, per the spec's rule that unpaired nulls may appear
+  only as the first or last value of an array.
+- Coalesced point columns refuse a row where two sibling columns both carry a
+  value; they may be in different units and preferring one would be a guess.
+- `EnumerableProxy::Iterator` no longer declares defaulted move operations
+  taking `const&&`, which is ill-formed and made the header fail to compile on
+  GCC.
 - `chunk_end` validation tightened to 1e-9 relative and extended with
   start <= end and chunk-ordering checks.
 
@@ -60,15 +81,13 @@ trusted numerically until one is.
 Verified against the code but NOT yet fixed. Ordered by severity. Each is a
 *silent* failure unless noted.
 
-- **Intensity units are lost when point columns coalesce.** `has_uv` merges a
-  counts column and an absorbance column into one array with no unit accessor,
-  and if both were ever non-null on one row the primary silently wins. Verified
-  disjoint in the bundled file (212 / 526 / 0 overlap), so this is a latent
-  design gap rather than a live defect.
-- **Unrecoverable null shapes are silently synthesised.** An interior unpaired
-  null (`[100, 101, null, 110]`) is filled rather than rejected, though the spec
-  calls that unrecoverable; a singleton with no regression model can use a zero
-  delta and produce repeated coordinates.
+- **Coalesced intensity arrays do not expose their unit.** `has_uv` stores
+  detector counts and absorbance as sibling columns; each chromatogram
+  populates exactly one, so its values are internally consistent, but nothing
+  in the API says WHICH unit they are in. The silent half is fixed — a row
+  carrying both is now refused rather than resolved by preference — but the
+  remaining gap is a missing accessor, i.e. a feature, not a defect.
+
 - **Checked and NOT a defect — do not re-chase.** The numpress path skips null
   reconstruction on the assumption that numpress output is dense. One reviewer
   argued the reference converts zero to null and then fills for numpress-linear
@@ -79,10 +98,6 @@ Verified against the code but NOT yet fixed. Ordered by severity. Each is a
   the assumption holds for its output. Revisit only if a writer is found that
   null-marks *and* numpress-encodes the same axis.
 
-- **Imaging point count** — 2837 (ours, matching the file's own declared
-  `number_of_data_points`) vs 3007 (Rust) for `Example_Processed.img.mzpeak`.
-  Unexplained; our count agrees with the file, so this is not obviously our
-  defect.
 - **RDR-2** missing row-group stats → conservatively INCLUDE (not prune).
 - **RDR-11** `record_count` fallback (missing count KV → real count, not 0/max).
 - **RDR-12** null-check nullable columns in query eval.

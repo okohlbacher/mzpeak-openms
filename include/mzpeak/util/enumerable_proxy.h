@@ -54,10 +54,16 @@ public:
     }
 
     // Copy, move, and assignment constructors.
+    //
+    // The move overloads take `Iterator&&`, NOT `const Iterator&&`: a defaulted
+    // move constructor or move assignment may only take a non-const rvalue
+    // reference, so `= default` on the const&& forms is ill-formed.  Clang
+    // accepts it, GCC rejects it, so the const versions made this header fail
+    // to compile on GCC as soon as anything instantiated the template.
     Iterator(const Iterator&) = default;
-    Iterator(const Iterator&&) = default;
+    Iterator(Iterator&&) = default;
     Iterator& operator=(const Iterator&) = default;
-    Iterator& operator=(const Iterator&&) = default;
+    Iterator& operator=(Iterator&&) = default;
 
     /// Prefix increment.
     Iterator& operator++()

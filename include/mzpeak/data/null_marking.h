@@ -11,6 +11,7 @@ directory of this repository.
 #include <memory>
 #include <vector>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/util/algorithm.h"
 #include "mzpeak/util/decoders.h"
 #include "mzpeak/util/delta_estimator.h"
@@ -133,6 +134,37 @@ void Decoder<T, U>::chunk(const std::shared_ptr<array_type>& array)
   range.end = array_->length();
   if (!range.empty()) ranges_.push_back(range);
   next_range_ = ranges_.begin();
+
+  // Reject null shapes the format calls unrecoverable rather than inventing
+  // values for them.  Per the specification (signal-data.md, "Decoding null
+  // pairs"): "Unpaired null values MAY appear only as the first or last null
+  // value in array; any other unpaired null is an unrecoverable error."
+  //
+  // Null marking flanks each run of real values with a zero-intensity point, so
+  // interior nulls come in PAIRS — one belonging to the run on the left, one to
+  // the run on the right.  A lone interior null belongs to neither, and filling
+  // it anyway produces a coordinate that is monotonic, plausible and wrong,
+  // with nothing downstream able to tell.  Refusing is the honest outcome.
+  const int64_t length = array_->length();
+  int64_t run_start = -1;
+  for (int64_t index = 0; index <= length; ++index) {
+    const bool is_null = (index < length) && array_->IsNull(index);
+    if (is_null) {
+      if (run_start < 0) run_start = index;
+      continue;
+    }
+    if (run_start < 0) continue;
+
+    const int64_t run_length = index - run_start;
+    const bool at_start = (run_start == 0);
+    const bool at_end = (index == length);
+    if (run_length == 1 && !at_start && !at_end) {
+      throw ParquetError("unrecoverable null marking: a lone null at position " +
+                         std::to_string(run_start) +
+                         " is neither the first nor the last value of the array");
+    }
+    run_start = -1;
+  }
 }
 
 /******************************************************************************/

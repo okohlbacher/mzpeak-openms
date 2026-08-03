@@ -270,14 +270,25 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
   for (std::size_t c = 0; c < n_chunks; ++c) {
     auto first = std::static_pointer_cast<array_type>((*columns.front())[c]);
     for (int64_t r = 0; r < first->length(); ++r) {
+      // Take the first column carrying a value, primary first — but do NOT
+      // pass over a second one silently.  These sibling columns can hold the
+      // same quantity in DIFFERENT units (has_uv stores detector counts and
+      // absorbance), so two values on one row means the file is telling us two
+      // incompatible things and picking either would be a guess presented as
+      // fact.  In every bundled file they are strictly disjoint.
       bool written = false;
       for (const auto& column : columns) {
         if (c >= column->size()) continue;
         auto arr = std::static_pointer_cast<array_type>((*column)[c]);
         if (r >= arr->length() || arr->IsNull(r)) continue;
+        if (written) {
+          throw ParquetError(
+              "two columns of dimension '" + dim.name +
+              "' carry a value on the same row; they may be in different units "
+              "and there is no basis for preferring one");
+        }
         (void)builder.Append(arr->Value(r));
         written = true;
-        break;
       }
       if (!written) (void)builder.AppendNull();
     }

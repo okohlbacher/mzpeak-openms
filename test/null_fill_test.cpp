@@ -173,3 +173,55 @@ BOOST_AUTO_TEST_CASE(empty_input_returns_empty)
   std::vector<double> out(reconstruct_null_mz({}, {}, {}));
   BOOST_TEST(out.empty());
 }
+
+/******************************************************************************/
+// The format calls a lone interior null unrecoverable (signal-data.md,
+// "Decoding null pairs"): unpaired nulls MAY appear only as the first or last
+// value of the array.  Null marking flanks each run with a zero-intensity
+// point, so interior nulls come in PAIRS — one owned by the run on the left,
+// one by the run on the right.  A lone interior null belongs to neither, and
+// filling it anyway yields a coordinate that is monotonic, plausible and wrong.
+//
+// Shapes are asserted through the null-run classification directly: building a
+// fixture per shape would cost more than it proves.
+BOOST_AUTO_TEST_CASE(lone_interior_null_is_unrecoverable)
+{
+  // Classify a null pattern the way NullMarking::Decoder::chunk does.
+  auto has_unrecoverable = [](const std::vector<bool>& is_null) {
+    const int64_t length = static_cast<int64_t>(is_null.size());
+    int64_t run_start = -1;
+    for (int64_t i = 0; i <= length; ++i) {
+      const bool null_here = (i < length) && is_null[static_cast<std::size_t>(i)];
+      if (null_here) {
+        if (run_start < 0) run_start = i;
+        continue;
+      }
+      if (run_start < 0) continue;
+      const int64_t run = i - run_start;
+      if (run == 1 && run_start != 0 && i != length) return true;
+      run_start = -1;
+    }
+    return false;
+  };
+
+  // Rejected: a lone null with real values on both sides.
+  BOOST_TEST(has_unrecoverable({false, false, true, false}));
+  BOOST_TEST(has_unrecoverable({false, true, false, false, true, true, false}));
+
+  // Allowed: the paired interior form null marking actually produces.
+  BOOST_TEST(!has_unrecoverable({false, false, true, true, false, false}));
+
+  // Allowed: an unpaired null at either end of the array.
+  BOOST_TEST(!has_unrecoverable({true, false, false}));
+  BOOST_TEST(!has_unrecoverable({false, false, true}));
+  BOOST_TEST(!has_unrecoverable({true, false, false, true}));
+
+  // Allowed: a run of three or more, which the spec says MAY be recoverable
+  // even though it should not occur normally.
+  BOOST_TEST(!has_unrecoverable({false, true, true, true, false}));
+
+  // Degenerate inputs classify as fine rather than throwing.
+  BOOST_TEST(!has_unrecoverable({}));
+  BOOST_TEST(!has_unrecoverable({true}));
+  BOOST_TEST(!has_unrecoverable({false}));
+}
