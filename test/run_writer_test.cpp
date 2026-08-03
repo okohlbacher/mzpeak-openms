@@ -10,11 +10,15 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <arrow/io/file.h>
+#include <arrow/table.h>
 #include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <parquet/api/reader.h>
+#include <parquet/arrow/reader.h>
+#include <parquet/arrow/writer.h>
 
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/open.h"
@@ -420,4 +424,85 @@ BOOST_AUTO_TEST_CASE(every_table_declares_its_entity_index_sorted)
   // facets; a derivation that silently stopped matching would show up here as a
   // smaller count long before it showed up as a wrong answer.
   BOOST_TEST(checked >= 9u);
+}
+
+/******************************************************************************/
+// A metadata column whose NAME the reader cannot guess is still found, because
+// the index declares which CV term it carries.
+//
+// Field resolution tries the name as given, then mechanically strips the CV
+// prefix and unit suffix -- which is how the reference writer's plain names are
+// found today.  A writer is equally free to call the column something else and
+// declare the binding in `column_mapping`; that is what the mapping is for, and
+// nothing but the mapping can find such a column.  This renames a column on
+// disk and rewrites the index to match, then reads it back.
+BOOST_AUTO_TEST_CASE(a_column_is_found_through_column_mapping_alone)
+{
+  Scratch scratch("mzp-test-colmap");
+
+  MzPeak::RunContents run;
+  run.chromatograms.push_back(make_tic());
+  MzPeak::write_run_directory(scratch.path, run);
+
+  // Sanity: the type is readable before anything is renamed.
+  BOOST_TEST_REQUIRE(
+      MzPeak::open(scratch.path).chromatograms()[0].metadata().chromatogram_type ==
+      "MS:1000235");
+
+  // Rename `chromatogram_type` to a name no transformation could derive.
+  const fs::path table = scratch.path / "chromatograms_metadata.parquet";
+  auto original = arrow::io::ReadableFile::Open(table.string()).ValueOrDie();
+  auto reader =
+      parquet::arrow::OpenFile(original, arrow::default_memory_pool()).ValueOrDie();
+  std::shared_ptr<arrow::Table> loaded;
+  BOOST_TEST_REQUIRE(reader->ReadTable(&loaded).ok());
+
+  auto fields = loaded->schema()->fields();
+  int renamed = -1;
+  for (std::size_t i = 0; i < fields.size(); ++i) {
+    if (fields[i]->name() == "chromatogram_type") {
+      fields[i] = fields[i]->WithName("opt_chromatogram_class");
+      renamed = static_cast<int>(i);
+    }
+  }
+  BOOST_TEST_REQUIRE(renamed >= 0);
+  auto renamed_table = arrow::Table::Make(arrow::schema(fields), loaded->columns(),
+                                          loaded->num_rows());
+  original->Close();
+
+  auto sink = arrow::io::FileOutputStream::Open(table.string()).ValueOrDie();
+  BOOST_TEST_REQUIRE(
+      parquet::arrow::WriteTable(*renamed_table, arrow::default_memory_pool(), sink)
+          .ok());
+  BOOST_TEST_REQUIRE(sink->Close().ok());
+
+  // Point the index's mapping at the new name.
+  const fs::path index_path = scratch.path / "mzpeak_index.json";
+  std::string json;
+  {
+    std::ifstream in(index_path, std::ios::binary);
+    json.assign(std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+  }
+  auto root = boost::json::parse(json).as_object();
+  for (auto& entry : root["files"].as_array()) {
+    auto& file = entry.as_object();
+    if (std::string(file.at("name").as_string()) != "chromatograms_metadata.parquet")
+      continue;
+    for (auto& mapping : file.at("column_mapping").as_array()) {
+      auto& m = mapping.as_object();
+      if (std::string(m.at("accession").as_string()) == "MS:1000626") {
+        m["path"] = "opt_chromatogram_class";
+      }
+    }
+  }
+  {
+    std::ofstream out(index_path, std::ios::binary);
+    out << boost::json::serialize(root);
+  }
+
+  // Only the mapping can find it now.
+  auto chromatograms = MzPeak::open(scratch.path).chromatograms();
+  BOOST_TEST_REQUIRE(chromatograms.size() == 1u);
+  BOOST_TEST(chromatograms[0].metadata().chromatogram_type == "MS:1000235");
 }

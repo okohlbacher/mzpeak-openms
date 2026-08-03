@@ -8,6 +8,8 @@ directory of this repository.
 
 #include "mzpeak/chromatogram.h"
 
+#include <algorithm>
+#include <ranges>
 #include <vector>
 
 #include "mzpeak/exception.h"
@@ -29,6 +31,22 @@ Chromatogram::Chromatogram(
     , intensity_()
     , md_map_(std::move(md_map))
 {
+  // Refuse a role stored in two physical types rather than concatenating them.
+  // The array index groups on data type, so a file storing intensity as both
+  // float32 and float64 presents two Intensity dimensions; appending both makes
+  // one vector of twice the length that looks entirely reasonable.
+  auto only_one = [&dims](Schema::PSI::ArrayType role, const char* what) {
+    const std::size_t count = std::ranges::count_if(
+        dims, [role](const auto& d) { return d.array_type == role; });
+    if (count > 1) {
+      throw ParquetError(std::string("chromatogram: the ") + what +
+                         " array is stored in more than one physical type; "
+                         "this reader cannot merge them");
+    }
+  };
+  only_one(Schema::PSI::ArrayType::RelativeTimeOffset, "time");
+  only_one(Schema::PSI::ArrayType::Intensity, "intensity");
+
   for (auto& dim : dims) {
     if (dim.array_type == Schema::PSI::ArrayType::RelativeTimeOffset) {
       decoder_.decimal(dim, time_);

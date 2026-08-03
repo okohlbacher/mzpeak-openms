@@ -11,6 +11,7 @@ directory of this repository.
 #include <arrow/util/key_value_metadata.h>
 #include <charconv>
 #include <memory>
+#include <string_view>
 
 #include "mzpeak/data/signals.h"
 #include "mzpeak/exception.h"
@@ -146,6 +147,32 @@ void Index::Impl::parse_index()
           dst = f->value().to_number<double>();
           return true;
         };
+        // The archive states which transform its coefficients belong to.  We
+        // implement exactly one, so a file naming a different one must be
+        // refused rather than run through this one: the coefficients would be
+        // consumed by the wrong formula and every m/z would be wrong while
+        // remaining entirely plausible.
+        //
+        // Verified against a real Bruker timsTOF archive, whose calibration
+        // reads {"a": 9.9995…, "b": 4.9255e-05, "mz_from_tof": "(a + b*tof)^2",
+        // "tof_encoding": "absolute", "codec": "ims-compact"}.
+        const auto declares = [&cal](const char* key, std::string_view expected) {
+          const auto f = cal.find(key);
+          if (f == cal.end() || !f->value().is_string()) return true; // not stated
+          return std::string_view(f->value().as_string()) == expected;
+        };
+
+        if (!declares("mz_from_tof", "(a + b*tof)^2")) {
+          throw MzPeak::JsonError(
+              "ims_calibration declares an m/z transform this reader does not "
+              "implement; refusing rather than applying the wrong one");
+        }
+        if (!declares("tof_encoding", "absolute")) {
+          throw MzPeak::JsonError(
+              "ims_calibration declares a non-absolute TOF encoding; this "
+              "reader would treat the stored values as absolute");
+        }
+
         // Both coefficients are required: half a calibration is not one.
         const bool have_a = number("a", ims_.a);
         const bool have_b = number("b", ims_.b);
