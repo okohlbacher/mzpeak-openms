@@ -189,15 +189,34 @@ Spectra::get_spectra_batch(const std::vector<std::size_t>& indices) const
 /******************************************************************************/
 Spectrum Spectra::fetch(uint64_t index) const
 {
-  // Dispatch to the peaks file when metadata says this is a centroid spectrum.
-  // Read from the cached metadata map rather than re-querying the metadata file
-  // per spectrum: the old projection needed a `spectrum` struct group, which the
-  // flat layout does not have, so it silently fell through to the profile table.
+  // Choose the table this spectrum lives in.  Read from the cached metadata map
+  // rather than re-querying the metadata file per spectrum: the old projection
+  // needed a `spectrum` struct group, which the flat layout does not have, so it
+  // silently fell through to the profile table.
+  //
+  // The spectrum REPRESENTATION decides, not merely "does it have peaks".  A
+  // spectrum may carry both a profile array and a centroid array — in
+  // small.chunked.mzpeak spectrum 0 declares number_of_data_points 13589 AND
+  // number_of_peaks 1612 while being profile (MS:1000128).  Dispatching on the
+  // peak count alone handed back 1612 centroids for a profile spectrum: the
+  // wrong array, silently, and with a plausible length.
   std::shared_ptr<Data::Signals> signals = data_;
   if (peaks_ && md_map_) {
     auto it = md_map_->find(index);
-    if (it != md_map_->end() && it->second.number_of_peaks.value_or(0) > 0) {
-      signals = peaks_;
+    if (it != md_map_->end()) {
+      const SpectrumMetadata& md = it->second;
+      const bool centroid = md.representation == "MS:1000127";
+      const bool profile = md.representation == "MS:1000128";
+
+      if (centroid) {
+        signals = peaks_;
+      } else if (!profile) {
+        // No usable representation: fall back to "wherever the data is".
+        if (md.number_of_data_points.value_or(0) == 0 &&
+            md.number_of_peaks.value_or(0) > 0) {
+          signals = peaks_;
+        }
+      }
     }
   }
 

@@ -161,6 +161,7 @@ test_names = [
     'archive_writer',
     'arrow',
     'chromatograms',
+    'chunked',
     'directory',
     'executor',
     'group',

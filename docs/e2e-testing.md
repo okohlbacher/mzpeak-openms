@@ -160,11 +160,24 @@ hand-diffing schemas, KV metadata and column types had failed to.
 
 ## Known gaps
 
-- **Chunked layout** — `small.chunked.mzpeak` / `small.numpress.mzpeak` still
-  fail to decode; this is the remaining e2e failure (3 cases). Note the Rust
-  `read_spectrum` example returns 0 points for chunked files, so it is **not**
-  an oracle for them — validate against the point-layout twin, which is itself
-  Rust-validated.
+- **Imaging point count** — see below; the only open item.
+
+### Oracles — which reference binary to use
+
+The reference reader is version-sensitive and this cost a debugging cycle:
+
+- **Current upstream (`17af186` and later) cannot read the OLD-format
+  fixtures** — `read_spectrum` panics at `reader/metadata.rs:342` on
+  `small.mzpeak`. Rebuilding the oracle from current `main` therefore makes
+  every old-format comparison return zero points, which looks like a reader
+  bug on our side and is not.
+- Validate old-format fixtures with a reference built at **`29e59b2`** (before
+  the split-metadata refactor); validate split-layout files with current
+  upstream.
+- For **chunked** files the reference example returns no points in either
+  version, so it is not an oracle at all. Use the point-layout twin
+  (`small.chunked.mzpeak` is the same run as `small.mzpeak`), or compare our
+  chunked output against the reference's *point* output for the same run.
 - **Imaging point count** — for `Example_Processed.img.mzpeak` the C++ reader
   returns 2837 points for spectrum 0, matching that file's own declared
   `number_of_data_points`; the Rust reader returns 3007. Unexplained.
