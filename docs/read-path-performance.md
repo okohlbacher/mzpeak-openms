@@ -203,3 +203,62 @@ once where the forward pass holds one.  That gap is the number to watch in
 Phase 3: a batched reader that hands out views into a decoded row group should
 move it, and a batched reader that quietly accumulates whole row groups will
 move it a great deal.
+
+---
+
+# What the reviews changed
+
+Two independent reviews (Codex; Kimi, which built its own 212-row-group fixture
+rather than taking the numbers on trust) converged on the same correction.
+
+## Phase 1 is a partial fix, not a fix
+
+My flatness test — per-spectrum cost unchanged between a 4-group and a 21-group
+file — did not show the planner was cheap. It only **bounded** it at ≲9 µs per
+row group, and at 3,500 groups that bound permits ~30 ms/spectrum, larger than
+the entire current budget. Both reviewers caught this independently. The
+326-group experiment is what actually measured it; the flatness test never
+could, because 21 × 5 µs is 0.5% of 19.4 ms and sits under run-to-run noise.
+
+Kimi measured **4–7 µs per row group per spectrum** on the pre-Phase-1 tree.
+Phase 1 removes ~1.6 µs of that. So roughly **3–5 µs per group remains**, which
+is still ~12 ms/spectrum at 3,518 groups, and ~0.1 ms/spectrum even at 21 —
+about **1.3 s over a full `run13k` pass**, on its own larger than the whole
+Phase 0 projection.
+
+The conclusion is not "do Phase 1 harder". Making per-group work cheaper cannot
+fix a per-spectrum loop over every row group in the file. **Planning has to be
+amortised across a pass** — planned once per row group, not once per spectrum —
+and that belongs inside the Phase 2 restructure rather than after it.
+
+## Two cheap wins being walked past
+
+Both are small enough to land before any restructuring, and both are
+regression-detectable on the existing gates.
+
+- **The executor never breaks out of the batch loop.**
+  `Executor::execute` decodes *every* record batch of a row group even after
+  the last wanted range has gone by. Batches *before* the range are
+  unavoidable — parquet-cpp's Arrow reader has no row-range entry point, a
+  dead end both reviewers confirmed — but the tail is free to skip. For a
+  uniformly positioned spectrum that is about half the decode: an estimated
+  19.4 → ~10 ms/spectrum for roughly five lines.
+- **Decoding is single-threaded.** The reader is built with default
+  `ArrowReaderProperties`, i.e. `use_threads=false`. On a component that is 88%
+  Parquet decode this is a plausible 2–3x for one line — subject to checking
+  the concurrency contract of concurrent `fetch()` first.
+
+Also confirmed: `Executor::execute` passes no column indices, so every column
+in the file is decoded per spectrum. Invisible on a three-leaf fixture, real
+waste on a file with mobility, TOF or auxiliary arrays.
+
+## Corrections to the harness notes
+
+The "XIC over 2,000 spectra at 18.79 ms/spectrum" figure recorded above was
+wrong on both counts: the default window never intersected the synthetic m/z
+range, so it measured a second forward pass, and it covered all 13,009 spectra.
+The mode now reports how many samples carried signal, and the gate uses a
+window inside the generated range.
+
+Single runs with no warm-up were also enough to hide the effect in question:
+repeats show ±0.15 ms/spectrum on a warm page cache. Report min-of-three.
