@@ -189,8 +189,17 @@ second time through `get_spectra_batch`, failing if the two digests differ —
 without that, a stitching defect that only the batch path had would leave the
 digest untouched.
 
-| fixture | peaks | digest |
-|---|---:|---|
-| `run2k` | 3,254,000 | `9fae6e76aea6a57e` |
+| fixture | peaks | digest | scalar | batch |
+|---|---:|---|---:|---:|
+| `run2k` | 3,254,000 | `9fae6e76aea6a57e` | 38.3 s | 38.1 s |
+| `run13k` | 21,165,643 | `5604ebcf86dd4567` | 251.8 s | 252.5 s |
 
-(The earlier `3fba0c5528aac85a` predates mobility being hashed.)
+(The earlier `3fba0c5528aac85a` / `841dd2473d045f35` predate mobility being
+hashed.)
+
+Peak RSS differs between the two passes -- 58.6 MB scalar against 80.8 MB
+batched on `run13k` -- because `get_spectra_batch` holds 512 decoded spectra at
+once where the forward pass holds one.  That gap is the number to watch in
+Phase 3: a batched reader that hands out views into a decoded row group should
+move it, and a batched reader that quietly accumulates whole row groups will
+move it a great deal.
