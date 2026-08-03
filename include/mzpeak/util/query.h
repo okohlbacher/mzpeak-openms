@@ -10,6 +10,8 @@ top-level directory of this repository.
 
 #include <any>
 #include <functional>
+#include <optional>
+#include <utility>
 #include <variant>
 
 #include "mzpeak/schema/group.h"
@@ -203,6 +205,18 @@ public:
    * Evaluate a query.
    */
   Result<bool> eval(eval_callback_t) const;
+
+  /**
+   * When this query is exactly one equality test on one column, the column and
+   * the value it must equal; otherwise nothing.
+   *
+   * Selecting one entity by index is overwhelmingly the query this library
+   * runs, and evaluating a general predicate tree per row -- through a
+   * std::function, a type dispatch and two shared_ptr copies each time -- costs
+   * far more than the comparison it performs.  This lets the executor resolve
+   * the column once and loop over raw values instead.
+   */
+  std::optional<std::pair<Schema::Column, value_t>> as_equality() const;
 
   /**
    * Evaluate a range query.

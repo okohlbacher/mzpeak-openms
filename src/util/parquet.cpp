@@ -102,10 +102,20 @@ struct Parquet::Impl {
   /// Load the schema.
   void parse_schema();
 
+  /// Decode a row group in full and return its batches, caching the result.
+  std::shared_ptr<const Parquet::RowGroupBatches> row_group(int32_t index);
+
   Schema::File file_;
   std::unique_ptr<Arrow> arrow_;
   std::shared_ptr<parquet::arrow::FileReader> reader_;
   std::shared_ptr<Schema::GroupMap> groups_;
+
+  /// Most-recently-decoded row groups, newest last.  Bounded because a decoded
+  /// group is tens of megabytes; two is enough for a forward pass, where the
+  /// only backward reach is an entity straddling a group boundary.
+  static constexpr std::size_t kCachedGroups = 2;
+  std::vector<std::pair<int32_t, std::shared_ptr<const Parquet::RowGroupBatches>>>
+      cache_;
 
   // Shared by every planner over this file; see StatsIndex.
   std::shared_ptr<StatsIndex> stats_;
@@ -133,6 +143,36 @@ void Parquet::Impl::parse_schema()
       offset += group->field_count();
     }
   }
+}
+
+/******************************************************************************/
+std::shared_ptr<const Parquet::RowGroupBatches>
+Parquet::Impl::row_group(int32_t index)
+{
+  for (const auto& [cached, batches] : cache_) {
+    if (cached == index) return batches;
+  }
+
+  auto reader_result = reader_->GetRecordBatchReader({index});
+  if (!reader_result.ok()) {
+    throw ParquetError("read row group " + std::to_string(index) + ": " +
+                       reader_result.status().ToString());
+  }
+
+  auto batches = std::make_shared<Parquet::RowGroupBatches>();
+  for (auto maybe_batch : **reader_result) {
+    if (!maybe_batch.ok()) {
+      throw ParquetError("read row group " + std::to_string(index) + ": " +
+                         maybe_batch.status().ToString());
+    }
+    batches->push_back(*maybe_batch);
+  }
+
+  // Evicting here only drops the cache's own reference; a caller still holding
+  // the batches keeps them alive.
+  if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
+  cache_.emplace_back(index, batches);
+  return batches;
 }
 
 /******************************************************************************/
@@ -191,15 +231,18 @@ std::optional<std::size_t> Parquet::kv_size_t(const file_metadata_t& fmd,
 parquet::arrow::FileReader& Parquet::reader() const { return *impl_->reader_; }
 
 /******************************************************************************/
+std::shared_ptr<const Parquet::RowGroupBatches> Parquet::row_group(int32_t index)
+{
+  return impl_->row_group(index);
+}
+
+/******************************************************************************/
 Planner Parquet::planner(const Query& q)
 {
   return Planner(*impl_->reader_, q, impl_->stats_);
 }
 
 /******************************************************************************/
-Executor Parquet::executor(const Projection& p)
-{
-  return Executor(impl_->reader_, p);
-}
+Executor Parquet::executor(const Projection& p) { return Executor(*this, p); }
 
 } // namespace MzPeak::Util

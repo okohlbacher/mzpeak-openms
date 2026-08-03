@@ -18,14 +18,15 @@ top-level directory of this repository.
 #include <string_view>
 
 #include "mzpeak/util/algorithm.h"
+#include "mzpeak/util/parquet.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
 
 /******************************************************************************/
 struct Executor::Impl {
-  Impl(std::shared_ptr<parquet::arrow::FileReader> reader, const Projection& fields)
-      : reader_(reader)
+  Impl(Parquet& source, const Projection& fields)
+      : source_(source)
       , projection_(fields)
       , slice_(nullptr)
   {
@@ -63,7 +64,7 @@ struct Executor::Impl {
     int64_t row_index_;
   };
 
-  std::shared_ptr<parquet::arrow::FileReader> reader_;
+  Parquet& source_;
   Projection projection_;
   std::unique_ptr<Slice> slice_;
 };
@@ -83,10 +84,62 @@ Query::Result<Query::value_t> Executor::Impl::ArrayValueHelper::operator()()
 }
 
 /******************************************************************************/
+/*
+ * Mark the rows of one typed column equal to `wanted`.
+ *
+ * The general path below resolves the column, dispatches on its type and walks
+ * the predicate tree once PER ROW.  For the query this library actually runs --
+ * "the entity index equals N" -- that is several hundred nanoseconds of
+ * machinery around a single integer comparison, repeated across a whole page.
+ */
+struct EqualityScan {
+  std::shared_ptr<arrow::Array> array;
+  Query::value_t wanted;
+  std::vector<bool>& want_rows;
+  bool& handled;
+
+  template <Type T> void operator()() const
+  {
+    using value_type = typename type_traits<T>::value_type;
+
+    // A predicate whose value type does not match the column's is not something
+    // this scan can answer; fall back rather than silently selecting nothing.
+    if (!std::holds_alternative<value_type>(wanted)) return;
+
+    const value_type target = std::get<value_type>(wanted);
+    auto typed =
+        std::static_pointer_cast<typename type_traits<T>::array_type>(array);
+
+    for (int64_t i = 0; i < typed->length(); ++i) {
+      // A null never compares equal, and the general path treats an unreadable
+      // value as "no opinion" -- it yields no `false`, so the row stays
+      // selected.  Matched here so the two paths agree row for row.
+      want_rows[static_cast<std::size_t>(i)] =
+          typed->IsNull(i) || typed->Value(i) == target;
+    }
+    handled = true;
+  }
+};
+
+/******************************************************************************/
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
                                          std::shared_ptr<arrow::RecordBatch>& batch)
 {
   std::vector<bool> want_rows(batch->num_rows(), true);
+
+  // Fast path: one equality on one column.  Resolve the column once, then loop
+  // over its raw values.
+  if (auto equality = plan.query.as_equality()) {
+    const auto& [field, wanted] = *equality;
+    if (field.second->type().has_value()) {
+      std::shared_ptr<arrow::Array> column(array(batch, field));
+      bool handled = false;
+      lift_type(field.second->type().value(),
+                EqualityScan{column, wanted, want_rows, handled});
+      if (handled) return want_rows;
+      std::ranges::fill(want_rows, true); // fall through to the general path
+    }
+  }
 
   auto get_value =
       [&](int64_t row_index,
@@ -133,9 +186,8 @@ Executor::Impl::array(std::shared_ptr<arrow::RecordBatch>& batch,
 }
 
 /******************************************************************************/
-Executor::Executor(std::shared_ptr<parquet::arrow::FileReader> reader,
-                   const Projection& fields)
-    : impl_(std::make_unique<Impl>(std::move(reader), fields))
+Executor::Executor(Parquet& source, const Projection& fields)
+    : impl_(std::make_unique<Impl>(source, fields))
 {
 }
 
@@ -173,24 +225,21 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
   for (const auto& row_group : ranges) {
     int64_t row_group_start = 0;
 
-    // The last row any range of this group wants.  Everything after it is
-    // decoded and discarded, and for a query selecting one entity that is most
-    // of the group.  There is no row-range entry point in parquet-cpp's Arrow
-    // reader -- batches BEFORE the first range are unavoidable -- but the tail
-    // is free to skip.
+    // The last row any range of this group wants.  Batches past it hold
+    // nothing for this query.
     int64_t wanted_end = 0;
     for (const auto& range : row_group.second) {
       wanted_end = std::max(wanted_end, range.offset + range.length);
     }
 
-    auto batch_reader =
-        impl_->check("invalid batch reader",
-                     impl_->reader_->GetRecordBatchReader({row_group.first}));
+    // Decoded once per row group and retained, so reading a run entity by
+    // entity costs one decode per group rather than one per entity.
+    auto batches = impl_->source_.row_group(row_group.first);
 
-    for (auto batch_r : *batch_reader) {
+    for (const auto& cached : *batches) {
       if (row_group_start >= wanted_end) break;
 
-      auto batch = impl_->check("invalid record batch", batch_r);
+      std::shared_ptr<arrow::RecordBatch> batch = cached;
       int64_t rows = batch->num_rows();
 
       for (const auto& range : row_group.second) {
