@@ -22,6 +22,54 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 - **Thread safety** — lazy peak decode serialised with `std::call_once` and
   shared across copies; ThreadSanitizer reports 0 races.
 
+## Open — from the 2026-08-03 adversarial review (Codex)
+
+Verified against the code but NOT yet fixed. Ordered by severity. Each is a
+*silent* failure unless noted.
+
+- **Multi-scan spectra take the last scan's RT and ion mobility.**
+  `src/util/metadata_model.cpp` overwrites the scalar scan fields for every
+  joined scan row. Scans at 1.0 and 1.1 min yield 66 s where the spec requires
+  the minimum, 60 s — an RT query for 59-61 s then silently misses the spectrum.
+  Affects summed/averaged spectra and ion-mobility frames. The same last-row-wins
+  loss hits ion mobility and scan parameters. Also: even a single scan replaces
+  the Float64 `spectrum.time` with the Float32 `scan_start_time`, costing
+  precision at exact boundaries.
+- **Copying or moving `Spectra` leaves its fetch callback bound to the old
+  object.** The constructors bind `this`; copy/move are implicit. After
+  `auto b = a;`, `b[0]` dispatches through `a`. Moving one into a thread, or
+  assigning from a temporary, can dangle. Not file-dependent — ordinary C++
+  ownership triggers it.
+- **A mixed profile+centroid collection can omit centroid-only tail spectra.**
+  `Spectra` sizes itself from the profile table alone; without a
+  `spectrum_count` KV the fallback uses the profile table's maximum index. A run
+  with profile index 0 and centroid-only index 1 reports `size() == 1`, so
+  iteration and batch reads skip index 1 while `by_id()` still finds it.
+- **Decoded cardinality is never checked.** Nothing compares the decoded array
+  lengths against each other or against the metadata count, and the EIC uses
+  `min()` of the two lengths — so a short intensity array yields a plausible low
+  trace rather than an error. The earlier 1612-vs-13589 defect was exactly this
+  class.
+- **Intensity units are lost when point columns coalesce.** `has_uv` merges a
+  counts column and an absorbance column into one array with no unit accessor,
+  and if both were ever non-null on one row the primary silently wins. Verified
+  disjoint in the bundled file (212 / 526 / 0 overlap), so this is a latent
+  design gap rather than a live defect.
+- **Unrecoverable null shapes are silently synthesised.** An interior unpaired
+  null (`[100, 101, null, 110]`) is filled rather than rejected, though the spec
+  calls that unrecoverable; a singleton with no regression model can use a zero
+  delta and produce repeated coordinates.
+- **Null-reconstruction scope is not the normative one.** The point path
+  reconstructs per physical Arrow chunk (a storage artifact) and should instead
+  assemble the whole entity first; the chunked path assembles everything and
+  reconstructs once, where the reference applies `fill_nulls_for()` per semantic
+  chunk. Both currently agree with the reference to <=8.7e-07 Da, so this is
+  correctness-of-model rather than a live numeric error.
+- **`chunk_end` validation is still incomplete.** It now fires, but the
+  Numpress path returns before reaching it, and the 1e-6 relative tolerance
+  permits ~0.001 Da at m/z 1000 — loose for this purpose. It also does not check
+  `start <= end`, chunk ordering, or non-overlap.
+
 ## Open
 - **Chunked layout decode** — the remaining 3 e2e failures. A working
   per-chunk delta reconstruction is parked on `chunked-decoder-wip`; it is

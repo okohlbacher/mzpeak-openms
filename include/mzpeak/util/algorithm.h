@@ -12,6 +12,7 @@ top-level directory of this repository.
 #include <functional>
 #include <iterator>
 #include <ranges>
+#include <utility>
 #include <vector>
 
 namespace MzPeak::Util::Algorithm {
@@ -76,6 +77,32 @@ template <typename T> T median_delta(const std::vector<T>& values, T or_else)
   if (ds.empty()) return or_else;
 
   return boost::math::statistics::median(ds.begin(), ds.end());
+}
+
+/**
+ * Intersect an absolute row range with one record batch.
+ *
+ * @param range_offset,range_length  the range, in absolute file rows.
+ * @param batch_start                the batch's first absolute row.
+ * @param batch_rows                 the batch's row count.
+ * @return `{offset, length}` RELATIVE to the batch; length is 0 when the two
+ *         do not overlap.
+ *
+ * Extracted so it can be tested directly: the previous inline form computed
+ * `range_length - batch_start`, subtracting an absolute position from a length.
+ * That is correct only for the first batch (`batch_start == 0`) and negative
+ * afterwards, so no single-batch fixture could catch it.
+ */
+constexpr std::pair<int64_t, int64_t> intersect_range(int64_t range_offset,
+                                                      int64_t range_length,
+                                                      int64_t batch_start,
+                                                      int64_t batch_rows)
+{
+  const int64_t begin = std::max(range_offset, batch_start);
+  const int64_t end =
+      std::min(range_offset + range_length, batch_start + batch_rows);
+  if (end <= begin) return {0, 0};
+  return {begin - batch_start, end - begin};
 }
 
 } // namespace MzPeak::Util::Algorithm

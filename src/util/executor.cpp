@@ -187,18 +187,9 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
           continue;
         }
 
-        // Intersect [range.offset, range.offset+range.length) with this batch's
-        // [row_group_start, row_group_start+rows) in ABSOLUTE coordinates, then
-        // rebase onto the batch.  The previous form computed
-        // `range.length - row_group_start`, subtracting an absolute position
-        // from a length: correct only while row_group_start is 0, i.e. for the
-        // first batch, and negative for any later one.
-        const int64_t begin = std::max(range.offset, row_group_start);
-        const int64_t end =
-            std::min(range.offset + range.length, row_group_start + rows);
-
-        const int64_t offset = begin - row_group_start;
-        const int64_t length = std::max(end - begin, int64_t{});
+        const auto [offset, length] = Algorithm::intersect_range(
+            range.offset, range.length, row_group_start, rows);
+        if (length == 0) continue;
 
         auto sliced = batch->Slice(offset, length);
         auto want_rows = impl_->filter(plan, sliced);
