@@ -38,18 +38,25 @@ Chromatogram::Chromatogram(
       // specification asks for, so an unrecognised unit means the file is
       // saying something this reader has not been taught -- and silently
       // treating it as minutes would scale every value by 60.
+      // An ABSENT unit is refused rather than assumed to be minutes.  The
+      // array index schema requires a unit, so absence means either a
+      // malformed file or -- reachable in practice -- a coalesced dimension
+      // whose columns disagreed, which is exactly when guessing is worst:
+      // assuming minutes for a seconds-valued array is a silent 60x error.
       const std::string& unit = decoder_.unit_of(dim);
-      if (unit == "UO:0000031" || unit.empty()) {
-        // UO:0000031 is minutes.  An absent unit is treated as minutes because
-        // that is the specification's recommendation and the only thing any
-        // writer has emitted; the conversion is recorded here so a file that
-        // starts omitting units does not silently change meaning.
+      if (unit == "UO:0000031") { // minute
         for (auto& t : time_)
           t *= 60.0;
-      } else if (unit == "UO:0000010") {
-        // Already seconds.
+      } else if (unit == "UO:0000010") { // second
+        // Already the unit this API reports.
+      } else if (unit.empty()) {
+        throw ParquetError(
+            "chromatogram " + std::to_string(index_) +
+            ": the time array declares no unit, or its columns declare "
+            "conflicting ones, so it cannot be converted to seconds");
       } else {
-        throw ParquetError("chromatogram time is in unit '" + unit +
+        throw ParquetError("chromatogram " + std::to_string(index_) +
+                           ": time is in unit '" + unit +
                            "', which this reader cannot convert to seconds");
       }
     } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {

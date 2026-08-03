@@ -166,6 +166,11 @@ struct WavelengthMetaRow {
   uint64_t index;
   std::string id;
   std::optional<double> time;
+  /// MS:1000559 spectrum type CURIE.  MS:1000804 is an electromagnetic
+  /// radiation spectrum, which is what a UV/Vis scan is.
+  std::string spectrum_type;
+  /// MS:1000525 representation CURIE (MS:1000128 profile).
+  std::string representation;
   uint64_t number_of_data_points;
   std::optional<double> lowest_observed_wavelength;
   std::optional<double> highest_observed_wavelength;
@@ -219,6 +224,18 @@ void write_chromatograms_metadata(const std::string& path,
                                   const std::vector<ChromatogramMetaRow>& rows,
                                   const std::map<std::string, std::string>& file_kv);
 
+/**
+ * The empty chromatogram precursor and selected-ion facet tables, in that
+ * order.
+ *
+ * The current reference reader opens BOTH unconditionally when it loads
+ * chromatogram metadata, so omitting them makes it fail with NotFound on an
+ * ordinary TIC.  They are emitted with their schema and zero rows, exactly as
+ * the spectra writer already does for the same reason.
+ */
+std::array<std::string, 2>
+chromatogram_facet_bytes(const std::map<std::string, std::string>& file_kv);
+
 /// In-memory sibling of @ref write_chromatograms_metadata.
 std::string
 chromatograms_metadata_bytes(const std::vector<ChromatogramMetaRow>& rows,
@@ -228,6 +245,13 @@ chromatograms_metadata_bytes(const std::vector<ChromatogramMetaRow>& rows,
 void write_wavelength_metadata(const std::string& path,
                                const std::vector<WavelengthMetaRow>& rows,
                                const std::map<std::string, std::string>& file_kv);
+
+/// The wavelength scan facet: one row per spectrum carrying its acquisition
+/// time.  The reference reader ignores the primary `time` column entirely, so
+/// without this table the acquisition time is invisible to it.
+std::string
+wavelength_scans_bytes(const std::vector<WavelengthMetaRow>& rows,
+                       const std::map<std::string, std::string>& file_kv);
 
 /// In-memory sibling of @ref write_wavelength_metadata.
 std::string

@@ -43,7 +43,8 @@ WavelengthSpectra::WavelengthSpectra(
   // See Chromatograms: a declared count of zero is not evidence of an empty
   // run, and the reference writer does emit zero on files that have rows.
   const std::size_t derived = data_->record_count();
-  resize(count.value_or(derived) == 0 ? derived : *count);
+  const std::size_t declared = count.value_or(0);
+  resize(declared == 0 ? derived : declared);
 
   md_map_ = std::make_shared<const std::map<uint64_t, WavelengthSpectrumMetadata>>(
       std::move(metadata));
@@ -67,11 +68,11 @@ WavelengthSpectrum WavelengthSpectra::by_id(const std::string& id) const
 {
   auto index = index_for_id(id);
   if (!index) throw ParquetError("no wavelength spectrum with id '" + id + "'");
-  return const_cast<WavelengthSpectra*>(this)->fetch(static_cast<uint64_t>(*index));
+  return fetch(static_cast<uint64_t>(*index));
 }
 
 /******************************************************************************/
-WavelengthSpectrum WavelengthSpectra::fetch(uint64_t index)
+WavelengthSpectrum WavelengthSpectra::fetch(uint64_t index) const
 {
   using enum Schema::PSI::ArrayType;
   std::vector<Data::ArrayIndex::Dimension> dims =

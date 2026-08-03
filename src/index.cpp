@@ -230,7 +230,12 @@ WavelengthSpectra Index::wavelength_spectra() const
   for (const auto& file : impl_->files_) {
     if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
     if (file.data_kind == DataArray) data = &file;
-    else if (file.data_kind == Metadata)
+    // FIRST match wins.  Several members can carry data_kind "metadata" for one
+    // entity -- the specification's own chromatogram example labels the
+    // precursor facet that way -- and the primary table is written first.
+    // Taking the last would hand a facet to the primary reader, which finds no
+    // index column and returns an empty map with no error.
+    else if (file.data_kind == Metadata && metadata == nullptr)
       metadata = &file;
   }
 
@@ -284,7 +289,8 @@ Chromatograms Index::chromatograms() const
   for (const auto& file : impl_->files_) {
     if (file.entity_type != Schema::EntityType::Chromatogram) continue;
     if (file.data_kind == DataArray) data = &file;
-    else if (file.data_kind == Metadata)
+    // FIRST match wins; see the wavelength case above.
+    else if (file.data_kind == Metadata && metadata == nullptr)
       metadata = &file;
   }
 

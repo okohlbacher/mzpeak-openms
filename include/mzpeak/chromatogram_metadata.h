@@ -74,8 +74,13 @@ struct ChromatogramMetadata final {
 
   /**
    * `true` when this chromatogram's type implies a product (Q3) selection that
-   * the format cannot currently deliver — the selected/multiple reaction
+   * the format cannot currently deliver — the selected/multiple REACTION
    * monitoring types.
+   *
+   * Selected ION monitoring (MS:1001472) is deliberately NOT flagged: it names
+   * a precursor and no product, so reporting a lost product for it would be an
+   * invention.  Its precursor is reachable through @ref precursors when the
+   * file carries the facet.
    *
    * A caller reconstructing a transition MUST check this: the alternative is
    * silently treating an SRM trace as though it had no product, which produces

@@ -31,9 +31,9 @@ namespace {
 // Ground truth (pyarrow over chromatograms_data.parquet, delta-decoding the
 // time chunk independently):  48 paired samples.
 constexpr std::size_t kPoints = 48u;
-constexpr double kTimeFront = 0.004935;
-constexpr double kTimeSecond = 0.0078966666666666664;
-constexpr double kTimeBack = 0.48723666666666665;
+constexpr double kTimeFront = 0.004935 * 60.0;
+constexpr double kTimeSecond = 0.0078966666666666664 * 60.0;
+constexpr double kTimeBack = 0.48723666666666665 * 60.0;
 constexpr float kIntFront = 15245068.0f;
 constexpr float kIntSecond = 12901166.0f;
 constexpr float kIntBack = 77939.0078125f;
@@ -57,9 +57,12 @@ BOOST_AUTO_TEST_CASE(chunked_delta)
 
   // Delta time reconstruction is exact (Float64 cumulative sum from
   // chunk_start), so a very tight tolerance.
-  BOOST_TEST(time.front() == kTimeFront, tolerance(1e-12));
-  BOOST_TEST(time[1] == kTimeSecond, tolerance(1e-12));
-  BOOST_TEST(time.back() == kTimeBack, tolerance(1e-12));
+  // time() reports SECONDS; the fixture stores minutes (UO:0000031) and the
+  // constants above are the stored values x60.  The tolerance is loosened from
+  // 1e-12 because the conversion is a multiply, not because the decode changed.
+  BOOST_TEST(time.front() == kTimeFront, tolerance(1e-9));
+  BOOST_TEST(time[1] == kTimeSecond, tolerance(1e-9));
+  BOOST_TEST(time.back() == kTimeBack, tolerance(1e-9));
 
   // Intensity is a plain stored float list: exact.
   BOOST_TEST(intensity.front() == kIntFront, tolerance(1e-3f));
@@ -88,9 +91,12 @@ BOOST_AUTO_TEST_CASE(numpress_slof)
   BOOST_TEST(intensity.size() == kPoints);
 
   // Time axis is identical to the chunked fixture (exact delta).
-  BOOST_TEST(time.front() == kTimeFront, tolerance(1e-12));
-  BOOST_TEST(time[1] == kTimeSecond, tolerance(1e-12));
-  BOOST_TEST(time.back() == kTimeBack, tolerance(1e-12));
+  // time() reports SECONDS; the fixture stores minutes (UO:0000031) and the
+  // constants above are the stored values x60.  The tolerance is loosened from
+  // 1e-12 because the conversion is a multiply, not because the decode changed.
+  BOOST_TEST(time.front() == kTimeFront, tolerance(1e-9));
+  BOOST_TEST(time[1] == kTimeSecond, tolerance(1e-9));
+  BOOST_TEST(time.back() == kTimeBack, tolerance(1e-9));
 
   // SLOF is logarithmic-fixed-point lossy.  Measured max relative error of the
   // whole array vs. the lossless ground truth is ~1.3e-4; assert 1e-3.

@@ -165,6 +165,7 @@ test_names = [
     'arrow',
     'chromatograms',
     'chunked',
+    'chunked_chromatograms',
     'directory',
     'executor',
     'group',

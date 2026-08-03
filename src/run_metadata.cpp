@@ -11,6 +11,8 @@ directory of this repository.
 #include <cstdint>
 #include <limits>
 
+#include "mzpeak/util/json_writer.h"
+
 /*
  * RDR-24 — parse the run-level metadata blocks from the index `metadata{}`
  * object into the typed model declared in run_metadata.h.  Boost.JSON is used
@@ -432,18 +434,10 @@ json::object RunMetadata::to_json() const
     o["sample_list"] = std::move(a);
   }
 
-  if (!o.contains("cv_list")) {
-    json::array default_cv;
-    json::object psi_ms;
-    psi_ms["id"] = "MS";
-    psi_ms["fullName"] =
-        "Proteomics Standards Initiative Mass Spectrometry Ontology";
-    psi_ms["version"] = "4.1.30";
-    psi_ms["URI"] =
-        "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo";
-    default_cv.push_back(psi_ms);
-    o["cv_list"] = std::move(default_cv);
-  }
+  // The schema names these `full_name` and `uri`; this emitted `fullName` and
+  // `URI`, which validates as neither, and declared only MS although UO terms
+  // are used throughout (every unit CURIE is a UO term).
+  if (!o.contains("cv_list")) o["cv_list"] = Util::default_cv_list();
 
   return o;
 }

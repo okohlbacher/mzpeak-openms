@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <fstream>
 #include <numeric>
 #include <string>
@@ -175,21 +176,27 @@ struct Member {
 };
 
 /******************************************************************************/
-// Chromatogram types whose defining feature is a product (Q3) selection.
+// Chromatogram types that select ions this writer cannot record.
 //
-// The product facet is specified but no reference implementation writes one and
-// the reference reader's product path is unimplemented, so a file claiming to
-// be an SRM trace would carry Q1 and silently lack the transition -- and still
-// look valid.  Refusing is the honest outcome; a caller who does not need Q3
-// can write the chromatogram under a type that does not promise one.
+// SRM/MRM names a Q1 AND a Q3; SIM names only a Q1.  Neither survives here:
+// ChromatogramData carries no precursor or product at all, the product facet
+// has no writer anywhere and an unimplemented reference reader path, and a file
+// claiming to be one of these would look valid while lacking the very selection
+// that defines it.  Both are refused, each for its own reason.
 //
-// Both spellings are listed: mzdata emits MS:1000472/MS:1000473 for SIM/SRM
-// while its own reader expects MS:1001472/MS:1001473.
-bool implies_product(const std::string& type)
+// Both CURIE spellings are listed: mzdata emits MS:1000472/MS:1000473 for
+// SIM/SRM while its own reader expects MS:1001472/MS:1001473.
+bool selects_ions(const std::string& type, const char** what)
 {
-  static constexpr std::string_view kProductBearing[] = {"MS:1001472", "MS:1001473",
-                                                         "MS:1000472", "MS:1000473"};
-  return std::ranges::find(kProductBearing, type) != std::end(kProductBearing);
+  if (type == "MS:1001473" || type == "MS:1000473") {
+    *what = "a precursor (Q1) and a product (Q3)";
+    return true;
+  }
+  if (type == "MS:1001472" || type == "MS:1000472") {
+    *what = "a precursor (Q1)";
+    return true;
+  }
+  return false;
 }
 
 /******************************************************************************/
@@ -203,12 +210,29 @@ void validate_run(const RunContents& contents)
       throw ParquetError("write_run: chromatogram " + std::to_string(i) +
                          " has mismatched time/intensity lengths");
     }
-    if (implies_product(c.chromatogram_type)) {
-      throw ParquetError(
-          "write_run: chromatogram " + std::to_string(i) + " has type '" +
-          c.chromatogram_type +
-          "', which selects a product (Q3) that this format cannot yet carry; "
-          "writing it would silently drop the transition");
+    const char* selects = nullptr;
+    if (selects_ions(c.chromatogram_type, &selects)) {
+      throw ParquetError("write_run: chromatogram " + std::to_string(i) +
+                         " has type '" + c.chromatogram_type + "', which names " +
+                         selects +
+                         " that this writer cannot record; writing it would "
+                         "silently drop the selection that defines it");
+    }
+
+    // An empty unit becomes "unit":"" in the array index, which violates the
+    // schema and the reference's CURIE parser rejects it.  It is also what one
+    // of the decode paths hands back when a file declares no unit, so this is
+    // reachable by round-tripping rather than only by a careless caller.
+    if (c.intensity_unit.empty()) {
+      throw ParquetError("write_run: chromatogram " + std::to_string(i) +
+                         " has an empty intensity unit; a unit CURIE is "
+                         "required in the array index");
+    }
+
+    if (std::ranges::any_of(c.time, [](double t) { return std::isnan(t); })) {
+      throw ParquetError("write_run: chromatogram " + std::to_string(i) +
+                         " has a NaN time; the points are written in ascending "
+                         "order and NaN has no place in that order");
     }
   }
 
@@ -218,6 +242,16 @@ void validate_run(const RunContents& contents)
       throw ParquetError("write_run: wavelength spectrum " + std::to_string(i) +
                          " has mismatched wavelength/intensity lengths");
     }
+    if (w.intensity_unit.empty()) {
+      throw ParquetError("write_run: wavelength spectrum " + std::to_string(i) +
+                         " has an empty intensity unit; a unit CURIE is "
+                         "required in the array index");
+    }
+    if (std::ranges::any_of(w.wavelength, [](float x) { return std::isnan(x); })) {
+      throw ParquetError("write_run: wavelength spectrum " + std::to_string(i) +
+                         " has a NaN wavelength; the points are written in "
+                         "ascending order and NaN has no place in that order");
+    }
   }
 }
 
@@ -225,13 +259,13 @@ void validate_run(const RunContents& contents)
 // One intensity unit per file: the coalesced multi-unit layout needs a column
 // per unit, which this writer does not emit.  Mixing them silently would label
 // absorbance as detector counts.
-const std::string& single_intensity_unit(const RunContents& contents,
-                                         bool chromatograms)
+template <typename Entity>
+std::string single_intensity_unit(const std::vector<Entity>& entities,
+                                  const char* what)
 {
-  static const std::string fallback = "MS:1000131";
   const std::string* unit = nullptr;
-
-  auto check_one = [&](const std::string& u, const char* what, std::size_t i) {
+  for (std::size_t i = 0; i < entities.size(); ++i) {
+    const std::string& u = entities[i].intensity_unit;
     if (unit == nullptr) {
       unit = &u;
     } else if (*unit != u) {
@@ -241,17 +275,21 @@ const std::string& single_intensity_unit(const RunContents& contents,
                          "'; this writer emits a single intensity column per "
                          "file and cannot carry both");
     }
-  };
-
-  if (chromatograms) {
-    for (std::size_t i = 0; i < contents.chromatograms.size(); ++i)
-      check_one(contents.chromatograms[i].intensity_unit, "chromatogram", i);
-  } else {
-    for (std::size_t i = 0; i < contents.wavelength_spectra.size(); ++i)
-      check_one(contents.wavelength_spectra[i].intensity_unit, "wavelength spectrum",
-                i);
   }
-  return unit ? *unit : fallback;
+  return unit ? *unit : std::string("MS:1000131");
+}
+
+/******************************************************************************/
+// The order that sorts one entity's points along its primary axis.  Both entity
+// types need it and neither cares how it is obtained.
+template <typename Axis>
+std::vector<std::size_t> ascending_order(const std::vector<Axis>& axis)
+{
+  std::vector<std::size_t> order(axis.size());
+  std::iota(order.begin(), order.end(), std::size_t{0});
+  std::ranges::sort(order,
+                    [&](std::size_t a, std::size_t b) { return axis[a] < axis[b]; });
+  return order;
 }
 
 /******************************************************************************/
@@ -268,12 +306,7 @@ ChromatogramColumns flatten_chromatograms(const std::vector<ChromatogramData>& i
 {
   ChromatogramColumns c;
   for (std::size_t i = 0; i < in.size(); ++i) {
-    std::vector<std::size_t> order(in[i].time.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
-      return in[i].time[a] < in[i].time[b];
-    });
-    for (std::size_t k : order) {
+    for (std::size_t k : ascending_order(in[i].time)) {
       c.index.push_back(static_cast<uint64_t>(i));
       c.time.push_back(in[i].time[k] / 60.0); // seconds -> minutes
       c.intensity.push_back(in[i].intensity[k]);
@@ -293,12 +326,7 @@ WavelengthColumns flatten_wavelength(const std::vector<WavelengthSpectrumData>& 
 {
   WavelengthColumns c;
   for (std::size_t i = 0; i < in.size(); ++i) {
-    std::vector<std::size_t> order(in[i].wavelength.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
-      return in[i].wavelength[a] < in[i].wavelength[b];
-    });
-    for (std::size_t k : order) {
+    for (std::size_t k : ascending_order(in[i].wavelength)) {
       c.index.push_back(static_cast<uint64_t>(i));
       c.wavelength.push_back(in[i].wavelength[k]);
       c.intensity.push_back(in[i].intensity[k]);
@@ -358,8 +386,10 @@ build_wavelength_rows(const std::vector<WavelengthSpectrumData>& in)
       row.base_peak_intensity = *peak;
       row.lambda_max = static_cast<double>(
           w.wavelength[static_cast<std::size_t>(peak - w.intensity.begin())]);
-      row.total_ion_current =
-          std::accumulate(w.intensity.begin(), w.intensity.end(), 0.0f);
+      // Accumulated in double: summing a thousand small samples into a float
+      // alongside one large one loses the small ones entirely.
+      row.total_ion_current = static_cast<float>(
+          std::accumulate(w.intensity.begin(), w.intensity.end(), 0.0));
     }
 
     rows.push_back(std::move(row));
@@ -429,7 +459,8 @@ std::vector<Member> build_run_members(const RunContents& contents,
 
   // ---- chromatograms -----------------------------------------------------
   if (!contents.chromatograms.empty()) {
-    const std::string unit(single_intensity_unit(contents, /*chromatograms=*/true));
+    const std::string unit(
+        single_intensity_unit(contents.chromatograms, "chromatogram"));
     ChromatogramColumns c(flatten_chromatograms(contents.chromatograms));
 
     members.push_back(
@@ -455,11 +486,26 @@ std::vector<Member> build_run_members(const RunContents& contents,
          {{"chromatogram type", "chromatogram_type", "MS:1000626", ""},
           {"scan polarity", "scan_polarity", "MS:1000465", ""},
           {"number of data points", "number_of_data_points", "MS:1003060", ""}}});
+
+    // The current reference reader opens both facets unconditionally when it
+    // loads chromatogram metadata, so a plain TIC without them fails to load
+    // there.  Emitted with their schema and zero rows.
+    std::array<std::string, 2> facets(Util::chromatogram_facet_bytes(
+        {{"chromatogram_count", std::to_string(contents.chromatograms.size())}}));
+    members.push_back(
+        {"chromatograms_metadata_precursors.parquet", std::move(facets[0])});
+    members.push_back(
+        {"chromatograms_metadata_selected_ions.parquet", std::move(facets[1])});
+    files.push_back({"chromatograms_metadata_precursors.parquet", "chromatogram",
+                     Schema::data_kind_to_string(DataKind::Precursors)});
+    files.push_back({"chromatograms_metadata_selected_ions.parquet", "chromatogram",
+                     Schema::data_kind_to_string(DataKind::SelectedIons)});
   }
 
   // ---- wavelength spectra ------------------------------------------------
   if (!contents.wavelength_spectra.empty()) {
-    const std::string unit(single_intensity_unit(contents, /*chromatograms=*/false));
+    const std::string unit(
+        single_intensity_unit(contents.wavelength_spectra, "wavelength spectrum"));
     WavelengthColumns w(flatten_wavelength(contents.wavelength_spectra));
     const std::size_t count = contents.wavelength_spectra.size();
 
@@ -488,8 +534,25 @@ std::vector<Member> build_run_members(const RunContents& contents,
           {"highest observed wavelength", "highest_observed_wavelength",
            "MS:1000618", "UO:0000018"},
           {"lambda max", "lambda_max", "MS:1003812", "UO:0000018"},
-          {"base peak intensity", "base_peak_intensity", "MS:1000505", ""},
-          {"total ion current", "total_ion_current", "MS:1000285", ""}}});
+          {"spectrum type", "spectrum_type", "MS:1000559", ""},
+          {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
+          // These summarise the intensity array, so they carry ITS unit.  Left
+          // null, an absorbance base peak is indistinguishable from a detector
+          // count to anything reading the file.
+          {"base peak intensity", "base_peak_intensity", "MS:1000505", unit},
+          {"total ion current", "total_ion_current", "MS:1000285", unit}}});
+
+    // The reference reader ignores the primary `time` column outright, so
+    // without a scan facet the acquisition time is invisible to it.
+    members.push_back({"wavelength_spectra_metadata_scans.parquet",
+                       Util::wavelength_scans_bytes(
+                           build_wavelength_rows(contents.wavelength_spectra),
+                           {{"wavelength_spectrum_count", std::to_string(count)}})});
+    files.push_back(
+        {"wavelength_spectra_metadata_scans.parquet",
+         "wavelength_spectrum",
+         Schema::data_kind_to_string(DataKind::Scans),
+         {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
   }
 
   // Run-level metadata goes in unconditionally.  The reference writer copies it

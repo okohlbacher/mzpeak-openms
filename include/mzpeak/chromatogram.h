@@ -52,10 +52,10 @@ public:
   /**
    * Intensity values.
    *
-   * @note The unit is not yet exposed.  A file may carry several intensity
-   * arrays in different units -- detector counts and absorbance units both
-   * appear in the bundled `has_uv` fixture -- and this returns whichever one
-   * belongs to this chromatogram without saying which it was.
+   * @note A file may carry several intensity arrays in different units --
+   * detector counts and absorbance units both appear in the bundled `has_uv`
+   * fixture -- and this returns whichever one belongs to this chromatogram.
+   * Ask @ref intensity_unit which it was.
    */
   const std::vector<intensity_type>& intensity() const;
 

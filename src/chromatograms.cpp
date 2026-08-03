@@ -42,7 +42,8 @@ Chromatograms::Chromatograms(std::unique_ptr<Data::Signals> data,
   // and taking it at face value reports no chromatograms at all -- silently,
   // with nothing to distinguish it from a run that really has none.
   const std::size_t derived = data_->record_count();
-  resize(count.value_or(derived) == 0 ? derived : *count);
+  const std::size_t declared = count.value_or(0);
+  resize(declared == 0 ? derived : declared);
 
   md_map_ = std::make_shared<const std::map<uint64_t, ChromatogramMetadata>>(
       std::move(metadata));
@@ -65,11 +66,11 @@ Chromatogram Chromatograms::by_id(const std::string& id) const
 {
   auto index = index_for_id(id);
   if (!index) throw ParquetError("no chromatogram with id '" + id + "'");
-  return const_cast<Chromatograms*>(this)->fetch(static_cast<uint64_t>(*index));
+  return fetch(static_cast<uint64_t>(*index));
 }
 
 /******************************************************************************/
-Chromatogram Chromatograms::fetch(uint64_t index)
+Chromatogram Chromatograms::fetch(uint64_t index) const
 {
   using enum Schema::PSI::ArrayType;
   std::vector<Data::ArrayIndex::Dimension> dims =

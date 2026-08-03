@@ -1057,12 +1057,13 @@ read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
       m.data_processing_ref = get_string(chrom, "data_processing_ref", r);
       m.parameters = read_cv_params_from_list(chrom, "parameters", r);
 
-      // Flag the types whose Q3 selection the format cannot deliver.  Both
-      // spellings are accepted: mzdata's to_curie() emits MS:1000472/1000473
-      // for SIM/SRM while its own reader expects MS:1001472/1001473, so a file
-      // may legitimately carry either.
-      static constexpr std::string_view kProductBearing[] = {
-          "MS:1001473", "MS:1001472", "MS:1000473", "MS:1000472"};
+      // Flag the types whose Q3 selection the format cannot deliver.  ONLY
+      // SRM/MRM has a product: selected ion monitoring names a Q1 and nothing
+      // else, so flagging it would claim a lost product that never existed.
+      // Both spellings are accepted: mzdata's to_curie() emits MS:1000473 for
+      // SRM while its own reader expects MS:1001473.
+      static constexpr std::string_view kProductBearing[] = {"MS:1001473",
+                                                             "MS:1000473"};
       for (std::string_view type : kProductBearing) {
         if (m.chromatogram_type == type) {
           m.has_unreadable_product = true;

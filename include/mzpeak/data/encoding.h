@@ -258,12 +258,18 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
     // This is still the point layout, not a chunked one.
     coalesced_point<V>(dim, v);
   } else {
+    // Prefer the entry the file marks primary, but fall back to the first --
+    // buffer_priority is OPTIONAL, and a chunked array whose entries omit it
+    // would otherwise decode with no unit at all.  An absent unit is not
+    // harmless: the caller cannot then tell seconds from minutes.
+    const ArrayIndex::Entry* chosen = &entries.front();
     for (const auto& e : entries) {
       if (e.buffer_priority) {
-        note_unit(dim, e.unit);
+        chosen = &e;
         break;
       }
     }
+    note_unit(dim, chosen->unit);
     chunked<V>(dim, v);
   }
 }

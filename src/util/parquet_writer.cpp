@@ -617,6 +617,8 @@ wavelength_metadata_table(const std::vector<WavelengthMetaRow>& rows)
   std::vector<uint64_t> index;
   std::vector<std::string> id;
   std::vector<std::optional<double>> time;
+  std::vector<std::optional<std::string>> type;
+  std::vector<std::optional<std::string>> representation;
   std::vector<uint64_t> npoints;
   std::vector<std::optional<double>> low;
   std::vector<std::optional<double>> high;
@@ -628,6 +630,12 @@ wavelength_metadata_table(const std::vector<WavelengthMetaRow>& rows)
     index.push_back(r.index);
     id.push_back(r.id);
     time.push_back(r.time);
+    type.push_back(r.spectrum_type.empty()
+                       ? std::nullopt
+                       : std::optional<std::string>(r.spectrum_type));
+    representation.push_back(r.representation.empty()
+                                 ? std::nullopt
+                                 : std::optional<std::string>(r.representation));
     npoints.push_back(r.number_of_data_points);
     low.push_back(r.lowest_observed_wavelength);
     high.push_back(r.highest_observed_wavelength);
@@ -640,6 +648,8 @@ wavelength_metadata_table(const std::vector<WavelengthMetaRow>& rows)
       arrow::field("index", arrow::uint64(), true),
       arrow::field("id", arrow::large_utf8(), true),
       arrow::field("time", arrow::float64(), true),
+      arrow::field("spectrum_type", arrow::utf8(), true),
+      arrow::field("spectrum_representation", arrow::utf8(), true),
       arrow::field("number_of_data_points", arrow::uint64(), true),
       arrow::field("lowest_observed_wavelength", arrow::float64(), true),
       arrow::field("highest_observed_wavelength", arrow::float64(), true),
@@ -648,16 +658,18 @@ wavelength_metadata_table(const std::vector<WavelengthMetaRow>& rows)
       arrow::field("total_ion_current", arrow::float32(), true),
   }));
 
-  return arrow::Table::Make(schema,
-                            {build_array<arrow::UInt64Builder>(index),
-                             build_array<arrow::LargeStringBuilder>(id),
-                             build_optional_array<arrow::DoubleBuilder>(time),
-                             build_array<arrow::UInt64Builder>(npoints),
-                             build_optional_array<arrow::DoubleBuilder>(low),
-                             build_optional_array<arrow::DoubleBuilder>(high),
-                             build_optional_array<arrow::DoubleBuilder>(lambda_max),
-                             build_optional_array<arrow::FloatBuilder>(bpi),
-                             build_optional_array<arrow::FloatBuilder>(tic)});
+  return arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(index),
+               build_array<arrow::LargeStringBuilder>(id),
+               build_optional_array<arrow::DoubleBuilder>(time),
+               build_optional_string_array<arrow::StringBuilder>(type),
+               build_optional_string_array<arrow::StringBuilder>(representation),
+               build_array<arrow::UInt64Builder>(npoints),
+               build_optional_array<arrow::DoubleBuilder>(low),
+               build_optional_array<arrow::DoubleBuilder>(high),
+               build_optional_array<arrow::DoubleBuilder>(lambda_max),
+               build_optional_array<arrow::FloatBuilder>(bpi),
+               build_optional_array<arrow::FloatBuilder>(tic)});
 }
 
 } // namespace
@@ -718,6 +730,14 @@ void write_chromatograms_metadata(const std::string& path,
 }
 
 /******************************************************************************/
+std::array<std::string, 2>
+chromatogram_facet_bytes(const std::map<std::string, std::string>& file_kv)
+{
+  return {table_bytes(empty_precursors_table(), file_kv),
+          table_bytes(empty_selected_ions_table(), file_kv)};
+}
+
+/******************************************************************************/
 std::string
 chromatograms_metadata_bytes(const std::vector<ChromatogramMetaRow>& rows,
                              const std::map<std::string, std::string>& file_kv)
@@ -733,6 +753,36 @@ void write_wavelength_metadata(const std::string& path,
                                const std::map<std::string, std::string>& file_kv)
 {
   write_table_to_sink(file_sink(path), wavelength_metadata_table(rows), file_kv);
+}
+
+/******************************************************************************/
+std::string wavelength_scans_bytes(const std::vector<WavelengthMetaRow>& rows,
+                                   const std::map<std::string, std::string>& file_kv)
+{
+  std::vector<uint64_t> source_index;
+  std::vector<uint64_t> scan_index;
+  std::vector<std::optional<float>> start_time;
+
+  for (const auto& r : rows) {
+    source_index.push_back(r.index);
+    scan_index.push_back(0);
+    // Stored in minutes, like the primary column it mirrors.
+    start_time.push_back(r.time.has_value()
+                             ? std::optional<float>(static_cast<float>(*r.time))
+                             : std::nullopt);
+  }
+
+  auto schema(arrow::schema({
+      arrow::field("source_index", arrow::uint64(), true),
+      arrow::field("scan_index", arrow::uint64(), true),
+      arrow::field("scan_start_time", arrow::float32(), true),
+  }));
+
+  auto table(arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(source_index),
+               build_array<arrow::UInt64Builder>(scan_index),
+               build_optional_array<arrow::FloatBuilder>(start_time)}));
+  return table_bytes(table, file_kv);
 }
 
 /******************************************************************************/

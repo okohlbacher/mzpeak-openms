@@ -58,8 +58,8 @@ private:
   // Native id -> index, built from md_map_ at construction.
   std::map<std::string, std::size_t> id_to_index_;
 
-  // Function to fetch a specific wavelength spectrum.
-  WavelengthSpectrum fetch(uint64_t);
+  // Const for the same reason as Chromatograms::fetch.
+  WavelengthSpectrum fetch(uint64_t) const;
 };
 
 } // namespace MzPeak

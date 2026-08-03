@@ -65,8 +65,9 @@ private:
   // Native id -> index, built from md_map_ at construction.
   std::map<std::string, std::size_t> id_to_index_;
 
-  // Function to fetch a specific chromatogram.
-  Chromatogram fetch(uint64_t);
+  // Const because it mutates no Chromatograms state, which lets by_id be
+  // const without casting the constness away.
+  Chromatogram fetch(uint64_t) const;
 };
 
 } // namespace MzPeak

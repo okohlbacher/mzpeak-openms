@@ -61,6 +61,34 @@ std::string point_spectra_array_index_json()
 /******************************************************************************/
 namespace {
 
+/// The controlled vocabularies whose CURIEs this writer emits.
+///
+/// conformance.md requires an archive to declare every CV prefix it uses, with
+/// a uri and a version.  Nothing enforces it and the reference fixtures omit
+/// the list entirely, but a consumer that cannot resolve "MS:1000235" has no
+/// way to learn what the term means.
+json::array cv_list_impl()
+{
+  json::array list;
+
+  json::object ms;
+  ms["id"] = "MS";
+  ms["full_name"] = "PSI-MS controlled vocabulary";
+  ms["version"] = "4.1.209";
+  ms["uri"] =
+      "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo";
+  list.push_back(std::move(ms));
+
+  json::object uo;
+  uo["id"] = "UO";
+  uo["full_name"] = "Units of Measurement Ontology";
+  uo["version"] = "releases/2023-05-25";
+  uo["uri"] = "http://purl.obolibrary.org/obo/uo.owl";
+  list.push_back(std::move(uo));
+
+  return list;
+}
+
 // Build the shared `files` array + `metadata{}` skeleton.  `metadata` is
 // supplied pre-populated with the run-level blocks (empty for the no-metadata
 // overload); `version` is then stamped on, always overriding any pre-existing
@@ -102,6 +130,10 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
   root["files"] = std::move(file_array);
 
   metadata["version"] = version;
+  // Declared unconditionally: conformance requires every CURIE prefix used
+  // anywhere in the archive to be resolvable, and this writer emits MS: and
+  // UO: terms in the array index and the column mappings.
+  if (!metadata.contains("cv_list")) metadata["cv_list"] = default_cv_list();
   root["metadata"] = std::move(metadata);
 
   return json::serialize(root);
@@ -194,5 +226,8 @@ std::string point_wavelength_array_index_json(const std::string& intensity_unit)
   root["entries"] = std::move(entries);
   return json::serialize(root);
 }
+
+/******************************************************************************/
+json::array default_cv_list() { return cv_list_impl(); }
 
 } // namespace MzPeak::Util

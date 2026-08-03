@@ -10,11 +10,15 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <boost/json.hpp>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
+#include "mzpeak/util/json_writer.h"
 #include "mzpeak/wavelength_spectra.h"
 #include "mzpeak/writer.h"
 
@@ -290,4 +294,84 @@ BOOST_AUTO_TEST_CASE(unsorted_input_is_sorted_and_summarised_consistently)
   // Intensity travelled with its own wavelength, not with its input position.
   BOOST_TEST(spectrum.intensity().front() == 1.0f); // the 210 nm sample
   BOOST_TEST(spectrum.intensity().back() == 3.0f);  // the 400 nm sample
+}
+
+/******************************************************************************/
+// The stored time unit is pinned independently of the round trip.
+//
+// Round-tripping through our own reader cannot catch a coordinated break: if
+// the writer stopped dividing by 60 and the reader stopped multiplying, every
+// test above would still pass while the files claimed minutes and held
+// seconds.  The array index is what a foreign reader trusts, so assert on it.
+BOOST_AUTO_TEST_CASE(array_index_declares_the_units_the_data_is_stored_in)
+{
+  const std::string chromatograms(
+      MzPeak::Util::point_chromatograms_array_index_json("MS:1000131"));
+  // Time is stored in MINUTES; a reader converts using this declaration.
+  BOOST_TEST(chromatograms.find("\"unit\":\"UO:0000031\"") != std::string::npos);
+  BOOST_TEST(chromatograms.find("\"path\":\"point.time\"") != std::string::npos);
+  BOOST_TEST(chromatograms.find("\"unit\":\"MS:1000131\"") != std::string::npos);
+
+  // The intensity unit is whatever the caller declared, not a constant.
+  const std::string absorbance(
+      MzPeak::Util::point_chromatograms_array_index_json("UO:0000269"));
+  BOOST_TEST(absorbance.find("\"unit\":\"UO:0000269\"") != std::string::npos);
+
+  const std::string wavelength(
+      MzPeak::Util::point_wavelength_array_index_json("MS:1000131"));
+  // Nanometres, and the axis is declared sorted so a reader may binary-search.
+  BOOST_TEST(wavelength.find("\"unit\":\"UO:0000018\"") != std::string::npos);
+  BOOST_TEST(wavelength.find("\"sorting_rank\":0") != std::string::npos);
+}
+
+/******************************************************************************/
+// The entity count is derived from the signal table when the metadata file
+// declares none.
+//
+// This is the branch that used to dereference an empty std::optional: the
+// count KV is not required, and `Index` leaves it unset whenever the metadata
+// member is absent.  Removing the metadata member from a written run is the
+// only way to reach it from the public API -- no bundled fixture omits the
+// count -- so the run is rewritten here without it.
+BOOST_AUTO_TEST_CASE(entity_count_is_derived_when_the_file_declares_none)
+{
+  Scratch scratch("mzp-test-no-count");
+
+  MzPeak::RunContents run;
+  run.chromatograms.push_back(make_tic());
+  MzPeak::write_run_directory(scratch.path, run);
+
+  // Drop the metadata member and every index entry that referred to it, so the
+  // reader sees chromatogram signal data with no declared count at all.
+  const fs::path index_path = scratch.path / "mzpeak_index.json";
+  std::string json;
+  {
+    std::ifstream in(index_path, std::ios::binary);
+    json.assign(std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+  }
+  auto root = boost::json::parse(json).as_object();
+  boost::json::array kept;
+  for (const auto& entry : root["files"].as_array()) {
+    const std::string name(entry.as_object().at("name").as_string());
+    if (name.find("chromatograms_metadata") != std::string::npos) {
+      fs::remove(scratch.path / name);
+      continue;
+    }
+    kept.push_back(entry);
+  }
+  root["files"] = std::move(kept);
+  {
+    std::ofstream out(index_path, std::ios::binary);
+    out << boost::json::serialize(root);
+  }
+
+  // Five points went in; the count comes back from the index column's
+  // statistics rather than from a KV that is no longer there.
+  auto chromatograms = MzPeak::open(scratch.path).chromatograms();
+  BOOST_TEST(chromatograms.size() == 1u);
+  BOOST_TEST(chromatograms[0].time().size() == 5u);
+
+  // No metadata table, so the descriptive record is empty rather than absent.
+  BOOST_TEST(chromatograms[0].metadata().id.empty());
 }

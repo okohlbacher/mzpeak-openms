@@ -27,6 +27,16 @@ namespace MzPeak::Util {
 std::string point_spectra_array_index_json();
 
 /**
+ * The controlled vocabularies whose CURIEs this library emits, as the
+ * `metadata.cv_list` schema wants them: `id`, `version`, `uri`, `full_name`.
+ *
+ * Conformance requires an archive to declare every CV prefix it uses.  Nothing
+ * enforces it and the reference fixtures omit the list entirely, but a consumer
+ * that cannot resolve "MS:1000235" has no way to learn what the term means.
+ */
+boost::json::array default_cv_list();
+
+/**
  * Emit the file-level array index for a point-layout chromatograms_data table
  * whose columns are point.chromatogram_index (uint64), point.time (double,
  * MINUTES) and point.intensity (float).
