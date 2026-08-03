@@ -11,6 +11,7 @@ top-level directory of this repository.
 #include <algorithm>
 #include <arrow/array.h>
 #include <arrow/builder.h>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -369,6 +370,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
   const ArrayIndex::Entry* start_entry = nullptr;
   const ArrayIndex::Entry* values_entry = nullptr;
   const ArrayIndex::Entry* encoding_entry = nullptr;
+  const ArrayIndex::Entry* end_entry = nullptr;
   const ArrayIndex::Entry* secondary_entry = nullptr;
   const ArrayIndex::Entry* transform_entry = nullptr;
 
@@ -502,6 +504,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
   auto starts_raw = raw_of(start_entry);
   auto values_raw = raw_of(values_entry);
+  auto ends_raw = raw_of(end_entry);
   auto encodings_raw = raw_of(encoding_entry);
   if (starts_raw == nullptr || values_raw == nullptr) {
     throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
@@ -522,6 +525,11 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     }
     auto items = std::static_pointer_cast<arrow::DoubleArray>(lists->values());
 
+    std::shared_ptr<arrow::DoubleArray> ends;
+    if (ends_raw != nullptr && c < ends_raw->size()) {
+      ends = std::dynamic_pointer_cast<arrow::DoubleArray>((*ends_raw)[c]);
+    }
+
     // Only the delta encoding is understood; anything else would silently
     // produce plausible-but-wrong coordinates, so refuse it explicitly.
     std::shared_ptr<arrow::StringArray> encodings;
@@ -539,8 +547,29 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       }
       if (lists->IsNull(r) || starts->IsNull(r)) continue;
 
+      const std::size_t before = assembled_values.size();
       delta_decode_chunk<V>(*items, lists->value_offset(r), lists->value_length(r),
                             starts->Value(r), assembled_values, assembled_valid);
+
+      // chunk_end states the chunk's last coordinate.  Checking the decode
+      // against it turns a corrupt or misread chunk_values list into an error
+      // instead of a plausible axis that is quietly wrong.  Tolerance is
+      // relative: the value is reached by accumulating deltas, so exact
+      // equality is not guaranteed in general even though every bundled chunk
+      // matches to the bit.
+      if (ends != nullptr && !ends->IsNull(r)) {
+        for (std::size_t k = assembled_values.size(); k > before; --k) {
+          if (!assembled_valid[k - 1]) continue;
+          const double last = static_cast<double>(assembled_values[k - 1]);
+          const double expected = ends->Value(r);
+          const double scale = std::max(std::abs(expected), 1.0);
+          if (std::abs(last - expected) > 1e-6 * scale) {
+            throw ParquetError("chunk does not end at its declared chunk_end (" +
+                               dim.name + ")");
+          }
+          break;
+        }
+      }
     }
   }
 
