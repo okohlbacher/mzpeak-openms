@@ -80,8 +80,31 @@ struct StatsIndex::Impl {
     return value.second;
   }
 
+  bool sorted_ascending(int32_t row_group, int32_t column)
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    const std::pair<int32_t, int32_t> key{row_group, column};
+    auto it = sorted_.find(key);
+    if (it != sorted_.end()) return it->second;
+
+    bool sorted = false;
+    if (row_group >= 0 && row_group < metadata_->num_row_groups()) {
+      for (const auto& column_sort :
+           metadata_->RowGroup(row_group)->sorting_columns()) {
+        if (column_sort.column_idx != column) continue;
+        sorted = !column_sort.descending && !column_sort.nulls_first;
+        break;
+      }
+    }
+
+    sorted_.emplace(key, sorted);
+    return sorted;
+  }
+
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::vector<int64_t> rows_;
+  std::map<std::pair<int32_t, int32_t>, bool> sorted_;
   std::map<key_type, value_type> cache_;
   std::mutex mutex_;
 };
@@ -115,6 +138,12 @@ std::shared_ptr<parquet::Statistics> StatsIndex::get(int32_t row_group,
                                                      int32_t column) const
 {
   return impl_->get(row_group, column);
+}
+
+/******************************************************************************/
+bool StatsIndex::sorted_ascending(int32_t row_group, int32_t column) const
+{
+  return impl_->sorted_ascending(row_group, column);
 }
 
 /******************************************************************************/
