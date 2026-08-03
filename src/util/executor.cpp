@@ -6,6 +6,8 @@ top-level directory of this repository.
 
 */
 
+#include "mzpeak/util/executor.h"
+
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
 #include <arrow/result.h>
@@ -15,7 +17,6 @@ top-level directory of this repository.
 #include <string_view>
 
 #include "mzpeak/util/algorithm.h"
-#include "mzpeak/util/executor.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
@@ -186,8 +187,18 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
           continue;
         }
 
-        int64_t offset = std::max(range.offset - row_group_start, int64_t{});
-        int64_t length = std::min(range.length - row_group_start, rows);
+        // Intersect [range.offset, range.offset+range.length) with this batch's
+        // [row_group_start, row_group_start+rows) in ABSOLUTE coordinates, then
+        // rebase onto the batch.  The previous form computed
+        // `range.length - row_group_start`, subtracting an absolute position
+        // from a length: correct only while row_group_start is 0, i.e. for the
+        // first batch, and negative for any later one.
+        const int64_t begin = std::max(range.offset, row_group_start);
+        const int64_t end =
+            std::min(range.offset + range.length, row_group_start + rows);
+
+        const int64_t offset = begin - row_group_start;
+        const int64_t length = std::max(end - begin, int64_t{});
 
         auto sliced = batch->Slice(offset, length);
         auto want_rows = impl_->filter(plan, sliced);

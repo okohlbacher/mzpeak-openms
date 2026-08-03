@@ -13,6 +13,7 @@ top-level directory of this repository.
 #include <arrow/builder.h>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "mzpeak/data/array_index.h"
@@ -79,8 +80,8 @@ private:
   /// with two nulls had a singleton peak on the boundary, so `start` is
   /// re-emitted; a chunk that opens with exactly one null does not carry
   /// `start` as a value at all.
-  template <typename V>
-  static void delta_decode_chunk(const arrow::DoubleArray& values,
+  template <typename V, typename ValuesArray>
+  static void delta_decode_chunk(const ValuesArray& values,
                                  int64_t begin,
                                  int64_t length,
                                  double start,
@@ -276,8 +277,8 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
 
 /******************************************************************************/
 template <typename T>
-template <typename V>
-void Decoder<T>::delta_decode_chunk(const arrow::DoubleArray& values,
+template <typename V, typename ValuesArray>
+void Decoder<T>::delta_decode_chunk(const ValuesArray& values,
                                     int64_t begin,
                                     int64_t length,
                                     double start,
@@ -524,7 +525,15 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     if (!starts || !lists) {
       throw ParquetError("unexpected chunk column types for dimension: " + dim.name);
     }
-    auto items = std::static_pointer_cast<arrow::DoubleArray>(lists->values());
+    // The spec permits float32 coordinates, and static_pointer_cast has no
+    // runtime check — casting a float32 child to DoubleArray would read eight
+    // bytes per four-byte value and yield plausible coordinates assembled from
+    // adjacent memory.  Dispatch on the actual type instead.
+    auto items = std::dynamic_pointer_cast<arrow::DoubleArray>(lists->values());
+    auto items32 = std::dynamic_pointer_cast<arrow::FloatArray>(lists->values());
+    if (!items && !items32) {
+      throw ParquetError("chunk_values is neither float32 nor float64: " + dim.name);
+    }
 
     std::shared_ptr<arrow::DoubleArray> ends;
     if (ends_raw != nullptr && c < ends_raw->size()) {
@@ -533,24 +542,44 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
     // Only the delta encoding is understood; anything else would silently
     // produce plausible-but-wrong coordinates, so refuse it explicitly.
+    // String and LargeString must be treated equivalently.  Accepting only
+    // StringArray meant a LargeString tag failed the cast, the encoding check
+    // was skipped entirely, and a basic-encoded chunk was delta-decoded — e.g.
+    // [100, 101, 102] coming back as [100, 201, 303].
     std::shared_ptr<arrow::StringArray> encodings;
+    std::shared_ptr<arrow::LargeStringArray> encodings_large;
     if (encodings_raw != nullptr && c < encodings_raw->size()) {
       encodings = std::dynamic_pointer_cast<arrow::StringArray>((*encodings_raw)[c]);
+      encodings_large =
+          std::dynamic_pointer_cast<arrow::LargeStringArray>((*encodings_raw)[c]);
     }
 
     for (int64_t r = 0; r < lists->length(); ++r) {
-      if (encodings && !encodings->IsNull(r)) {
-        const std::string enc(encodings->GetString(r));
-        if (enc != "MS:1003089") {
-          throw ParquetError("unsupported chunk encoding '" + enc +
-                             "' for dimension: " + dim.name);
-        }
+      std::optional<std::string> enc;
+      if (encodings && !encodings->IsNull(r)) enc = encodings->GetString(r);
+      if (encodings_large && !encodings_large->IsNull(r)) {
+        enc = encodings_large->GetString(r);
+      }
+      // An absent tag is NOT an implicit delta encoding.  Guessing would decode
+      // a basic-encoded chunk as deltas and yield a plausible, wrong axis.
+      if (!enc.has_value()) {
+        throw ParquetError("chunk carries no chunk_encoding tag: " + dim.name);
+      }
+      if (*enc != "MS:1003089") {
+        throw ParquetError("unsupported chunk encoding '" + *enc +
+                           "' for dimension: " + dim.name);
       }
       if (lists->IsNull(r) || starts->IsNull(r)) continue;
 
       const std::size_t before = assembled_values.size();
-      delta_decode_chunk<V>(*items, lists->value_offset(r), lists->value_length(r),
-                            starts->Value(r), assembled_values, assembled_valid);
+      if (items) {
+        delta_decode_chunk<V>(*items, lists->value_offset(r), lists->value_length(r),
+                              starts->Value(r), assembled_values, assembled_valid);
+      } else {
+        delta_decode_chunk<V>(*items32, lists->value_offset(r),
+                              lists->value_length(r), starts->Value(r),
+                              assembled_values, assembled_valid);
+      }
 
       // chunk_end states the chunk's last coordinate.  Checking the decode
       // against it turns a corrupt or misread chunk_values list into an error
