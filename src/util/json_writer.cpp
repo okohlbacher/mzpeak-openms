@@ -61,6 +61,34 @@ std::string point_spectra_array_index_json()
 /******************************************************************************/
 namespace {
 
+/// The controlled vocabularies whose CURIEs this writer emits.
+///
+/// conformance.md requires an archive to declare every CV prefix it uses, with
+/// a uri and a version.  Nothing enforces it and the reference fixtures omit
+/// the list entirely, but a consumer that cannot resolve "MS:1000235" has no
+/// way to learn what the term means.
+json::array cv_list_impl()
+{
+  json::array list;
+
+  json::object ms;
+  ms["id"] = "MS";
+  ms["full_name"] = "PSI-MS controlled vocabulary";
+  ms["version"] = "4.1.209";
+  ms["uri"] =
+      "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo";
+  list.push_back(std::move(ms));
+
+  json::object uo;
+  uo["id"] = "UO";
+  uo["full_name"] = "Units of Measurement Ontology";
+  uo["version"] = "releases/2023-05-25";
+  uo["uri"] = "http://purl.obolibrary.org/obo/uo.owl";
+  list.push_back(std::move(uo));
+
+  return list;
+}
+
 // Build the shared `files` array + `metadata{}` skeleton.  `metadata` is
 // supplied pre-populated with the run-level blocks (empty for the no-metadata
 // overload); `version` is then stamped on, always overriding any pre-existing
@@ -102,6 +130,10 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
   root["files"] = std::move(file_array);
 
   metadata["version"] = version;
+  // Declared unconditionally: conformance requires every CURIE prefix used
+  // anywhere in the archive to be resolvable, and this writer emits MS: and
+  // UO: terms in the array index and the column mappings.
+  if (!metadata.contains("cv_list")) metadata["cv_list"] = default_cv_list();
   root["metadata"] = std::move(metadata);
 
   return json::serialize(root);
@@ -124,5 +156,78 @@ std::string mzpeak_index_json(const std::vector<IndexFileEntry>& files,
 {
   return index_json(files, version, run_metadata);
 }
+
+/******************************************************************************/
+namespace {
+
+/// One array-index entry.  Every field the schema requires is written, including
+/// `unit`: the reference's own serializable type models it as optional, but the
+/// JSON Schema requires a CURIE and a canonical array always has a real unit.
+json::object array_entry(const char* context,
+                         const char* path,
+                         const char* data_type,
+                         const char* array_type,
+                         const char* array_name,
+                         const std::string& unit,
+                         bool primary,
+                         bool sorted)
+{
+  json::object e;
+  e["context"] = context;
+  e["path"] = path;
+  e["data_type"] = data_type;
+  e["array_type"] = array_type;
+  e["array_name"] = array_name;
+  e["unit"] = unit;
+  e["buffer_format"] = "point";
+  e["transform"] = nullptr;
+  e["data_processing_id"] = nullptr;
+  e["buffer_priority"] = primary ? json::value("primary") : json::value(nullptr);
+  e["sorting_rank"] = sorted ? json::value(0) : json::value(nullptr);
+  return e;
+}
+
+} // namespace
+
+/******************************************************************************/
+std::string point_chromatograms_array_index_json(const std::string& intensity_unit)
+{
+  json::object root;
+  root["prefix"] = "point";
+
+  json::array entries;
+  // Time is stored in MINUTES (UO:0000031), which is what the specification
+  // recommends and what every reference file uses.  The reader converts to
+  // seconds using this declaration rather than assuming.
+  entries.push_back(array_entry("chromatogram", "point.time", "MS:1000523",
+                                "MS:1000595", "time array", "UO:0000031",
+                                /*primary=*/true, /*sorted=*/true));
+  entries.push_back(array_entry("chromatogram", "point.intensity", "MS:1000521",
+                                "MS:1000515", "intensity array", intensity_unit,
+                                /*primary=*/true, /*sorted=*/false));
+  root["entries"] = std::move(entries);
+  return json::serialize(root);
+}
+
+/******************************************************************************/
+std::string point_wavelength_array_index_json(const std::string& intensity_unit)
+{
+  json::object root;
+  root["prefix"] = "point";
+
+  json::array entries;
+  entries.push_back(array_entry("wavelength_spectrum", "point.wavelength",
+                                "MS:1000521", "MS:1000617", "wavelength array",
+                                "UO:0000018", /*primary=*/true, /*sorted=*/true));
+  entries.push_back(array_entry("wavelength_spectrum", "point.intensity",
+                                "MS:1000521", "MS:1000515", "intensity array",
+                                intensity_unit, /*primary=*/true,
+                                /*sorted=*/false));
+  root["entries"] = std::move(entries);
+  return json::serialize(root);
+}
+
+/******************************************************************************/
+json::array default_cv_list() { return cv_list_impl(); }
 
 } // namespace MzPeak::Util

@@ -163,6 +163,28 @@ finish_to_string(const std::shared_ptr<arrow::io::BufferOutputStream>& sink)
 }
 
 /******************************************************************************/
+// Build a nullable string array from a vector of optionals.  The numeric
+// build_optional_array cannot serve here: arrow::StringBuilder has no nested
+// value_type, so the cast in that template does not compile for strings.
+template <typename Builder>
+std::shared_ptr<arrow::Array>
+build_optional_string_array(const std::vector<std::optional<std::string>>& values)
+{
+  Builder builder;
+  check(builder.Reserve(static_cast<int64_t>(values.size())), "reserve array");
+  for (const auto& v : values) {
+    if (v.has_value()) {
+      check(builder.Append(*v), "append value");
+    } else {
+      check(builder.AppendNull(), "append null");
+    }
+  }
+  std::shared_ptr<arrow::Array> array;
+  check(builder.Finish(&array), "finish array");
+  return array;
+}
+
+/******************************************************************************/
 // Build the point-layout spectra table and write it to the given Arrow
 // output sink.  Shared by the file-path and in-memory-buffer entry points
 // so the schema, writer properties and metadata handling stay identical.
@@ -460,6 +482,317 @@ spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows)
   return {table_bytes(scans_table(rows), kv),
           table_bytes(empty_precursors_table(), kv),
           table_bytes(empty_selected_ions_table(), kv)};
+}
+
+/******************************************************************************/
+namespace {
+
+/// Build a `point` struct table from three parallel leaf arrays and write it.
+/// Shared by both new entity types so their files differ only in column names
+/// and types, never in writer properties.
+void write_point_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
+                               const std::string& index_name,
+                               const std::shared_ptr<arrow::Array>& index_array,
+                               const std::string& axis_name,
+                               const std::shared_ptr<arrow::Array>& axis_array,
+                               const std::shared_ptr<arrow::Array>& intensity_array,
+                               const std::map<std::string, std::string>& file_kv)
+{
+  arrow::FieldVector point_fields{
+      arrow::field(index_name, index_array->type(), /*nullable=*/true),
+      arrow::field(axis_name, axis_array->type(), /*nullable=*/true),
+      arrow::field("intensity", intensity_array->type(), /*nullable=*/true),
+  };
+
+  auto point_result(arrow::StructArray::Make(
+      {index_array, axis_array, intensity_array}, point_fields));
+  if (!point_result.ok()) {
+    throw ParquetError("build point struct: " + point_result.status().ToString());
+  }
+  std::shared_ptr<arrow::Array> point_array(point_result.ValueOrDie());
+
+  auto schema(arrow::schema(
+      {arrow::field("point", point_array->type(), /*nullable=*/true)}));
+  write_table_to_sink(sink, arrow::Table::Make(schema, {point_array}), file_kv);
+}
+
+/// Open a file sink or throw.
+std::shared_ptr<arrow::io::OutputStream> file_sink(const std::string& path)
+{
+  auto result(arrow::io::FileOutputStream::Open(path));
+  if (!result.ok()) {
+    throw ParquetError("open output file " + path + ": " +
+                       result.status().ToString());
+  }
+  return result.ValueOrDie();
+}
+
+/// Create an in-memory sink or throw.
+std::shared_ptr<arrow::io::BufferOutputStream> buffer_sink()
+{
+  auto result(arrow::io::BufferOutputStream::Create());
+  if (!result.ok()) {
+    throw ParquetError("create in-memory buffer sink: " +
+                       result.status().ToString());
+  }
+  return result.ValueOrDie();
+}
+
+void chromatograms_data_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
+                                const std::vector<uint64_t>& chromatogram_index,
+                                const std::vector<double>& time,
+                                const std::vector<float>& intensity,
+                                const std::map<std::string, std::string>& file_kv)
+{
+  if (chromatogram_index.size() != time.size() || time.size() != intensity.size()) {
+    throw ParquetError("write_point_chromatograms_data: input vectors must have "
+                       "the same length");
+  }
+  write_point_table_to_sink(sink, "chromatogram_index",
+                            build_array<arrow::UInt64Builder>(chromatogram_index),
+                            "time", build_array<arrow::DoubleBuilder>(time),
+                            build_array<arrow::FloatBuilder>(intensity), file_kv);
+}
+
+void wavelength_data_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
+                             const std::vector<uint64_t>& spectrum_index,
+                             const std::vector<float>& wavelength,
+                             const std::vector<float>& intensity,
+                             const std::map<std::string, std::string>& file_kv)
+{
+  if (spectrum_index.size() != wavelength.size() ||
+      wavelength.size() != intensity.size()) {
+    throw ParquetError("write_point_wavelength_data: input vectors must have "
+                       "the same length");
+  }
+  write_point_table_to_sink(sink, "wavelength_spectrum_index",
+                            build_array<arrow::UInt64Builder>(spectrum_index),
+                            "wavelength",
+                            build_array<arrow::FloatBuilder>(wavelength),
+                            build_array<arrow::FloatBuilder>(intensity), file_kv);
+}
+
+/// The chromatogram metadata table: flat columns, split layout.  Column names
+/// are plain and their CV terms are declared in the index's column_mapping,
+/// which is what the current reference reader resolves through.
+std::shared_ptr<arrow::Table>
+chromatograms_metadata_table(const std::vector<ChromatogramMetaRow>& rows)
+{
+  std::vector<uint64_t> index;
+  std::vector<std::string> id;
+  std::vector<std::optional<std::string>> type;
+  std::vector<std::optional<int>> polarity;
+  std::vector<uint64_t> npoints;
+
+  for (const auto& r : rows) {
+    index.push_back(r.index);
+    id.push_back(r.id);
+    type.push_back(r.chromatogram_type.empty()
+                       ? std::nullopt
+                       : std::optional<std::string>(r.chromatogram_type));
+    polarity.push_back(r.polarity);
+    npoints.push_back(r.number_of_data_points);
+  }
+
+  auto schema(arrow::schema({
+      arrow::field("index", arrow::uint64(), true),
+      arrow::field("id", arrow::large_utf8(), true),
+      arrow::field("chromatogram_type", arrow::utf8(), true),
+      arrow::field("scan_polarity", arrow::int8(), true),
+      arrow::field("number_of_data_points", arrow::uint64(), true),
+  }));
+
+  return arrow::Table::Make(schema,
+                            {build_array<arrow::UInt64Builder>(index),
+                             build_array<arrow::LargeStringBuilder>(id),
+                             build_optional_string_array<arrow::StringBuilder>(type),
+                             build_optional_array<arrow::Int8Builder>(polarity),
+                             build_array<arrow::UInt64Builder>(npoints)});
+}
+
+/// The wavelength metadata table: flat columns, split layout.
+std::shared_ptr<arrow::Table>
+wavelength_metadata_table(const std::vector<WavelengthMetaRow>& rows)
+{
+  std::vector<uint64_t> index;
+  std::vector<std::string> id;
+  std::vector<std::optional<double>> time;
+  std::vector<std::optional<std::string>> type;
+  std::vector<std::optional<std::string>> representation;
+  std::vector<uint64_t> npoints;
+  std::vector<std::optional<double>> low;
+  std::vector<std::optional<double>> high;
+  std::vector<std::optional<double>> lambda_max;
+  std::vector<std::optional<float>> bpi;
+  std::vector<std::optional<float>> tic;
+
+  for (const auto& r : rows) {
+    index.push_back(r.index);
+    id.push_back(r.id);
+    time.push_back(r.time);
+    type.push_back(r.spectrum_type.empty()
+                       ? std::nullopt
+                       : std::optional<std::string>(r.spectrum_type));
+    representation.push_back(r.representation.empty()
+                                 ? std::nullopt
+                                 : std::optional<std::string>(r.representation));
+    npoints.push_back(r.number_of_data_points);
+    low.push_back(r.lowest_observed_wavelength);
+    high.push_back(r.highest_observed_wavelength);
+    lambda_max.push_back(r.lambda_max);
+    bpi.push_back(r.base_peak_intensity);
+    tic.push_back(r.total_ion_current);
+  }
+
+  auto schema(arrow::schema({
+      arrow::field("index", arrow::uint64(), true),
+      arrow::field("id", arrow::large_utf8(), true),
+      arrow::field("time", arrow::float64(), true),
+      arrow::field("spectrum_type", arrow::utf8(), true),
+      arrow::field("spectrum_representation", arrow::utf8(), true),
+      arrow::field("number_of_data_points", arrow::uint64(), true),
+      arrow::field("lowest_observed_wavelength", arrow::float64(), true),
+      arrow::field("highest_observed_wavelength", arrow::float64(), true),
+      arrow::field("lambda_max", arrow::float64(), true),
+      arrow::field("base_peak_intensity", arrow::float32(), true),
+      arrow::field("total_ion_current", arrow::float32(), true),
+  }));
+
+  return arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(index),
+               build_array<arrow::LargeStringBuilder>(id),
+               build_optional_array<arrow::DoubleBuilder>(time),
+               build_optional_string_array<arrow::StringBuilder>(type),
+               build_optional_string_array<arrow::StringBuilder>(representation),
+               build_array<arrow::UInt64Builder>(npoints),
+               build_optional_array<arrow::DoubleBuilder>(low),
+               build_optional_array<arrow::DoubleBuilder>(high),
+               build_optional_array<arrow::DoubleBuilder>(lambda_max),
+               build_optional_array<arrow::FloatBuilder>(bpi),
+               build_optional_array<arrow::FloatBuilder>(tic)});
+}
+
+} // namespace
+
+/******************************************************************************/
+void write_point_chromatograms_data(
+    const std::string& path,
+    const std::vector<uint64_t>& chromatogram_index,
+    const std::vector<double>& time,
+    const std::vector<float>& intensity,
+    const std::map<std::string, std::string>& file_kv)
+{
+  chromatograms_data_to_sink(file_sink(path), chromatogram_index, time, intensity,
+                             file_kv);
+}
+
+/******************************************************************************/
+std::string
+point_chromatograms_data_bytes(const std::vector<uint64_t>& chromatogram_index,
+                               const std::vector<double>& time,
+                               const std::vector<float>& intensity,
+                               const std::map<std::string, std::string>& file_kv)
+{
+  auto sink(buffer_sink());
+  chromatograms_data_to_sink(sink, chromatogram_index, time, intensity, file_kv);
+  return finish_to_string(sink);
+}
+
+/******************************************************************************/
+void write_point_wavelength_data(const std::string& path,
+                                 const std::vector<uint64_t>& spectrum_index,
+                                 const std::vector<float>& wavelength,
+                                 const std::vector<float>& intensity,
+                                 const std::map<std::string, std::string>& file_kv)
+{
+  wavelength_data_to_sink(file_sink(path), spectrum_index, wavelength, intensity,
+                          file_kv);
+}
+
+/******************************************************************************/
+std::string
+point_wavelength_data_bytes(const std::vector<uint64_t>& spectrum_index,
+                            const std::vector<float>& wavelength,
+                            const std::vector<float>& intensity,
+                            const std::map<std::string, std::string>& file_kv)
+{
+  auto sink(buffer_sink());
+  wavelength_data_to_sink(sink, spectrum_index, wavelength, intensity, file_kv);
+  return finish_to_string(sink);
+}
+
+/******************************************************************************/
+void write_chromatograms_metadata(const std::string& path,
+                                  const std::vector<ChromatogramMetaRow>& rows,
+                                  const std::map<std::string, std::string>& file_kv)
+{
+  write_table_to_sink(file_sink(path), chromatograms_metadata_table(rows), file_kv);
+}
+
+/******************************************************************************/
+std::array<std::string, 2>
+chromatogram_facet_bytes(const std::map<std::string, std::string>& file_kv)
+{
+  return {table_bytes(empty_precursors_table(), file_kv),
+          table_bytes(empty_selected_ions_table(), file_kv)};
+}
+
+/******************************************************************************/
+std::string
+chromatograms_metadata_bytes(const std::vector<ChromatogramMetaRow>& rows,
+                             const std::map<std::string, std::string>& file_kv)
+{
+  auto sink(buffer_sink());
+  write_table_to_sink(sink, chromatograms_metadata_table(rows), file_kv);
+  return finish_to_string(sink);
+}
+
+/******************************************************************************/
+void write_wavelength_metadata(const std::string& path,
+                               const std::vector<WavelengthMetaRow>& rows,
+                               const std::map<std::string, std::string>& file_kv)
+{
+  write_table_to_sink(file_sink(path), wavelength_metadata_table(rows), file_kv);
+}
+
+/******************************************************************************/
+std::string wavelength_scans_bytes(const std::vector<WavelengthMetaRow>& rows,
+                                   const std::map<std::string, std::string>& file_kv)
+{
+  std::vector<uint64_t> source_index;
+  std::vector<uint64_t> scan_index;
+  std::vector<std::optional<float>> start_time;
+
+  for (const auto& r : rows) {
+    source_index.push_back(r.index);
+    scan_index.push_back(0);
+    // Stored in minutes, like the primary column it mirrors.
+    start_time.push_back(r.time.has_value()
+                             ? std::optional<float>(static_cast<float>(*r.time))
+                             : std::nullopt);
+  }
+
+  auto schema(arrow::schema({
+      arrow::field("source_index", arrow::uint64(), true),
+      arrow::field("scan_index", arrow::uint64(), true),
+      arrow::field("scan_start_time", arrow::float32(), true),
+  }));
+
+  auto table(arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(source_index),
+               build_array<arrow::UInt64Builder>(scan_index),
+               build_optional_array<arrow::FloatBuilder>(start_time)}));
+  return table_bytes(table, file_kv);
+}
+
+/******************************************************************************/
+std::string
+wavelength_metadata_bytes(const std::vector<WavelengthMetaRow>& rows,
+                          const std::map<std::string, std::string>& file_kv)
+{
+  auto sink(buffer_sink());
+  write_table_to_sink(sink, wavelength_metadata_table(rows), file_kv);
+  return finish_to_string(sink);
 }
 
 } // namespace MzPeak::Util

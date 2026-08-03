@@ -27,6 +27,37 @@ namespace MzPeak::Util {
 std::string point_spectra_array_index_json();
 
 /**
+ * The controlled vocabularies whose CURIEs this library emits, as the
+ * `metadata.cv_list` schema wants them: `id`, `version`, `uri`, `full_name`.
+ *
+ * Conformance requires an archive to declare every CV prefix it uses.  Nothing
+ * enforces it and the reference fixtures omit the list entirely, but a consumer
+ * that cannot resolve "MS:1000235" has no way to learn what the term means.
+ */
+boost::json::array default_cv_list();
+
+/**
+ * Emit the file-level array index for a point-layout chromatograms_data table
+ * whose columns are point.chromatogram_index (uint64), point.time (double,
+ * MINUTES) and point.intensity (float).
+ *
+ * @param intensity_unit CURIE for the intensity column.  A chromatogram's
+ *        intensity is not always detector counts -- an absorbance trace from a
+ *        diode-array detector is in UO:0000269 -- and the unit is the only
+ *        thing distinguishing them once decoded.
+ */
+std::string point_chromatograms_array_index_json(
+    const std::string& intensity_unit = "MS:1000131");
+
+/**
+ * Emit the file-level array index for a point-layout wavelength_spectra_data
+ * table whose columns are point.wavelength_spectrum_index (uint64),
+ * point.wavelength (float, NANOMETRES) and point.intensity (float).
+ */
+std::string
+point_wavelength_array_index_json(const std::string& intensity_unit = "MS:1000131");
+
+/**
  * A single entry in the mzpeak_index.json `files` array.
  */
 /// One `column_mapping` entry: binds a plain column path to its CV term.  The

@@ -221,3 +221,144 @@ reference in both directions.**
 
 Still deferred, now with the review's backing: `auxiliary_arrays`, chunked
 *writing*, and any product support.
+
+---
+
+# What was built
+
+All five phases landed on `feat/chromatogram-uv-metadata`.
+
+## Reading
+
+`Chromatogram::metadata()` and `WavelengthSpectrum::metadata()` return
+`ChromatogramMetadata` / `WavelengthSpectrumMetadata`, read through the same
+facet machinery as spectra, so the legacy nested layout and the split layout
+both work. `Chromatograms` and `WavelengthSpectra` gained `index_for_id` and
+`by_id`, which finally use the `read_entity_id_map` that had been sitting in
+`metadata_model.cpp` uncalled, with a doc comment claiming callers that did not
+exist.
+
+The precursor and selected-ion passes are now templates shared with the spectra
+reader rather than a second copy. The join is subtle — H1 by `source_index`
+VALUE, H2 by `(source_index, precursor_index)`, never positional — and two
+copies of it would have drifted.
+
+`Chromatogram::time()` reports SECONDS. It converts using the unit declared in
+the array index and throws on a unit that is neither minutes nor seconds rather
+than guessing. This is a **breaking change**: values are 60x their previous
+magnitude for every file that stores minutes, which is every file seen so far.
+
+`intensity_unit()` (both entity types) and `wavelength_unit()` report the unit
+of the column that actually supplied the values. Without it, `has_uv`'s TIC in
+detector counts and its DAD trace in absorbance units arrive through one
+unitless accessor.
+
+## Writing
+
+`write_run_directory` / `write_run_archive` take a `RunContents` carrying all
+three entity types together. Metadata is emitted in the split layout, the only
+one the current reference reader resolves through.
+
+Three refusals, each covering something the reference does silently:
+
+| refused | why |
+|---|---|
+| a chromatogram whose type implies an SRM/MRM product | the product facet has no writer anywhere and an unimplemented reference reader path, so the file would carry Q1, lack Q3, and look valid |
+| chromatograms in different intensity units | carrying both needs a column per unit, which this writer does not emit; writing them anyway labels absorbance as detector counts |
+| mismatched parallel arrays | caught before anything is written |
+
+Summary fields are computed from the data actually written, so the two
+reference-writer defects are not reproduced: a maximum seeded at zero (which
+records lambda max 0 and base peak 0 for an all-negative absorbance spectrum)
+and an observed range derived from the unsorted input after a sorted copy has
+been written (which can report a low above its high). Both are pinned by tests.
+
+Run-level metadata is emitted unconditionally, not only when chromatograms are
+present — the reference copies it in its chromatogram close path alone, so a
+wavelength-only archive loses the version, CV list and run description.
+
+## Cross-implementation status
+
+The Rust reference opens a mixed archive written here and reads its spectra
+correctly.
+
+It **refuses a chromatogram-only or UV-only archive** with "Spectrum data entry
+not found". That is a limitation of the reference reader rather than of the
+file: nothing in the specification requires an archive to contain mass spectra,
+and a UV-only run from a diode-array detector is a real thing. Our reader opens
+such an archive.
+
+The reference's `read` example only iterates spectra, so it cannot confirm our
+chromatogram and UV tables value-for-value. That validation stays open.
+
+## Still deliberately absent
+
+`auxiliary_arrays` (a nested blob-with-parameters structure; nothing in any
+fixture populates it), chunked *writing* for any entity type (reading works;
+the spectra writer lacks it too), and any product support. Wavelength
+`scan_windows` are not read: the reference maps their limits to m/z units even
+for UV spectra, and reading them would launder nanometres-labelled-as-m/z into
+the API.
+
+## What the final review changed
+
+Two independent reviews of the completed change. One **critical** defect and
+several real interoperability breaks, all fixed:
+
+- **Undefined behaviour.** Both collection constructors evaluated `*count` on an
+  empty `std::optional` whenever the metadata file declared no entity count and
+  the signal table had rows. The count keys are not required, and `Index`
+  leaves the value unset whenever the metadata member is absent. There is now a
+  test that removes the metadata member from a written run and reads it back.
+- **The reference reader could not load our chromatograms.** It opens the
+  precursor and selected-ion facets unconditionally, so a plain TIC without
+  them failed with `NotFound`. Both are emitted with their schema and zero rows,
+  exactly as the spectra writer already did.
+- **An empty unit was treated as minutes.** An absent unit reached
+  `Chromatogram::time()` and was silently multiplied by 60 — so a chunked file
+  that stores seconds and omits the optional `buffer_priority` would have had
+  every time inflated 60x with no signal. An absent or conflicting unit is now
+  refused, and the chunked path records a unit even when no entry is primary.
+- **An empty intensity unit produced an invalid array index.** `"unit":""`
+  violates the schema and the reference's CURIE parser rejects it. Refused at
+  write time.
+- **`cv_list` was absent or malformed.** Conformance requires every CURIE prefix
+  used to be declared; nothing emitted one, and `RunMetadata`'s own default used
+  `fullName`/`URI` instead of `full_name`/`uri` and omitted UO despite every
+  unit CURIE being a UO term. One definition now serves both.
+- **SIM was misclassified as product-bearing.** Only SRM/MRM has a product.
+  Selected ion monitoring names a Q1 and nothing else, so flagging it claimed a
+  lost product that never existed. The writer still refuses both, now for their
+  own stated reasons — it can carry neither a Q1 nor a Q3.
+- **UV/Vis lost information the reference could have read.** `spectrum_type` and
+  `spectrum_representation` were not written, the summary columns declared no
+  unit (an absorbance base peak was indistinguishable from a detector count),
+  and there was no scan facet — and the reference ignores the primary `time`
+  column outright, so acquisition time was invisible to it.
+- Smaller: the UV total ion current accumulated in `float` (a thousand small
+  samples beside one large one vanished); NaN axis values broke the sort order
+  the footer promises; and several `data_kind: "metadata"` members for one
+  entity could hand a facet table to the primary reader, which then returned an
+  empty map with no error.
+
+`test/chunked_chromatograms_test.cpp` was **never in the build** — the chunked
+chromatogram path had no automated coverage at all, and the file still asserted
+the pre-change minutes convention. It is now wired up and correct.
+
+### Known limitations, recorded rather than hidden
+
+- **`column_mapping` is parsed but not consulted.** Field resolution works from
+  hard-coded names plus three aliases, so a split-layout file that names a
+  column something else and maps it to the right CV term reads as absent. The
+  reference resolves through the mapping.
+- **Dimensions are grouped without regard to physical dtype**, so a file storing
+  the same semantic array as float32 and float64 siblings can concatenate them.
+- **Chunked multi-unit arrays are neither coalesced nor unit-aligned**; only the
+  point layout handles the sibling-column case.
+- **Metadata decoding assumes the reference writer's exact Arrow widths** — a
+  float64 where the reference writes float32 reads as null.
+- A precursor whose `precursor_index` is null cannot be told apart from another
+  null one, so selected ions attach to the first.
+
+None of these is a regression; all predate this work or follow from the
+decoder's existing shape, and each needs more than a local fix.
