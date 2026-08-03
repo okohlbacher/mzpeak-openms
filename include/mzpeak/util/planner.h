@@ -60,17 +60,6 @@ public:
    */
   std::shared_ptr<parquet::Statistics> get(int32_t row_group, int32_t column) const;
 
-  /**
-   * `true` when the row group DECLARES this leaf column sorted ascending with
-   * nulls last, as its footer's sorting-columns entry.
-   *
-   * Only a declaration is trusted, never an assumption: a reader that binary
-   * searches an unsorted column finds one contiguous run and silently misses
-   * every other occurrence, which for an entity index means a short entity that
-   * looks perfectly well formed.
-   */
-  bool sorted_ascending(int32_t row_group, int32_t column) const;
-
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
