@@ -46,3 +46,60 @@ BOOST_AUTO_TEST_CASE(can_read_chromatograms)
   BOOST_TEST(intensity.back() == 77939.0078125f,
              boost::test_tools::tolerance(0.01f));
 }
+
+/******************************************************************************/
+// has_uv.mzpeak carries two chromatograms of DIFFERENT KINDS, which is what
+// makes it worth testing: a mass-spectrometry TIC in detector counts and an
+// Agilent DAD absorption trace in absorbance units.  Ground truth from
+// chromatograms_metadata.parquet.
+BOOST_AUTO_TEST_CASE(reads_chromatogram_metadata)
+{
+  using namespace MzPeak;
+
+  auto mzpeak = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto chromatograms = mzpeak.chromatograms();
+
+  BOOST_TEST_REQUIRE(chromatograms.size() == 2u);
+
+  const ChromatogramMetadata& tic = chromatograms[0].metadata();
+  BOOST_TEST(tic.index == 0u);
+  BOOST_TEST(tic.id == "TIC");
+  BOOST_TEST(tic.chromatogram_type == "MS:1000235"); // total ion current
+  BOOST_TEST(tic.number_of_data_points.has_value());
+  BOOST_TEST(*tic.number_of_data_points == 212u);
+  // The declared point count must agree with what actually decodes; a
+  // disagreement means the metadata and signal tables describe different runs.
+  BOOST_TEST(chromatograms[0].time().size() == *tic.number_of_data_points);
+
+  const ChromatogramMetadata& dad = chromatograms[1].metadata();
+  BOOST_TEST(dad.id == "DAD1 A: Sig=272,16 Ref=360,100");
+  BOOST_TEST(dad.chromatogram_type == "MS:1000812"); // absorption chromatogram
+  BOOST_TEST_REQUIRE(dad.number_of_data_points.has_value());
+  BOOST_TEST(*dad.number_of_data_points == 526u);
+  BOOST_TEST(chromatograms[1].time().size() == 526u);
+
+  // Neither is an SRM trace, so neither loses a product.
+  BOOST_TEST(!tic.has_unreadable_product);
+  BOOST_TEST(!dad.has_unreadable_product);
+
+  // Native ids resolve, and resolve to the right chromatogram.
+  auto index = chromatograms.index_for_id("TIC");
+  BOOST_TEST_REQUIRE(index.has_value());
+  BOOST_TEST(*index == 0u);
+  BOOST_TEST(chromatograms.by_id("TIC").metadata().id == "TIC");
+  BOOST_TEST(!chromatograms.index_for_id("no such chromatogram").has_value());
+}
+
+/******************************************************************************/
+// The reference writer emits 0 for an unknown scan polarity where the
+// specification calls for null, so a 0 here means "the source could not say"
+// rather than a real polarity.  Pinned so a future writer change is noticed.
+BOOST_AUTO_TEST_CASE(chromatogram_polarity_is_the_writers_unknown_sentinel)
+{
+  auto mzpeak = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto chromatograms = mzpeak.chromatograms();
+
+  const auto& polarity = chromatograms[0].metadata().polarity;
+  BOOST_TEST_REQUIRE(polarity.has_value());
+  BOOST_TEST(*polarity == 0);
+}

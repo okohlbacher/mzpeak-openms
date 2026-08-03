@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -15,6 +16,7 @@ directory of this repository.
 #include "mzpeak/data/encoding.h"
 #include "mzpeak/data/signals.h"
 #include "mzpeak/util/slice.h"
+#include "mzpeak/wavelength_spectrum_metadata.h"
 
 namespace MzPeak {
 
@@ -45,13 +47,22 @@ public:
    */
   const std::vector<intensity_type>& intensity() const;
 
+  /**
+   * Descriptive metadata for this spectrum (id, acquisition time, observed
+   * wavelength range).  Returns an empty record when the file carries no
+   * wavelength metadata table.
+   */
+  const WavelengthSpectrumMetadata& metadata() const;
+
 protected:
   friend class WavelengthSpectra;
 
-  WavelengthSpectrum(uint64_t index,
-                     std::shared_ptr<Data::Signals>,
-                     const std::vector<Data::ArrayIndex::Dimension>&,
-                     std::unique_ptr<Util::Slice>);
+  WavelengthSpectrum(
+      uint64_t index,
+      std::shared_ptr<Data::Signals>,
+      const std::vector<Data::ArrayIndex::Dimension>&,
+      std::unique_ptr<Util::Slice>,
+      std::shared_ptr<const std::map<uint64_t, WavelengthSpectrumMetadata>> = {});
 
 private:
   using decoder_type = Data::Encoding::Decoder<double>;
@@ -60,6 +71,7 @@ private:
   decoder_type decoder_;
   std::vector<wavelength_type> wavelength_;
   std::vector<intensity_type> intensity_;
+  std::shared_ptr<const std::map<uint64_t, WavelengthSpectrumMetadata>> md_map_;
 };
 
 } // namespace MzPeak

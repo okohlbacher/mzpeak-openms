@@ -14,8 +14,10 @@ directory of this repository.
 #include <unordered_map>
 #include <vector>
 
+#include "mzpeak/chromatogram_metadata.h"
 #include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/parquet.h"
+#include "mzpeak/wavelength_spectrum_metadata.h"
 
 namespace MzPeak::Util {
 
@@ -82,6 +84,42 @@ struct SpectraMetadataFiles {
  */
 std::map<uint64_t, SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles&);
+
+/**
+ * The Parquet files carrying one chromatogram set's metadata.  As with
+ * @ref SpectraMetadataFiles, the facets are either struct columns of @ref
+ * primary or files of their own.  Non-owning.
+ *
+ * There is no `products` member: see @ref ChromatogramMetadata.
+ */
+struct ChromatogramMetadataFiles {
+  Parquet* primary = nullptr;
+  Parquet* precursors = nullptr;
+  Parquet* selected_ions = nullptr;
+};
+
+/**
+ * Read per-chromatogram metadata, keyed by `chromatogram.index`.  Handles the
+ * nested single-table and split-file layouts.
+ */
+std::map<uint64_t, ChromatogramMetadata>
+read_chromatogram_metadata(const ChromatogramMetadataFiles&);
+
+/**
+ * The Parquet files carrying one wavelength-spectrum set's metadata.
+ * Non-owning.  There is no precursor or selected-ion facet for this entity.
+ */
+struct WavelengthMetadataFiles {
+  Parquet* primary = nullptr;
+  Parquet* scans = nullptr;
+};
+
+/**
+ * Read per-wavelength-spectrum metadata, keyed by `spectrum.index`.  Handles
+ * the nested single-table and split-file layouts.
+ */
+std::map<uint64_t, WavelengthSpectrumMetadata>
+read_wavelength_spectrum_metadata(const WavelengthMetadataFiles&);
 
 /**
  * Read the native-id → entity-index map from a metadata Parquet table whose

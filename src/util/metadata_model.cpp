@@ -72,6 +72,18 @@ std::shared_ptr<arrow::Array> resolve_field(const arrow::StructArray& s,
     if (after != std::string::npos) plain.erase(0, after + 1);
   }
 
+  // One writer emitted a single column with a literal colon in its unit suffix
+  // -- "MS_1003812_lambda_max_unit_UO:0000018" -- where every other column uses
+  // an underscore.  Try that spelling before stripping the suffix, so a caller
+  // can name the field the ordinary way and still find it.
+  if (auto u = name.rfind("_unit_"); u != std::string_view::npos) {
+    std::string colon(name);
+    if (auto sep = colon.find('_', u + 6); sep != std::string::npos) {
+      colon[sep] = ':';
+      if (auto f = s.GetFieldByName(colon)) return f;
+    }
+  }
+
   // Strip a trailing unit suffix: "_unit_MS_1000040".
   if (auto u = plain.rfind("_unit_"); u != std::string::npos) plain.erase(u);
 
@@ -370,6 +382,169 @@ read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
   return out;
 }
 
+/// Normalise a facet to a list of StructArrays, whichever layout it uses.
+///
+/// Older writers nest each facet as a struct column of the primary table; newer
+/// ones give it a flat file of its own.  Both reduce to "a list of structs with
+/// these child names", so every pass below is written once.
+std::vector<std::shared_ptr<arrow::StructArray>>
+facets_of(const std::shared_ptr<arrow::Table>& table,
+          const char* nested,
+          const std::shared_ptr<arrow::Table>& separate)
+{
+  std::vector<std::shared_ptr<arrow::StructArray>> facets;
+  if (table) {
+    if (auto col = table->GetColumnByName(nested)) {
+      for (const auto& chunk : col->chunks()) {
+        if (chunk->type_id() != arrow::Type::STRUCT) continue;
+        facets.push_back(std::static_pointer_cast<arrow::StructArray>(chunk));
+      }
+      return facets;
+    }
+  }
+  if (separate) {
+    if (auto st = struct_from_table(separate)) facets.push_back(st);
+  }
+  return facets;
+}
+
+/// Attach precursor rows to entities, joined by `source_index` VALUE.
+///
+/// Templated on the entity because spectra and chromatograms carry the very
+/// same precursor structure and join it the very same way; the alternative was
+/// a second copy of this and of @ref attach_selected_ions, which is exactly
+/// where the two would drift apart.
+///
+/// H1: join by source_index VALUE, NEVER by row position — the facet has its
+/// own row count and ordering, and chunk boundaries differ per column.
+template <typename Entity>
+void attach_precursors(
+    std::map<uint64_t, Entity>& out,
+    const std::vector<std::shared_ptr<arrow::StructArray>>& facets)
+{
+  for (const auto& prec : facets) {
+    for (int64_t r = 0; r < prec->length(); ++r) {
+      // F7: outer struct null => row carries no precursor data, skip.
+      if (prec->IsNull(r)) continue;
+      // source_index NULL => MS1 row, skip (Pitfall 2).
+      auto si = opt_int<uint64_t>(prec, "source_index", r);
+      if (!si) continue;
+
+      auto it = out.find(*si);
+      if (it == out.end()) {
+        // T-02-01 mitigation: log unmatched source_index, never drop silently.
+        // Using stderr — the library has no logger; callers may redirect.
+        std::fprintf(stderr,
+                     "mzpeak: precursor source_index %llu has no matching "
+                     "entity — skipped\n",
+                     static_cast<unsigned long long>(*si));
+        continue;
+      }
+
+      PrecursorInfo pi;
+      pi.precursor_index = opt_int<uint64_t>(prec, "precursor_index", r);
+      pi.precursor_id = get_string(prec, "precursor_id", r);
+
+      // Isolation window: nested struct field.
+      auto iw_field = resolve_field(*prec, "isolation_window");
+      if (iw_field && !iw_field->IsNull(r)) {
+        auto iw_struct = std::dynamic_pointer_cast<arrow::StructArray>(iw_field);
+        if (iw_struct) {
+          pi.isolation_window.target_mz =
+              opt_float(iw_struct, "MS_1000827_isolation_window_target_mz", r);
+          pi.isolation_window.lower_offset =
+              opt_float(iw_struct, "MS_1000828_isolation_window_lower_offset", r);
+          pi.isolation_window.upper_offset =
+              opt_float(iw_struct, "MS_1000829_isolation_window_upper_offset", r);
+          pi.isolation_window.parameters =
+              read_cv_params_from_list(iw_struct, "parameters", r);
+        }
+      }
+
+      // Activation: nested struct carrying a parameters list.
+      auto act_field = resolve_field(*prec, "activation");
+      if (act_field && !act_field->IsNull(r)) {
+        auto act_struct = std::dynamic_pointer_cast<arrow::StructArray>(act_field);
+        if (act_struct) {
+          pi.activation_parameters =
+              read_cv_params_from_list(act_struct, "parameters", r);
+        }
+      }
+
+      it->second.precursors.push_back(std::move(pi));
+    }
+  }
+}
+
+/// Attach selected-ion rows to their owning precursor.
+///
+/// H2: match on (source_index, precursor_index).  Run AFTER
+/// @ref attach_precursors so there are precursors to attach to.  An ion whose
+/// precursor has not been seen gets a holder of its own rather than being
+/// attached to an arbitrary precursor — with several precursors per entity,
+/// `precursors.back()` silently mis-assigns the transition.
+template <typename Entity>
+void attach_selected_ions(
+    std::map<uint64_t, Entity>& out,
+    const std::vector<std::shared_ptr<arrow::StructArray>>& facets)
+{
+  for (const auto& si : facets) {
+    for (int64_t r = 0; r < si->length(); ++r) {
+      // F7: outer struct null => row carries no selected-ion data, skip.
+      if (si->IsNull(r)) continue;
+      // source_index NULL => MS1 row, skip.
+      auto src_idx = opt_int<uint64_t>(si, "source_index", r);
+      if (!src_idx) continue;
+
+      auto it = out.find(*src_idx);
+      if (it == out.end()) {
+        std::fprintf(stderr,
+                     "mzpeak: selected_ion source_index %llu has no matching "
+                     "entity — skipped\n",
+                     static_cast<unsigned long long>(*src_idx));
+        continue;
+      }
+
+      auto pi_idx = opt_int<uint64_t>(si, "precursor_index", r);
+
+      SelectedIonInfo ion;
+      ion.selected_ion_mz =
+          opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
+      ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
+      ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
+      // Ion mobility: null in all bundled fixtures, so this reads as nullopt
+      // everywhere today — the decode is null-safe and value-level correctness
+      // is fixture-gated on a real IM run (handoff P1).
+      ion.ion_mobility_value = opt_double(si, "ion_mobility_value", r);
+      ion.ion_mobility_type = opt_string(si, "ion_mobility_type", r);
+      // The mobility BAND, when the writer records it.  See SelectedIonInfo:
+      // for diaPASEF the value above is only the midpoint, and the band is what
+      // separates one isolation window from the next.
+      ion.ion_mobility_lower_limit = opt_double(si, "ion_mobility_lower_limit", r);
+      ion.ion_mobility_upper_limit = opt_double(si, "ion_mobility_upper_limit", r);
+      ion.parameters = read_cv_params_from_list(si, "parameters", r);
+
+      auto& precs = it->second.precursors;
+      PrecursorInfo* target = nullptr;
+      for (auto& p : precs) {
+        if (p.precursor_index == pi_idx) {
+          target = &p;
+          break;
+        }
+      }
+      if (!target) {
+        // No precursor with this precursor_index yet — create a holder (ion
+        // seen before/without its precursor row, or an ion-only entry).
+        PrecursorInfo holder;
+        holder.precursor_index = pi_idx;
+        precs.push_back(std::move(holder));
+        target = &precs.back();
+      }
+      target->selected_ions.push_back(std::move(ion));
+    }
+  }
+}
+
 } // namespace
 
 /******************************************************************************/
@@ -458,16 +633,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // StructArrays so the passes below are identical for either layout.
   auto facets_for = [&table](const char* nested,
                              const std::shared_ptr<arrow::Table>& separate) {
-    std::vector<std::shared_ptr<arrow::StructArray>> facets;
-    if (auto col = table->GetColumnByName(nested)) {
-      for (const auto& chunk : col->chunks()) {
-        if (chunk->type_id() != arrow::Type::STRUCT) continue;
-        facets.push_back(std::static_pointer_cast<arrow::StructArray>(chunk));
-      }
-    } else if (separate) {
-      if (auto st = struct_from_table(separate)) facets.push_back(st);
-    }
-    return facets;
+    return facets_of(table, nested, separate);
   };
 
   std::vector<std::shared_ptr<arrow::StructArray>> spectrum_facets;
@@ -727,140 +893,12 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   }
 
   // -------------------------------------------------------------------
-  // PASS 2: precursor column — H1 join by source_index VALUE.
-  // For each facet row r, si = source_index VALUE (not r), then attach to
-  // out[si].  NEVER index out positionally (chunk boundaries differ per
-  // column).  MS1 rows have NULL source_index and are skipped.
+  // PASS 2 and 3: precursor, then selected_ion.  Both are shared with the
+  // chromatogram reader -- see attach_precursors / attach_selected_ions.
+  // Order matters: ions attach to the precursors pass 2 created.
   // -------------------------------------------------------------------
-  {
-    for (const auto& prec : facets_for("precursor", precursors_table)) {
-      {
-        for (int64_t r = 0; r < prec->length(); ++r) {
-          // F7: outer struct null => row carries no precursor data, skip.
-          if (prec->IsNull(r)) continue;
-          // source_index NULL => MS1 row, skip (Pitfall 2).
-          auto si = opt_int<uint64_t>(prec, "source_index", r);
-          if (!si) continue;
-
-          // H1: join by source_index VALUE into the map keyed by spectrum.index.
-          auto it = out.find(*si);
-          if (it == out.end()) {
-            // T-02-01 mitigation: log unmatched source_index, never drop silently.
-            // Using stderr — the library has no logger; callers may redirect.
-            std::fprintf(stderr,
-                         "mzpeak: precursor source_index %llu has no matching "
-                         "spectrum — skipped\n",
-                         static_cast<unsigned long long>(*si));
-            continue;
-          }
-
-          PrecursorInfo pi;
-          pi.precursor_index = opt_int<uint64_t>(prec, "precursor_index", r);
-          pi.precursor_id = get_string(prec, "precursor_id", r);
-
-          // Isolation window: nested struct field.
-          auto iw_field = resolve_field(*prec, "isolation_window");
-          if (iw_field && !iw_field->IsNull(r)) {
-            auto iw_struct = std::dynamic_pointer_cast<arrow::StructArray>(iw_field);
-            if (iw_struct) {
-              pi.isolation_window.target_mz =
-                  opt_float(iw_struct, "MS_1000827_isolation_window_target_mz", r);
-              pi.isolation_window.lower_offset = opt_float(
-                  iw_struct, "MS_1000828_isolation_window_lower_offset", r);
-              pi.isolation_window.upper_offset = opt_float(
-                  iw_struct, "MS_1000829_isolation_window_upper_offset", r);
-              pi.isolation_window.parameters =
-                  read_cv_params_from_list(iw_struct, "parameters", r);
-            }
-          }
-
-          // Activation: nested struct carrying a parameters list.
-          auto act_field = resolve_field(*prec, "activation");
-          if (act_field && !act_field->IsNull(r)) {
-            auto act_struct =
-                std::dynamic_pointer_cast<arrow::StructArray>(act_field);
-            if (act_struct) {
-              pi.activation_parameters =
-                  read_cv_params_from_list(act_struct, "parameters", r);
-            }
-          }
-
-          it->second.precursors.push_back(std::move(pi));
-        }
-      }
-    }
-  }
-
-  // -------------------------------------------------------------------
-  // PASS 3: selected_ion column — H2 attach by (source_index, precursor_index).
-  // Run AFTER the precursor pass so precursors exist to attach to.
-  // Attach ion to the PrecursorInfo whose precursor_index matches the ion's
-  // precursor_index.  If no such precursor exists, create one to hold the ion
-  // (do NOT attach to an arbitrary precursor, do NOT use precursors.back()).
-  // -------------------------------------------------------------------
-  {
-    for (const auto& si : facets_for("selected_ion", selected_ions_table)) {
-      {
-        for (int64_t r = 0; r < si->length(); ++r) {
-          // F7: outer struct null => row carries no selected-ion data, skip.
-          if (si->IsNull(r)) continue;
-          // source_index NULL => MS1 row, skip.
-          auto src_idx = opt_int<uint64_t>(si, "source_index", r);
-          if (!src_idx) continue;
-
-          auto it = out.find(*src_idx);
-          if (it == out.end()) {
-            std::fprintf(stderr,
-                         "mzpeak: selected_ion source_index %llu has no matching "
-                         "spectrum — skipped\n",
-                         static_cast<unsigned long long>(*src_idx));
-            continue;
-          }
-
-          // Read precursor_index for H2 matching.
-          auto pi_idx = opt_int<uint64_t>(si, "precursor_index", r);
-
-          SelectedIonInfo ion;
-          ion.selected_ion_mz =
-              opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
-          ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
-          ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
-          // Ion mobility: null in all bundled fixtures, so this reads as nullopt
-          // everywhere today — the decode is null-safe and value-level
-          // correctness is fixture-gated on a real IM run (handoff P1).
-          ion.ion_mobility_value = opt_double(si, "ion_mobility_value", r);
-          ion.ion_mobility_type = opt_string(si, "ion_mobility_type", r);
-          // The mobility BAND, when the writer records it.  See
-          // SelectedIonInfo: for diaPASEF the value above is only the midpoint,
-          // and the band is what separates one isolation window from the next.
-          ion.ion_mobility_lower_limit =
-              opt_double(si, "ion_mobility_lower_limit", r);
-          ion.ion_mobility_upper_limit =
-              opt_double(si, "ion_mobility_upper_limit", r);
-          ion.parameters = read_cv_params_from_list(si, "parameters", r);
-
-          // H2: attach by (source_index, precursor_index) — NOT precursors.back().
-          auto& precs = it->second.precursors;
-          PrecursorInfo* target = nullptr;
-          for (auto& p : precs) {
-            if (p.precursor_index == pi_idx) {
-              target = &p;
-              break;
-            }
-          }
-          if (!target) {
-            // No precursor with this precursor_index yet — create a holder
-            // (ion seen before/without its precursor row, or ion-only entry).
-            PrecursorInfo holder;
-            holder.precursor_index = pi_idx;
-            precs.push_back(std::move(holder));
-            target = &precs.back();
-          }
-          target->selected_ions.push_back(std::move(ion));
-        }
-      }
-    }
-  }
+  attach_precursors(out, facets_for("precursor", precursors_table));
+  attach_selected_ions(out, facets_for("selected_ion", selected_ions_table));
 
   // -------------------------------------------------------------------
   // PASS 4: scan column — scan_parameters + scan_windows (accepted add-on).
@@ -967,6 +1005,189 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
               }
             }
           }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/******************************************************************************/
+std::map<uint64_t, ChromatogramMetadata>
+read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
+{
+  std::map<uint64_t, ChromatogramMetadata> out;
+  if (!files.primary) return out;
+
+  auto table = read_metadata_table(*files.primary);
+  auto precursors_table =
+      files.precursors ? read_metadata_table(*files.precursors) : nullptr;
+  auto selected_ions_table =
+      files.selected_ions ? read_metadata_table(*files.selected_ions) : nullptr;
+
+  // The primary facet is a `chromatogram` struct column (nested layout) or the
+  // table's own top-level columns (split layout).
+  std::vector<std::shared_ptr<arrow::StructArray>> primary;
+  if (table->GetColumnByName("chromatogram")) {
+    primary = facets_of(table, "chromatogram", nullptr);
+  } else if (table->GetColumnByName("index")) {
+    if (auto st = struct_from_table(table)) primary.push_back(st);
+  } else {
+    return out; // not a chromatogram metadata table
+  }
+
+  for (const auto& chrom : primary) {
+    auto index_field(resolve_field(*chrom, "index"));
+    if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
+    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+
+    for (int64_t r = 0; r < chrom->length(); ++r) {
+      // F7: outer struct null => children are unreliable, skip the row.
+      if (chrom->IsNull(r)) continue;
+      if (index->IsNull(r)) continue;
+
+      ChromatogramMetadata m;
+      m.index = index->Value(r);
+      m.id = get_string(chrom, "id", r);
+      m.chromatogram_type = get_string(chrom, "MS_1000626_chromatogram_type", r);
+      m.polarity = opt_int<int>(chrom, "MS_1000465_scan_polarity", r);
+      m.number_of_data_points =
+          opt_int<uint64_t>(chrom, "MS_1003060_number_of_data_points", r);
+      m.data_processing_ref = get_string(chrom, "data_processing_ref", r);
+      m.parameters = read_cv_params_from_list(chrom, "parameters", r);
+
+      // Flag the types whose Q3 selection the format cannot deliver.  Both
+      // spellings are accepted: mzdata's to_curie() emits MS:1000472/1000473
+      // for SIM/SRM while its own reader expects MS:1001472/1001473, so a file
+      // may legitimately carry either.
+      static constexpr std::string_view kProductBearing[] = {
+          "MS:1001473", "MS:1001472", "MS:1000473", "MS:1000472"};
+      for (std::string_view type : kProductBearing) {
+        if (m.chromatogram_type == type) {
+          m.has_unreadable_product = true;
+          break;
+        }
+      }
+
+      out[m.index] = std::move(m);
+    }
+  }
+
+  attach_precursors(out, facets_of(table, "precursor", precursors_table));
+  attach_selected_ions(out, facets_of(table, "selected_ion", selected_ions_table));
+
+  return out;
+}
+
+/******************************************************************************/
+std::map<uint64_t, WavelengthSpectrumMetadata>
+read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
+{
+  std::map<uint64_t, WavelengthSpectrumMetadata> out;
+  if (!files.primary) return out;
+
+  auto table = read_metadata_table(*files.primary);
+  auto scans_table = files.scans ? read_metadata_table(*files.scans) : nullptr;
+
+  // The primary struct column is named `spectrum`, exactly as for mass spectra
+  // — the entity type is carried by the file's role in the index, not by the
+  // column name.
+  std::vector<std::shared_ptr<arrow::StructArray>> primary;
+  if (table->GetColumnByName("spectrum")) {
+    primary = facets_of(table, "spectrum", nullptr);
+  } else if (table->GetColumnByName("index")) {
+    if (auto st = struct_from_table(table)) primary.push_back(st);
+  } else {
+    return out;
+  }
+
+  for (const auto& spectrum : primary) {
+    auto index_field(resolve_field(*spectrum, "index"));
+    if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
+    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+
+    for (int64_t r = 0; r < spectrum->length(); ++r) {
+      if (spectrum->IsNull(r)) continue;
+      if (index->IsNull(r)) continue;
+
+      WavelengthSpectrumMetadata m;
+      m.index = index->Value(r);
+      m.id = get_string(spectrum, "id", r);
+      // Minutes on disk (UO:0000031) -> seconds here, matching
+      // SpectrumMetadata::retention_time.  The scan facet overrides below.
+      if (auto t = opt_double(spectrum, "time", r)) m.time = *t * 60.0;
+      m.spectrum_type = get_string(spectrum, "MS_1000559_spectrum_type", r);
+      m.representation =
+          get_string(spectrum, "MS_1000525_spectrum_representation", r);
+      m.lowest_observed_wavelength = opt_double(
+          spectrum, "MS_1000619_lowest_observed_wavelength_unit_UO_0000018", r);
+      m.highest_observed_wavelength = opt_double(
+          spectrum, "MS_1000618_highest_observed_wavelength_unit_UO_0000018", r);
+      // The legacy writer emitted this one column with a literal colon in the
+      // unit suffix ("..._unit_UO:0000018") where every other column uses an
+      // underscore.  resolve_field strips the CV prefix and everything from
+      // "_unit_" onward, so the plain name matches either spelling.
+      m.lambda_max =
+          opt_double(spectrum, "MS_1003812_lambda_max_unit_UO_0000018", r);
+      m.number_of_data_points =
+          opt_int<uint64_t>(spectrum, "MS_1003060_number_of_data_points", r);
+      m.base_peak_intensity =
+          opt_float(spectrum, "MS_1000505_base_peak_intensity_unit_MS_1000131", r);
+      m.total_ion_current =
+          opt_float(spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
+      m.data_processing_ref = get_string(spectrum, "data_processing_ref", r);
+      m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
+
+      out[m.index] = std::move(m);
+    }
+  }
+
+  // Scan facet: acquisition time and scan parameters, joined by source_index
+  // VALUE.  Only the earliest scan of a multi-scan spectrum is representative,
+  // for the reason given in the spectra reader: taking whichever row was read
+  // last reports the spectrum later than it is.
+  //
+  // scan_windows are deliberately NOT read here.  The reference writer maps
+  // their limits to m/z units even for wavelength spectra, so a nanometre bound
+  // arrives labelled as m/z; reading it would launder that error into our API.
+  std::map<uint64_t, std::optional<float>> earliest_scan;
+  for (const auto& scan : facets_of(table, "scan", scans_table)) {
+    for (int64_t r = 0; r < scan->length(); ++r) {
+      if (scan->IsNull(r)) continue;
+      auto src_idx = opt_int<uint64_t>(scan, "source_index", r);
+      if (!src_idx) continue;
+
+      auto it = out.find(*src_idx);
+      if (it == out.end()) {
+        std::fprintf(stderr,
+                     "mzpeak: scan source_index %llu has no matching wavelength "
+                     "spectrum — skipped\n",
+                     static_cast<unsigned long long>(*src_idx));
+        continue;
+      }
+
+      auto sst = opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
+
+      bool representative = true;
+      if (auto seen = earliest_scan.find(*src_idx); seen != earliest_scan.end()) {
+        representative =
+            sst.has_value() && seen->second.has_value() && *sst < *seen->second;
+      }
+      if (!representative) continue;
+      earliest_scan[*src_idx] = sst;
+
+      it->second.scan_parameters = read_cv_params_from_list(scan, "parameters", r);
+
+      // scan_start_time is float32 while spectrum.time is float64 and carries
+      // the same quantity, so keep the more precise value when the two agree to
+      // within float32 rounding.
+      if (sst) {
+        const double from_scan = static_cast<double>(*sst) * 60.0;
+        const double previous = it->second.time.value_or(from_scan);
+        const double scale = std::max(std::abs(from_scan), 1.0);
+        if (std::abs(previous - from_scan) > 1e-6 * scale) {
+          it->second.time = from_scan;
         }
       }
     }

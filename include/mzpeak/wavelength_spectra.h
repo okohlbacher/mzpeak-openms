@@ -9,8 +9,10 @@ directory of this repository.
 #pragma once
 
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "mzpeak/util/enumerable_proxy.h"
 #include "mzpeak/wavelength_spectrum.h"
@@ -33,11 +35,28 @@ public:
   ~WavelengthSpectra() = default;
 
   /// Low-level constructor.
-  explicit WavelengthSpectra(std::unique_ptr<Data::Signals>,
-                              std::optional<std::size_t> count = std::nullopt);
+  /// @p count is ignored when zero and the signal table has rows; see
+  /// Chromatograms for why a declared count is not trusted on its own.
+  explicit WavelengthSpectra(
+      std::unique_ptr<Data::Signals>,
+      std::optional<std::size_t> count = std::nullopt,
+      std::map<uint64_t, WavelengthSpectrumMetadata> metadata = {});
+
+  /// Resolve a native id to its index, or nullopt when unknown.
+  std::optional<std::size_t> index_for_id(const std::string& id) const;
+
+  /// Fetch the spectrum with the given native id.
+  /// @throws ParquetError when the id is unknown.
+  WavelengthSpectrum by_id(const std::string& id) const;
 
 private:
   std::shared_ptr<Data::Signals> data_;
+
+  // Shared into every WavelengthSpectrum this collection hands out.
+  std::shared_ptr<const std::map<uint64_t, WavelengthSpectrumMetadata>> md_map_;
+
+  // Native id -> index, built from md_map_ at construction.
+  std::map<std::string, std::size_t> id_to_index_;
 
   // Function to fetch a specific wavelength spectrum.
   WavelengthSpectrum fetch(uint64_t);

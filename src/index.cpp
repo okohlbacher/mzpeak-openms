@@ -16,6 +16,7 @@ directory of this repository.
 #include "mzpeak/exception.h"
 #include "mzpeak/io/archive.h"
 #include "mzpeak/metadata/table.h"
+#include "mzpeak/util/metadata_model.h"
 
 /*
  * Boost JSON:
@@ -235,25 +236,42 @@ WavelengthSpectra Index::wavelength_spectra() const
 
   if (!data) return WavelengthSpectra();
 
-  // Read the wavelength spectrum count from the metadata table if present.
+  // Read the declared count and the descriptive metadata from the metadata
+  // table.  The Parquet objects must outlive the read, so they are held here.
   std::optional<std::size_t> count;
+  std::map<uint64_t, WavelengthSpectrumMetadata> md;
   if (metadata) {
-    auto md(parquet(*metadata));
-    auto fmd(md->file_metadata());
-    if (fmd) {
+    auto md_parquet(parquet(*metadata));
+    if (auto fmd = md_parquet->file_metadata()) {
       if (auto kv = fmd->key_value_metadata()) {
         auto result(kv->Get("wavelength_spectrum_count"));
         if (result.ok()) {
           std::size_t r{};
-          const std::string& s(result.ValueOrDie());
-          auto [ptr, ec]{std::from_chars(s.data(), s.data() + s.size(), r)};
+          const std::string& value(result.ValueOrDie());
+          auto [ptr,
+                ec]{std::from_chars(value.data(), value.data() + value.size(), r)};
           if (ec == std::errc()) count = r;
         }
       }
     }
+
+    Util::WavelengthMetadataFiles files;
+    files.primary = md_parquet.get();
+
+    // A split-layout writer puts the scan facet in its own file.
+    std::unique_ptr<Util::Parquet> scans;
+    for (const auto& file : impl_->files_) {
+      if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
+      if (file.data_kind != Scans) continue;
+      scans = parquet(file);
+      files.scans = scans.get();
+    }
+
+    md = Util::read_wavelength_spectrum_metadata(files);
   }
 
-  return WavelengthSpectra(std::make_unique<Data::Signals>(parquet(*data)), count);
+  return WavelengthSpectra(std::make_unique<Data::Signals>(parquet(*data)), count,
+                           std::move(md));
 }
 
 /******************************************************************************/
@@ -273,23 +291,43 @@ Chromatograms Index::chromatograms() const
   if (!data) return Chromatograms();
 
   std::optional<std::size_t> count;
+  std::map<uint64_t, ChromatogramMetadata> md;
   if (metadata) {
-    auto md(parquet(*metadata));
-    auto fmd(md->file_metadata());
-    if (fmd) {
+    auto md_parquet(parquet(*metadata));
+    if (auto fmd = md_parquet->file_metadata()) {
       if (auto kv = fmd->key_value_metadata()) {
         auto result(kv->Get("chromatogram_count"));
         if (result.ok()) {
           std::size_t r{};
-          const std::string& s(result.ValueOrDie());
-          auto [ptr, ec]{std::from_chars(s.data(), s.data() + s.size(), r)};
+          const std::string& value(result.ValueOrDie());
+          auto [ptr,
+                ec]{std::from_chars(value.data(), value.data() + value.size(), r)};
           if (ec == std::errc()) count = r;
         }
       }
     }
+
+    Util::ChromatogramMetadataFiles files;
+    files.primary = md_parquet.get();
+
+    std::unique_ptr<Util::Parquet> precursors;
+    std::unique_ptr<Util::Parquet> selected_ions;
+    for (const auto& file : impl_->files_) {
+      if (file.entity_type != Schema::EntityType::Chromatogram) continue;
+      if (file.data_kind == Precursors) {
+        precursors = parquet(file);
+        files.precursors = precursors.get();
+      } else if (file.data_kind == SelectedIons) {
+        selected_ions = parquet(file);
+        files.selected_ions = selected_ions.get();
+      }
+    }
+
+    md = Util::read_chromatogram_metadata(files);
   }
 
-  return Chromatograms(std::make_unique<Data::Signals>(parquet(*data)), count);
+  return Chromatograms(std::make_unique<Data::Signals>(parquet(*data)), count,
+                       std::move(md));
 }
 
 /******************************************************************************/
