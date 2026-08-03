@@ -11,6 +11,7 @@ directory of this repository.
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <vector>
 
@@ -81,8 +82,14 @@ std::vector<MzPeak::SpectrumData> read_all_sorted(const std::string& path)
 
 /******************************************************************************/
 // ms_level round-trips through write → read.
-// NOTE: retention_time and polarity are written to the Parquet metadata table
-// but the current trunk Metadata::Spectrum API does not expose them yet.
+// retention_time and polarity are written to the Parquet metadata table and
+// read back through Spectrum::metadata().
+//
+// The retention-time assertion is the point of this test: SpectrumData carries
+// SECONDS, the format stores MINUTES, and the reader converts on the way back.
+// Writing the seconds value straight into the minutes column made every round
+// trip 60x too large, and this test previously wrote 120.5 without ever
+// asserting what came back — so it passed throughout.
 BOOST_AUTO_TEST_CASE(metadata_fields_round_trip)
 {
   using namespace MzPeak;
@@ -112,6 +119,17 @@ BOOST_AUTO_TEST_CASE(metadata_fields_round_trip)
 
   BOOST_TEST(spectra[0].ms_level() == 1u);
   BOOST_TEST(spectra[1].ms_level() == 2u);
+
+  auto s0 = spectra[0];
+  auto s1 = spectra[1];
+  BOOST_TEST_REQUIRE(s0.retention_time().has_value());
+  BOOST_TEST_REQUIRE(s1.retention_time().has_value());
+  // Seconds in, seconds out — not 7230 and 14400.
+  BOOST_TEST(std::abs(*s0.retention_time() - 120.5) < 1e-3);
+  BOOST_TEST(std::abs(*s1.retention_time() - 240.0) < 1e-3);
+
+  BOOST_TEST((s0.metadata().polarity == std::optional<int>(1)));
+  BOOST_TEST((s1.metadata().polarity == std::optional<int>(-1)));
 }
 
 /******************************************************************************/

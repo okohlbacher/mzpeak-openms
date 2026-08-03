@@ -234,7 +234,11 @@ void write_spectra_metadata_to_sink(
     index.push_back(r.index);
     id.push_back(r.id);
     ms_level.push_back(r.ms_level);
-    time.push_back(r.retention_time);
+    // SpectrumMetaRow::retention_time is SECONDS (see writer.h); the spec's
+    // `time` column is MINUTES (UO_0000031), and the reader multiplies by 60 on
+    // the way back.  Storing seconds here made every round trip 60x too large.
+    time.push_back(r.retention_time ? std::optional<double>(*r.retention_time / 60.0)
+                                    : std::nullopt);
     polarity.push_back(r.polarity);
     n_points.push_back(r.number_of_data_points);
     n_peaks.push_back(r.number_of_peaks);
@@ -361,7 +365,8 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
     scan_index.push_back(0);
     scan_start_time.push_back(
         r.retention_time
-            ? std::optional<float>(static_cast<float>(*r.retention_time))
+            // Seconds -> minutes, as for `time` above.
+            ? std::optional<float>(static_cast<float>(*r.retention_time / 60.0))
             : std::nullopt);
   }
   auto schema(arrow::schema({

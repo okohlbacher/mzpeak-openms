@@ -392,7 +392,8 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       transform_entry = &e;
       break;
     case BufferFormat::ChunkEnd:
-      break; // bounds only; not needed to decode
+      end_entry = &e;
+      break;
     case BufferFormat::Point:
       break;
     }
