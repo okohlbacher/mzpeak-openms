@@ -228,7 +228,8 @@ endforeach
 
 # Tools
 tool_names = [
-  'mzp-inspect'
+  'mzp-inspect',
+  'mzp-bench'
 ]
 
 foreach tool : tool_names
