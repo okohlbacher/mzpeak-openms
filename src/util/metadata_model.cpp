@@ -12,6 +12,7 @@ directory of this repository.
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
 #include <arrow/table.h>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -860,6 +861,10 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // fixtures and is DEFERRED (same as selected_ion IM above).
   // -------------------------------------------------------------------
   {
+    // Earliest scan seen per spectrum, so a multi-scan spectrum reports the
+    // representative (earliest) scan rather than the last row read.
+    std::map<uint64_t, std::optional<float>> earliest_scan;
+
     for (const auto& scan : facets_for("scan", scans_table)) {
       {
         for (int64_t r = 0; r < scan->length(); ++r) {
@@ -877,23 +882,56 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
             continue;
           }
 
-          it->second.scan_parameters =
-              read_cv_params_from_list(scan, "parameters", r);
+          // A spectrum may own SEVERAL scans (summed/averaged acquisitions and
+          // ion-mobility frames).  Its scalar scan fields must then come from
+          // ONE representative scan — the earliest — rather than from whichever
+          // row happened to be read last.  The spec requires the minimum scan
+          // start time for a multi-scan spectrum; taking the last row's instead
+          // reports a spectrum later than it is, so an RT-range query silently
+          // misses it.  Scan windows still accumulate across every scan.
+          auto sst =
+              opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
 
-          // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
-          // unit-annotated field (UO_0000031 = minutes — normative MUST, see
-          // docs/schemas/spectra.md).  Override the PASS 1 spectrum.time
-          // fallback when present.  ×60 -> seconds (handoff P0; a silent
-          // minutes/seconds mismatch is a 60x error).
-          if (auto sst =
-                  opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r)) {
-            it->second.retention_time = static_cast<double>(*sst) * 60.0;
+          bool representative = true;
+          if (auto seen = earliest_scan.find(*src_idx);
+              seen != earliest_scan.end()) {
+            // Already have a scan for this spectrum: only replace when this one
+            // is genuinely earlier.  A scan with no time never displaces one
+            // that has a time.
+            representative =
+                sst.has_value() && seen->second.has_value() && *sst < *seen->second;
           }
 
-          // Scan-level ion mobility (handoff P1): null in all bundled fixtures,
-          // so null-safe today; value-level correctness is fixture-gated.
-          it->second.ion_mobility = opt_double(scan, "ion_mobility_value", r);
-          it->second.ion_mobility_type = opt_string(scan, "ion_mobility_type", r);
+          if (representative) {
+            earliest_scan[*src_idx] = sst;
+
+            it->second.scan_parameters =
+                read_cv_params_from_list(scan, "parameters", r);
+
+            // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
+            // unit-annotated field (UO_0000031 = minutes — normative MUST, see
+            // docs/schemas/spectra.md).  ×60 -> seconds (a silent
+            // minutes/seconds mismatch is a 60x error).
+            //
+            // scan_start_time is float32 while spectrum.time is float64 and
+            // carries the same quantity, so when the two agree to within float32
+            // precision keep the PASS 1 value rather than losing digits at an
+            // exact range boundary.
+            if (sst) {
+              const double from_scan = static_cast<double>(*sst) * 60.0;
+              const double previous = it->second.retention_time.value_or(from_scan);
+              const double scale = std::max(std::abs(from_scan), 1.0);
+              if (std::abs(previous - from_scan) > 1e-6 * scale) {
+                it->second.retention_time = from_scan;
+              }
+            }
+
+            // Scan-level ion mobility (handoff P1): null in all bundled
+            // fixtures, so null-safe today; value-level correctness is
+            // fixture-gated.
+            it->second.ion_mobility = opt_double(scan, "ion_mobility_value", r);
+            it->second.ion_mobility_type = opt_string(scan, "ion_mobility_type", r);
+          }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
           auto sw_field = resolve_field(*scan, "scan_windows");

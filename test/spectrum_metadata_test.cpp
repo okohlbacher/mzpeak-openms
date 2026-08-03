@@ -467,8 +467,13 @@ BOOST_AUTO_TEST_CASE(retention_time_is_seconds)
   }
   BOOST_TEST_REQUIRE(rt0.has_value());
   BOOST_TEST_REQUIRE(rt2.has_value());
-  BOOST_TEST(std::abs(rt0.value() - 0.296100) < 1e-4);
-  BOOST_TEST(std::abs(rt2.value() - 0.673100) < 1e-4);
+  // Tolerance is tight on purpose.  `scan.scan_start_time` is float32 while
+  // `spectrum.time` is float64 and carries the SAME quantity, so taking the
+  // scan value unconditionally silently drops digits: 0.29610000550746918
+  // instead of 0.2961.  That is ~5.5e-9 out — invisible at 1e-4, and enough to
+  // put a spectrum on the wrong side of an exact RT range boundary.
+  BOOST_TEST(std::abs(rt0.value() - 0.2961) < 1e-9);
+  BOOST_TEST(std::abs(rt2.value() - 0.6731) < 1e-9);
   // Sanity: seconds, not minutes — must be > the raw minutes value.
   BOOST_TEST(rt0.value() > 0.05);
 }
