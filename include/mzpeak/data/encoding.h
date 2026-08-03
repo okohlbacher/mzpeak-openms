@@ -571,6 +571,16 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       }
       if (lists->IsNull(r) || starts->IsNull(r)) continue;
 
+      // An empty or all-null chunk is written with start == end == 0 (the
+      // reference writer does this for empty spectra).  The reference reader
+      // drops such a row before decoding; decoding it here would emit `start`
+      // as a real coordinate, adding a spurious m/z 0.0 point and desynchronising
+      // the m/z and intensity arrays for the rest of the spectrum.
+      if (ends != nullptr && !ends->IsNull(r) && starts->Value(r) == 0.0 &&
+          ends->Value(r) == 0.0) {
+        continue;
+      }
+
       const std::size_t before = assembled_values.size();
       if (items) {
         delta_decode_chunk<V>(*items, lists->value_offset(r), lists->value_length(r),

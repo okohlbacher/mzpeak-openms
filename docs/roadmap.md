@@ -65,6 +65,16 @@ Verified against the code but NOT yet fixed. Ordered by severity. Each is a
   reconstructs once, where the reference applies `fill_nulls_for()` per semantic
   chunk. Both currently agree with the reference to <=8.7e-07 Da, so this is
   correctness-of-model rather than a live numeric error.
+- **Checked and NOT a defect — do not re-chase.** The numpress path skips null
+  reconstruction on the assumption that numpress output is dense. One reviewer
+  argued the reference converts zero to null and then fills for numpress-linear
+  on the main axis, which would make our zeros silently wrong. Measured on
+  `small.numpress.mzpeak` spectrum 0: 13589 points, **zero** m/z equal to 0.0,
+  fully monotonic, leading values matching the point layout to ~1e-8 (numpress
+  loss). The reference writer encodes the already-reconstructed dense array, so
+  the assumption holds for its output. Revisit only if a writer is found that
+  null-marks *and* numpress-encodes the same axis.
+
 - **`chunk_end` validation is still incomplete.** It now fires, but the
   Numpress path returns before reaching it, and the 1e-6 relative tolerance
   permits ~0.001 Da at m/z 1000 — loose for this purpose. It also does not check
