@@ -6,10 +6,13 @@ top-level directory of this repository.
 
 */
 
+#include "mzpeak/util/planner.h"
+
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
 #include <bit>
 #include <memory>
+#include <mutex>
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <parquet/page_index.h>
@@ -18,7 +21,6 @@ top-level directory of this repository.
 #include <ranges>
 
 #include "mzpeak/util/algorithm.h"
-#include "mzpeak/util/planner.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
@@ -26,69 +28,94 @@ namespace MzPeak::Util {
 using namespace std::placeholders;
 
 /******************************************************************************/
-/**
- * Used to return column statistics.
+/*
+ * The statistics cache.
  *
- * The column metadata needs to outlive the stats, which is why both
- * are stored here.
+ * Keyed on (row group, leaf column).  The owning `ColumnChunkMetaData` is
+ * retained alongside each `Statistics`: for the byte-array types the min/max
+ * accessors hand back views into the chunk's thrift buffers, so dropping the
+ * chunk would leave them dangling.
  */
-struct StatsCache {
-  using key_type = int32_t;
+struct StatsIndex::Impl {
+  using key_type = std::pair<int32_t, int32_t>;
   using value_type = std::pair<std::shared_ptr<parquet::ColumnChunkMetaData>,
                                std::shared_ptr<parquet::Statistics>>;
 
-  // A statistics cache.  May contain null values which indicate that
-  // a previous attempt failed and to not try again.  Also used to
-  // know how many unique columns were requested.
-  std::map<key_type, value_type> cache_ = {};
-
-  // Construct a key for the given group/field.
-  key_type key(const Schema::Column& dest) const
+  explicit Impl(std::shared_ptr<parquet::FileMetaData> metadata)
+      : metadata_(std::move(metadata))
+      , rows_(static_cast<std::size_t>(metadata_->num_row_groups()), 0)
   {
-    return dest.second->absolute_index();
+    // Row counts are two integers per group, are needed whenever a query falls
+    // back to a full scan, and reading them here means the common path never
+    // constructs a RowGroupMetaData at all.
+    for (int32_t g : std::views::iota(0, metadata_->num_row_groups()))
+      rows_[static_cast<std::size_t>(g)] = metadata_->RowGroup(g)->num_rows();
   }
 
-  // Attempt to fetch column statistics.
-  std::optional<value_type> get(const std::shared_ptr<parquet::RowGroupMetaData>& rg,
-                                const Schema::Column& dest)
+  std::shared_ptr<parquet::Statistics> get(int32_t row_group, int32_t column)
   {
-    key_type k(key(dest));
-    auto it = cache_.find(k);
+    const key_type key{row_group, column};
 
-    if (it != cache_.end()) {
-      value_type v = it->second;
+    // A plain mutex, not a shared_mutex: the critical section is one map
+    // lookup, and reader-writer bookkeeping costs more than it saves there.
+    std::lock_guard<std::mutex> guard(mutex_);
 
-      if (v.first == nullptr || v.second == nullptr) {
-        return {};
-      } else {
-        return v;
-      }
-    } else {
-      value_type v = load(rg, k).value_or(value_type{nullptr, nullptr});
-      cache_[k] = v;
+    auto it = cache_.find(key);
+    if (it != cache_.end()) return it->second.second;
 
-      if (v.first == nullptr || v.second == nullptr) {
-        return {};
-      } else {
-        return v;
+    value_type value{nullptr, nullptr};
+    if (row_group >= 0 && row_group < metadata_->num_row_groups()) {
+      std::shared_ptr<parquet::ColumnChunkMetaData> chunk =
+          metadata_->RowGroup(row_group)->ColumnChunk(column);
+      if (chunk && chunk->is_stats_set()) {
+        std::shared_ptr<parquet::Statistics> stats(chunk->statistics());
+        if (stats) value = {std::move(chunk), std::move(stats)};
       }
     }
+
+    // Absence is cached as a null entry.  Without that, a column that simply
+    // has no statistics is re-examined on every query for the life of the
+    // file, which is the cost this class exists to remove.
+    cache_.emplace(key, value);
+    return value.second;
   }
 
-  // Called on a cache miss to find the a column stats.
-  std::optional<value_type>
-  load(const std::shared_ptr<parquet::RowGroupMetaData>& rg, int32_t column_index)
-  {
-    std::shared_ptr<parquet::ColumnChunkMetaData> chunk =
-        rg->ColumnChunk(column_index);
-    if (!chunk->is_stats_set()) return {};
-
-    std::shared_ptr<parquet::Statistics> stats(chunk->statistics());
-    if (!stats) return {};
-
-    return {std::make_pair(chunk, stats)};
-  }
+  std::shared_ptr<parquet::FileMetaData> metadata_;
+  std::vector<int64_t> rows_;
+  std::map<key_type, value_type> cache_;
+  std::mutex mutex_;
 };
+
+/******************************************************************************/
+StatsIndex::StatsIndex(std::shared_ptr<parquet::FileMetaData> metadata)
+    : impl_(std::make_unique<Impl>(std::move(metadata)))
+{
+}
+
+/******************************************************************************/
+StatsIndex::~StatsIndex() = default;
+
+/******************************************************************************/
+int32_t StatsIndex::row_group_count() const
+{
+  return static_cast<int32_t>(impl_->rows_.size());
+}
+
+/******************************************************************************/
+int64_t StatsIndex::row_count(int32_t row_group) const
+{
+  if (row_group < 0 || static_cast<std::size_t>(row_group) >= impl_->rows_.size()) {
+    return 0;
+  }
+  return impl_->rows_[static_cast<std::size_t>(row_group)];
+}
+
+/******************************************************************************/
+std::shared_ptr<parquet::Statistics> StatsIndex::get(int32_t row_group,
+                                                     int32_t column) const
+{
+  return impl_->get(row_group, column);
+}
 
 /******************************************************************************/
 // Helper cache for the parquet page index.
@@ -254,8 +281,8 @@ private:
  */
 struct ColMinMax final {
   // Use column statistics.
-  ColMinMax(std::shared_ptr<parquet::Statistics>& stats)
-      : stats_(stats)
+  ColMinMax(std::shared_ptr<parquet::Statistics> stats)
+      : stats_(std::move(stats))
       , index_(nullptr)
   {
   }
@@ -338,11 +365,19 @@ Query::Result<Query::range_t> ColMinMax::operator()<Util::Type::UInt64>() const
 class Planner::Impl final {
 public:
   /// Constructor.
-  Impl(parquet::ParquetFileReader& reader, const Query& query)
+  Impl(parquet::ParquetFileReader& reader,
+       const Query& query,
+       std::shared_ptr<StatsIndex> stats)
       : metadata_(reader.metadata())
       , page_index_reader_(reader.GetPageIndexReader())
+      , stats_(std::move(stats))
       , plan_({query, {}})
   {
+    // A planner is constructed per query; the index is shared across all of
+    // them.  Building a private one here would reintroduce exactly the
+    // per-query metadata cost the index exists to remove, so it is only a
+    // fallback for callers that did not supply one.
+    if (!stats_) stats_ = std::make_shared<StatsIndex>(metadata_);
   }
 
   /// Do the actual planning.
@@ -361,8 +396,7 @@ private:
    * rows are null returns null.  Otherwise returns the query
    * evaluation result.
    */
-  Query::Result<bool>
-  with_column_stats(const std::shared_ptr<parquet::RowGroupMetaData>&);
+  Query::Result<bool> with_column_stats(int32_t row_group_index);
 
   /**
    * Test the pages inside a row group.
@@ -376,25 +410,23 @@ private:
   /**
    * Mark the given row group as needing a full scan.
    */
-  void full_scan(const parquet::RowGroupMetaData&, int32_t);
+  void full_scan(int32_t);
 
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::shared_ptr<parquet::PageIndexReader> page_index_reader_;
+  std::shared_ptr<StatsIndex> stats_;
   Planner::Plan plan_;
 };
 
 /******************************************************************************/
-Query::Result<bool> Planner::Impl::with_column_stats(
-    const std::shared_ptr<parquet::RowGroupMetaData>& rg)
+Query::Result<bool> Planner::Impl::with_column_stats(int32_t row_group_index)
 {
-  StatsCache stats_cache;
-
   // Evaluation callback that tries to use column statistics.
-  auto via_stats = [&stats_cache, &rg](
+  auto via_stats = [this, row_group_index](
                        const Schema::Column& dest) -> Query::Result<Query::range_t> {
-    auto stats = stats_cache.get(rg, dest);
-    if (stats.has_value() && dest.second->type().has_value()) {
-      return lift_type(dest.second->type().value(), ColMinMax(stats->second));
+    auto stats = stats_->get(row_group_index, dest.second->absolute_index());
+    if (stats != nullptr && dest.second->type().has_value()) {
+      return lift_type(dest.second->type().value(), ColMinMax(std::move(stats)));
     } else {
       return Query::Result<Query::range_t>::skip();
     }
@@ -466,32 +498,33 @@ Query::Result<bool> Planner::Impl::with_page_index(
 /******************************************************************************/
 void Planner::Impl::plan_row_group(int32_t row_group_index)
 {
+  // The column statistics, if present, can tell us if we are able to
+  // skip an entire row group.
+  //
+  // This runs FIRST, before the page index for this group is touched and
+  // before any RowGroupMetaData is built.  A query that selects one spectrum
+  // rejects every row group but one or two, and reading their page indexes to
+  // then discard them was the dominant cost of planning on a file with
+  // thousands of row groups.
+  auto stats_result = with_column_stats(row_group_index);
+  if (stats_result.has_value() && !stats_result.value()) return;
+
   std::shared_ptr<parquet::RowGroupPageIndexReader> row_index_reader = nullptr;
 
   if (page_index_reader_ != nullptr) {
     row_index_reader = page_index_reader_->RowGroup(row_group_index);
   }
 
-  std::shared_ptr<parquet::RowGroupMetaData> rg(
-      metadata_->RowGroup(row_group_index));
-
-  // The column statistics, if present, can tell us if we are able to
-  // skip an entire row group.
-  auto stats_result = with_column_stats(rg);
-
   if (page_index_reader_ == nullptr || row_index_reader == nullptr) {
     // Record this row group if the statistic planner selected it.  If
     // the plan failed we fall back to a full row group scan and
     // record it as well.
     if (!stats_result.is(false)) {
-      full_scan(*rg, row_group_index);
+      full_scan(row_group_index);
     }
   } else {
-    // If the query wasn't interested in the row group using column
-    // statistics we don't need to look at the pages.
-    if (stats_result.has_value() && !stats_result.value()) {
-      return;
-    }
+    std::shared_ptr<parquet::RowGroupMetaData> rg(
+        metadata_->RowGroup(row_group_index));
 
     std::size_t before_count = plan_.ranges.size();
     auto page_res = with_page_index(rg, row_index_reader, row_group_index);
@@ -500,19 +533,18 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
     // range record even if it failed.  This is a "just in case"
     // check.
     if (!page_res.has_value() && plan_.ranges.size() == before_count) {
-      full_scan(*rg, row_group_index);
+      full_scan(row_group_index);
     }
   }
 }
 
 /******************************************************************************/
-void Planner::Impl::full_scan(const parquet::RowGroupMetaData& rg,
-                              int32_t row_group_index)
+void Planner::Impl::full_scan(int32_t row_group_index)
 {
   // FIXME: we should emit some sort of warning.
   std::println(stderr, "no page index and no stats for rg {}, full scan needed",
                row_group_index);
-  plan_.ranges.push_back({row_group_index, 0, rg.num_rows()});
+  plan_.ranges.push_back({row_group_index, 0, stats_->row_count(row_group_index)});
 }
 
 /******************************************************************************/
@@ -527,8 +559,11 @@ const Planner::Plan& Planner::Impl::plan()
 }
 
 /******************************************************************************/
-Planner::Planner(parquet::arrow::FileReader& reader, const Query& query)
-    : impl_(std::make_unique<Impl>(*reader.parquet_reader(), query))
+Planner::Planner(parquet::arrow::FileReader& reader,
+                 const Query& query,
+                 std::shared_ptr<StatsIndex> stats)
+    : impl_(
+          std::make_unique<Impl>(*reader.parquet_reader(), query, std::move(stats)))
 {
 }
 

@@ -6,6 +6,8 @@ directory of this repository.
 
 */
 
+#include "mzpeak/util/parquet.h"
+
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
 #include <arrow/util/key_value_metadata.h>
@@ -18,7 +20,6 @@ directory of this repository.
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/arrow.h"
-#include "mzpeak/util/parquet.h"
 
 namespace MzPeak::Util {
 
@@ -82,6 +83,7 @@ struct Parquet::Impl {
     }
 
     reader_ = std::move(reader);
+    stats_ = std::make_shared<StatsIndex>(reader_->parquet_reader()->metadata());
     parse_schema();
   }
 
@@ -100,6 +102,9 @@ struct Parquet::Impl {
   std::unique_ptr<Arrow> arrow_;
   std::shared_ptr<parquet::arrow::FileReader> reader_;
   std::shared_ptr<Schema::GroupMap> groups_;
+
+  // Shared by every planner over this file; see StatsIndex.
+  std::shared_ptr<StatsIndex> stats_;
 };
 
 /******************************************************************************/
@@ -182,7 +187,10 @@ std::optional<std::size_t> Parquet::kv_size_t(const file_metadata_t& fmd,
 parquet::arrow::FileReader& Parquet::reader() const { return *impl_->reader_; }
 
 /******************************************************************************/
-Planner Parquet::planner(const Query& q) { return Planner(*impl_->reader_, q); }
+Planner Parquet::planner(const Query& q)
+{
+  return Planner(*impl_->reader_, q, impl_->stats_);
+}
 
 /******************************************************************************/
 Executor Parquet::executor(const Projection& p)
