@@ -65,6 +65,13 @@ void Spectrum::decode_() const
         decoder.decimal(dim, peaks_->mz);
       } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {
         decoder.decimal(dim, peaks_->intensity);
+      } else if (Schema::PSI::is_ion_mobility(dim.array_type) ||
+                 dim.name.find("mobility") != std::string::npos) {
+        // The name check is a deliberate fallback, not redundancy: converters
+        // emit mobility terms this library may not model yet, and such a column
+        // arrives typed NonStandard.  Matching only the modelled terms would
+        // silently yield an empty mobility array rather than an error.
+        decoder.decimal(dim, peaks_->mobility);
       }
     }
   });
@@ -82,6 +89,13 @@ const std::vector<float>& Spectrum::intensity() const
 {
   decode_();
   return peaks_->intensity;
+}
+
+/******************************************************************************/
+const std::vector<double>& Spectrum::ion_mobility_array() const
+{
+  decode_();
+  return peaks_->mobility;
 }
 
 /******************************************************************************/

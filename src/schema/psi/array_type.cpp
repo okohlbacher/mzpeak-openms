@@ -50,6 +50,18 @@ std::string array_type_to_string(ArrayType v)
     return "MS:1002745";
   case IonMobility:
     return "MS:1002893";
+  case MeanIonMobility:
+    return "MS:1002816";
+  case MeanInverseReducedIonMobility:
+    return "MS:1003006";
+  case RawIonMobility:
+    return "MS:1003007";
+  case RawInverseReducedIonMobility:
+    return "MS:1003008";
+  case MeanIonMobilityDriftTime:
+    return "MS:1002477";
+  case RawIonMobilityDriftTime:
+    return "MS:1003153";
   case Mass:
     return "MS:1003143";
   case ScanningQuadrupolePositionLowerBoundMz:
@@ -102,6 +114,18 @@ ArrayType array_type_from_string(const std::string_view& s)
     return SampledNoiseBaseline;
   } else if (s == "MS:1002893") {
     return IonMobility;
+  } else if (s == "MS:1002816") {
+    return MeanIonMobility;
+  } else if (s == "MS:1003006") {
+    return MeanInverseReducedIonMobility;
+  } else if (s == "MS:1003007") {
+    return RawIonMobility;
+  } else if (s == "MS:1003008") {
+    return RawInverseReducedIonMobility;
+  } else if (s == "MS:1002477") {
+    return MeanIonMobilityDriftTime;
+  } else if (s == "MS:1003153") {
+    return RawIonMobilityDriftTime;
   } else if (s == "MS:1003143") {
     return Mass;
   } else if (s == "MS:1003157") {
@@ -113,6 +137,24 @@ ArrayType array_type_from_string(const std::string_view& s)
   }
 
   return NonStandard;
+}
+
+/******************************************************************************/
+bool is_ion_mobility(ArrayType t)
+{
+  using enum ArrayType;
+  switch (t) {
+  case IonMobility:
+  case MeanIonMobility:
+  case MeanInverseReducedIonMobility:
+  case RawIonMobility:
+  case RawInverseReducedIonMobility:
+  case MeanIonMobilityDriftTime:
+  case RawIonMobilityDriftTime:
+    return true;
+  default:
+    return false;
+  }
 }
 
 } // namespace MzPeak::Schema::PSI

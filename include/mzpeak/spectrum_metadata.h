@@ -64,6 +64,18 @@ struct SelectedIonInfo {
   /// NULL in ALL bundled fixtures; value-level decode is fixture-gated.
   std::optional<std::string> ion_mobility_type;
 
+  /// Ion-mobility BAND for this selected ion / isolation window.
+  ///
+  /// For diaPASEF, `ion_mobility_value` is only the MIDPOINT of the window's
+  /// mobility range, and the ranges are generally asymmetric.  Assigning each
+  /// peak of a shared frame to the right window needs the band, not the
+  /// midpoint — with only the midpoint the windows cannot be separated at all.
+  ///
+  /// Fall back in this order: limits, then `ion_mobility_value`, then the
+  /// spectrum-level scalar.  Older writers emit only the midpoint.
+  std::optional<double> ion_mobility_lower_limit;
+  std::optional<double> ion_mobility_upper_limit;
+
   /// Additional CV parameters on this selected-ion entry.
   std::vector<CvParam> parameters;
 };

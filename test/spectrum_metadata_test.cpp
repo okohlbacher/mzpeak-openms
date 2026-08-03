@@ -30,6 +30,7 @@ directory of this repository.
 #include <string>
 
 #include "mzpeak/open.h"
+#include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/spectra.h"
 
 /******************************************************************************/
@@ -608,4 +609,78 @@ BOOST_AUTO_TEST_CASE(scan_windows_source_index_join_correct_for_two_spectra)
                       210.0) < 1.0);
   BOOST_TEST(std::abs(static_cast<double>(m2->scan_windows[0].upper_limit.value()) -
                       1635.0) < 1.0);
+}
+
+// ============================================================================
+// Ion mobility (diaPASEF).  No bundled fixture carries mobility data, so these
+// pin the CONTRACT and the CV mapping — the parts that fail silently.
+// ============================================================================
+
+/******************************************************************************/
+// The abstract term MS:1002893 has concrete children, and converters emit the
+// concrete ones. Matching only the abstract term made the mobility column
+// arrive as NonStandard and the array come back empty — a silent loss of the
+// whole mobility dimension, which is the point of diaPASEF.
+BOOST_AUTO_TEST_CASE(ion_mobility_array_terms_are_modelled)
+{
+  using MzPeak::Schema::PSI::array_type_from_string;
+  using MzPeak::Schema::PSI::ArrayType;
+  using MzPeak::Schema::PSI::is_ion_mobility;
+
+  // The term the converter actually writes.
+  BOOST_TEST((array_type_from_string("MS:1002816") == ArrayType::MeanIonMobility));
+  BOOST_TEST(is_ion_mobility(array_type_from_string("MS:1002816")));
+
+  for (const char* accession :
+       {"MS:1002893", "MS:1002816", "MS:1003006", "MS:1003007", "MS:1003008",
+        "MS:1002477", "MS:1003153"}) {
+    BOOST_TEST(is_ion_mobility(array_type_from_string(accession)));
+  }
+
+  // Non-mobility arrays must NOT be swept up: m/z and intensity are decoded
+  // into their own vectors and a false positive would corrupt both.
+  BOOST_TEST(!is_ion_mobility(array_type_from_string("MS:1000514")));
+  BOOST_TEST(!is_ion_mobility(array_type_from_string("MS:1000515")));
+  BOOST_TEST(!is_ion_mobility(ArrayType::NonStandard));
+}
+
+/******************************************************************************/
+// A file without a mobility array yields an EMPTY array, not a throw and not a
+// silently fabricated one. Every bundled fixture is of that kind.
+BOOST_AUTO_TEST_CASE(ion_mobility_array_is_empty_without_mobility_data)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+
+  auto s = spectra[0];
+  BOOST_TEST(s.ion_mobility_array().empty());
+
+  // The peak arrays are unaffected by the mobility dimension being absent.
+  BOOST_TEST(s.mz().size() == 13589u);
+  BOOST_TEST(s.intensity().size() == s.mz().size());
+}
+
+/******************************************************************************/
+// The mobility BAND is what separates diaPASEF isolation windows; the midpoint
+// alone cannot. Bundled files carry neither, so assert the absent-is-nullopt
+// contract rather than inventing values.
+BOOST_AUTO_TEST_CASE(selected_ion_mobility_limits_absent_are_nullopt)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto spectra = index.spectra();
+
+  std::size_t checked = 0;
+  for (std::size_t i = 0; i < spectra.size(); ++i) {
+    auto s = spectra[i];
+    for (const auto& p : s.metadata().precursors) {
+      for (const auto& ion : p.selected_ions) {
+        BOOST_TEST(!ion.ion_mobility_lower_limit.has_value());
+        BOOST_TEST(!ion.ion_mobility_upper_limit.has_value());
+        ++checked;
+      }
+    }
+  }
+  // 34 MS2 spectra each carry one selected ion; a silently empty join would
+  // make the loop above vacuous and pass.
+  BOOST_TEST(checked == 34u);
 }

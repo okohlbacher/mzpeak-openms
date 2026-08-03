@@ -222,8 +222,13 @@ Spectrum Spectra::fetch(uint64_t index) const
 
   std::vector<Data::ArrayIndex::Dimension> dims =
       signals->array_index()->dimensions() | std::views::filter([](auto& d) {
+        // Mobility must be selected here too, or the column is never
+        // projected and ion_mobility_array() comes back empty however well the
+        // decoder handles it.
         return d.array_type == Schema::PSI::ArrayType::Mz ||
-               d.array_type == Schema::PSI::ArrayType::Intensity;
+               d.array_type == Schema::PSI::ArrayType::Intensity ||
+               Schema::PSI::is_ion_mobility(d.array_type) ||
+               d.name.find("mobility") != std::string::npos;
       }) |
       std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
 

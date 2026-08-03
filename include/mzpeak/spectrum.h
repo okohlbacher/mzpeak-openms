@@ -73,6 +73,18 @@ public:
   const std::vector<float>& intensity() const;
 
   /**
+   * Per-peak ion mobility, parallel to mz() and intensity().  Lazily decoded.
+   *
+   * EMPTY unless the file stores a mobility array.  diaPASEF files keep a frame
+   * as ONE spectrum carrying several isolation windows over disjoint mobility
+   * ranges plus this array, so a per-spectrum scalar cannot represent it:
+   * collapsing to one value gives every peak in the frame the same drift time
+   * and lets the windows bleed together.  Use ion_mobility() for the older
+   * one-scalar-per-spectrum layout.
+   */
+  const std::vector<double>& ion_mobility_array() const;
+
+  /**
    * Stage number achieved in a multi stage mass spectrometry
    * acquisition.  Read from metadata; does NOT decode peaks.
    */
@@ -129,6 +141,7 @@ private:
     std::once_flag once;
     std::vector<double> mz;
     std::vector<float> intensity;
+    std::vector<double> mobility;
   };
 
   /// Read + decode the peak arrays into peaks_ on first access.  Runs at most

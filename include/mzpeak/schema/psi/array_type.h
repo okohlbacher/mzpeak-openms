@@ -119,6 +119,24 @@ enum class ArrayType {
   /// precise the nature of the data being provided.
   IonMobility,
 
+  /// MS:1002816 — mean ion mobility array.
+  MeanIonMobility,
+
+  /// MS:1003006 — mean inverse reduced ion mobility array.
+  MeanInverseReducedIonMobility,
+
+  /// MS:1003007 — raw ion mobility array.
+  RawIonMobility,
+
+  /// MS:1003008 — raw inverse reduced ion mobility array.
+  RawInverseReducedIonMobility,
+
+  /// MS:1002477 — mean ion mobility drift time array.
+  MeanIonMobilityDriftTime,
+
+  /// MS:1003153 — raw ion mobility drift time array.
+  RawIonMobilityDriftTime,
+
   /// MS:1003143
   ///
   /// A data array of mass values (floating point).
@@ -141,6 +159,16 @@ enum class ArrayType {
   /// Non-standard array.
   NonStandard,
 };
+
+/**
+ * Return true when @p t is any flavour of ion-mobility array.
+ *
+ * The abstract term MS:1002893 has several concrete children, and converters
+ * emit the concrete ones — MS:1002816 in particular.  Matching only the
+ * abstract term therefore selects nothing and the mobility dimension silently
+ * disappears rather than failing.
+ */
+bool is_ion_mobility(ArrayType);
 
 /**
  * Convert an ArrayType to a string.

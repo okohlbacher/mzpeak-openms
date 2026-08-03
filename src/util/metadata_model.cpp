@@ -830,6 +830,13 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           // correctness is fixture-gated on a real IM run (handoff P1).
           ion.ion_mobility_value = opt_double(si, "ion_mobility_value", r);
           ion.ion_mobility_type = opt_string(si, "ion_mobility_type", r);
+          // The mobility BAND, when the writer records it.  See
+          // SelectedIonInfo: for diaPASEF the value above is only the midpoint,
+          // and the band is what separates one isolation window from the next.
+          ion.ion_mobility_lower_limit =
+              opt_double(si, "ion_mobility_lower_limit", r);
+          ion.ion_mobility_upper_limit =
+              opt_double(si, "ion_mobility_upper_limit", r);
           ion.parameters = read_cv_params_from_list(si, "parameters", r);
 
           // H2: attach by (source_index, precursor_index) — NOT precursors.back().
