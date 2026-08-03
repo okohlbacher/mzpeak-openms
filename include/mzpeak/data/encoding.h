@@ -86,6 +86,19 @@ private:
                                  std::vector<V>& out,
                                  std::vector<bool>& valid);
 
+  /// The Arrow builder that produces an array of V.
+  template <typename V>
+  using builder_for = arrow::NumericBuilder<
+      typename Util::type_traits<Util::enum_type_v<V>>::array_type::TypeClass>;
+
+  /// Finish @p builder and run the result through the shared null handling.
+  /// Every path that assembles an array in memory ends here, so chunked,
+  /// coalesced and point layouts all reconstruct nulls identically.
+  template <typename V>
+  void finish(builder_for<V>& builder,
+              const ArrayIndex::Dimension& dim,
+              std::vector<V>& out) const;
+
   /// Run @p src through the shared scalar decoder so that chunked and point
   /// layouts reconstruct nulls with exactly one implementation.
   template <typename V>
@@ -238,8 +251,7 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
     throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
   }
 
-  using builder_type = arrow::NumericBuilder<typename array_type::TypeClass>;
-  builder_type builder;
+  builder_for<V> builder;
 
   const std::size_t n_chunks = columns.front()->size();
   for (std::size_t c = 0; c < n_chunks; ++c) {
@@ -258,11 +270,7 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
     }
   }
 
-  std::shared_ptr<arrow::Array> merged;
-  if (!builder.Finish(&merged).ok()) {
-    throw ParquetError("failed to merge point columns for dimension: " + dim.name);
-  }
-  reconstruct<V>(merged, dim.needs_delta_model(), v);
+  finish<V>(builder, dim, v);
 }
 
 /******************************************************************************/
@@ -307,6 +315,20 @@ void Decoder<T>::delta_decode_chunk(const arrow::DoubleArray& values,
       emit(last, true);
     }
   }
+}
+
+/******************************************************************************/
+template <typename T>
+template <typename V>
+void Decoder<T>::finish(builder_for<V>& builder,
+                        const ArrayIndex::Dimension& dim,
+                        std::vector<V>& out) const
+{
+  std::shared_ptr<arrow::Array> assembled;
+  if (!builder.Finish(&assembled).ok()) {
+    throw ParquetError("failed to assemble array for dimension: " + dim.name);
+  }
+  reconstruct<V>(assembled, dim.needs_delta_model(), out);
 }
 
 /******************************************************************************/
@@ -446,8 +468,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     }
 
     using array_type = Util::type_traits<Util::enum_type_v<V>>::array_type;
-    using builder_type = arrow::NumericBuilder<typename array_type::TypeClass>;
-    builder_type builder;
+    builder_for<V> builder;
 
     for (const auto& chunk : *lists) {
       auto list = std::dynamic_pointer_cast<arrow::LargeListArray>(chunk);
@@ -470,11 +491,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       }
     }
 
-    std::shared_ptr<arrow::Array> assembled;
-    if (!builder.Finish(&assembled).ok()) {
-      throw ParquetError("failed to assemble chunked array: " + dim.name);
-    }
-    reconstruct<V>(assembled, dim.needs_delta_model(), v);
+    finish<V>(builder, dim, v);
     return;
   }
 
@@ -529,9 +546,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
   // Hand the assembled axis to the same null-marking decoder the point layout
   // uses, so both layouts reconstruct identically.
-  using array_type = Util::type_traits<Util::enum_type_v<V>>::array_type;
-  using builder_type = arrow::NumericBuilder<typename array_type::TypeClass>;
-  builder_type builder;
+  builder_for<V> builder;
   (void)builder.Reserve(static_cast<int64_t>(assembled_values.size()));
   for (std::size_t i = 0; i < assembled_values.size(); ++i) {
     if (assembled_valid[i]) {
@@ -541,11 +556,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     }
   }
 
-  std::shared_ptr<arrow::Array> assembled;
-  if (!builder.Finish(&assembled).ok()) {
-    throw ParquetError("failed to assemble chunked array: " + dim.name);
-  }
-  reconstruct<V>(assembled, dim.needs_delta_model(), v);
+  finish<V>(builder, dim, v);
 }
 
 /******************************************************************************/
