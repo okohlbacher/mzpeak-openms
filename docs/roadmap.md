@@ -10,6 +10,25 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 - **RDR-1** small/empty Parquet open fix (Arrow buffer).
 - **Writer P0/P1a/P1b** point directory + zip-STORE archive + spectra_metadata → **T2 cross-impl PASS** (Rust reads C++ output).
 - **e2e harness** T1 (forward intra), T2 (forward cross), T3 (reverse intra).
+- **Split-metadata ("v2") layout, reader and writer** — both generations read
+  through one code path; the writer emits the split layout and the current Rust
+  reference reads it. **T2 and T5 both PASS.** See
+  [e2e-testing.md](e2e-testing.md#split-metadata-layout-the-v2-layout).
+- **Reader correctness** (each validated against the Rust reference):
+  null-marked m/z now reconstructed from its own adjacent run (was ~2.15 Da out
+  on every profile spectrum); null-marked intensity reads as 0 rather than
+  being delta-interpolated into negative values; the renamed
+  `wavelength_spectrum` entity is recognised again.
+- **Thread safety** — lazy peak decode serialised with `std::call_once` and
+  shared across copies; ThreadSanitizer reports 0 races.
+
+## Open
+- **Chunked layout decode** — the remaining 3 e2e failures. A working
+  per-chunk delta reconstruction is parked on `chunked-decoder-wip`; it is
+  **silently wrong** (1612 points where the point twin has 13589) and must not
+  be merged until the slice-reading fault is found.
+- **Imaging point count** — 2837 (ours, matching the file's declared count) vs
+  3007 (Rust) for `Example_Processed.img.mzpeak`. Unexplained.
 
 ## Phases (ordered)
 

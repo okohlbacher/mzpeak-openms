@@ -15,7 +15,7 @@ goal.
 | **T2** | Forward (cross) | C++ write → **Rust** read | Rust reference | C++ writer **conformance** | **PASS** — Rust `MzPeakReader` reads C++ output with values matching (Phase 1b added the metadata table); run via `scripts/e2e_cross_impl.sh` |
 | **T3** | Reverse (intra) | C++ read ref → C++ write → C++ read | first read | reader↔writer idempotence on real data | **DONE** — `roundtrip_test` |
 | **T4** | Reverse (cross) | Rust write (bundled files) → C++ read | pyarrow ground truth | C++ reader **conformance** | partial — done ad hoc via pyarrow; blocked on reader gaps (chunked/peaks/null) |
-| **T5** | Full pipeline | mzML → Rust mzpeak → C++ read → C++ write → Rust read → mzML | original mzML | whole stack | future (needs writer P1+ and reader G1/G3/G4) |
+| **T5** | Full pipeline | mzML → Rust mzpeak → C++ read | original mzML | whole stack | **PASS** — the C++ reader reads current Rust `convert` output, i.e. the split-metadata layout |
 
 T1+T3 run in the normal `meson test` suite. T2/T4 need the Rust toolchain and
 are run via the script below (and, longer term, an opt-in CI job).
@@ -58,7 +58,7 @@ chunked/numpress/peaks/wavelength/null-marked data are reader gaps
 
 `scripts/e2e_cross_impl.sh` automates T2: build the C++ archive writer, write a
 small `.mzpeak`, build the Rust `read_spectrum`, and read it back, reporting
-PASS/FAIL (currently FAIL with the metadata-table error above — by design until
+PASS/FAIL (currently PASS — see "Split-metadata layout" below; historically FAIL until
 Phase 1b).
 
 ## Design notes / invariants the harness asserts
@@ -111,3 +111,60 @@ surfaced two chromatogram-reader gaps now tracked as RDR-28/RDR-29.
 - T5 full pipeline: **PASS** (small.mzML → Rust `convert` → C++ read = 48
   spectra, 13589 points in spectrum 0; wired into `scripts/e2e.sh`).
 - Cross-impl matrix driver: `scripts/e2e.sh` (T1/T3 + e2e + T2 + T5).
+
+## Split-metadata layout (the "v2" layout)
+
+Upstream reorganised metadata in mzpeak `0a28759` **without bumping
+`metadata.version`** — both generations still report `0.9.0`, so a reader
+cannot dispatch on version and must sniff the schema instead.
+
+What changed:
+
+- metadata is split across four files per entity — `spectra_metadata.parquet`
+  plus `_scans`, `_precursors`, `_selected_ions` — joined by `source_index`
+  VALUE. Row counts differ per facet (48/48/34/34 in `small.mzpeak`), so a
+  positional join misattaches precursors immediately.
+- columns are flat and plainly named; the CV term moved out of the column name
+  (`MS_1000016_scan_start_time_unit_UO_0000031` → `scan_start_time`) and into a
+  per-file `column_mapping` in `mzpeak_index.json`.
+- `data arrays` → `data_arrays`, `wavelength spectrum` → `wavelength_spectrum`.
+
+Reader: handles both generations through one code path. Field lookup resolves
+by exact name, then by the de-prefixed/de-suffixed form, then by a short alias
+table for the three renames that transformation cannot derive
+(`peak_intensity`, `isolation_window_target`, `data_processing_id`).
+
+Writer: emits the split layout. Three things are load-bearing and were each
+found the hard way:
+
+1. **All three facet members must exist**, even empty — the reference reader
+   errors out if any is absent.
+2. **Column types must match upstream exactly.** `spectrum_representation` must
+   be `utf8` (not `large_utf8`), `scan_polarity` `int8` (not `int32`). Wider
+   types are rejected outright.
+3. **`column_mapping` must be POPULATED, not merely present.** The reference
+   reader resolves metadata columns through it; a column missing from the
+   mapping is logged `Visited unspecified column …` and silently ignored.
+
+### Debugging cross-implementation failures
+
+Run the reference reader with `RUST_LOG=trace`:
+
+```
+RUST_LOG=trace .../examples/read_spectrum <file.mzpeak> 0
+```
+
+It names every file entry it visits and every column it fails to resolve. That
+identified the `column_mapping` requirement in one run, after several rounds of
+hand-diffing schemas, KV metadata and column types had failed to.
+
+## Known gaps
+
+- **Chunked layout** — `small.chunked.mzpeak` / `small.numpress.mzpeak` still
+  fail to decode; this is the remaining e2e failure (3 cases). Note the Rust
+  `read_spectrum` example returns 0 points for chunked files, so it is **not**
+  an oracle for them — validate against the point-layout twin, which is itself
+  Rust-validated.
+- **Imaging point count** — for `Example_Processed.img.mzpeak` the C++ reader
+  returns 2837 points for spectrum 0, matching that file's own declared
+  `number_of_data_points`; the Rust reader returns 3007. Unexplained.
