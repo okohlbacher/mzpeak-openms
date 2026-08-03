@@ -52,6 +52,7 @@ struct Executor::Impl {
   /// is empty -- see EqualityScan.
   std::vector<bool> filter(const Planner::Plan&,
                            std::shared_ptr<arrow::RecordBatch>&,
+                           bool sorted_column,
                            std::pair<int64_t, int64_t>& run,
                            bool& have_run);
 
@@ -74,10 +75,6 @@ struct Executor::Impl {
   Parquet& source_;
   Projection projection_;
   std::unique_ptr<Slice> slice_;
-
-  /// Whether the row group being read declares the predicate's column sorted.
-  /// Set per row group in execute(); see EqualityScan.
-  bool sorted_column_ = false;
 };
 
 /******************************************************************************/
@@ -142,6 +139,7 @@ struct EqualityScan {
 /******************************************************************************/
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
                                          std::shared_ptr<arrow::RecordBatch>& batch,
+                                         bool sorted_column,
                                          std::pair<int64_t, int64_t>& run,
                                          bool& have_run)
 {
@@ -156,7 +154,7 @@ std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
       std::shared_ptr<arrow::Array> column(array(batch, field));
       bool handled = false;
       lift_type(field.second->type().value(),
-                EqualityScan{column, wanted, want_rows, handled, sorted_column_, run,
+                EqualityScan{column, wanted, want_rows, handled, sorted_column, run,
                              have_run});
       if (have_run) return {};
       if (handled) return want_rows;
@@ -258,9 +256,9 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
     // Does THIS row group declare the predicate's column sorted?  Asked per
     // group because the declaration is per group.
-    impl_->sorted_column_ = false;
+    bool sorted_column = false;
     if (auto equality = plan.query.as_equality()) {
-      impl_->sorted_column_ = impl_->source_.sorted_ascending(
+      sorted_column = impl_->source_.sorted_ascending(
           row_group.first, equality->first.second->absolute_index());
     }
 
@@ -289,7 +287,7 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
         std::pair<int64_t, int64_t> run{0, 0};
         bool have_run = false;
-        auto want_rows = impl_->filter(plan, sliced, run, have_run);
+        auto want_rows = impl_->filter(plan, sliced, sorted_column, run, have_run);
 
         if (have_run) {
           if (run.second > run.first) {

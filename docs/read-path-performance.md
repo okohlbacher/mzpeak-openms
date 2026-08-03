@@ -262,3 +262,91 @@ window inside the generated range.
 
 Single runs with no warm-up were also enough to hide the effect in question:
 repeats show ±0.15 ms/spectrum on a warm page cache. Report min-of-three.
+
+---
+
+# Phases 2–4 — the structural fix
+
+## Result
+
+Full forward pass over `run13k` (13,009 spectra, 21.2 M peaks, 21 row groups):
+
+| | wall clock | ms/spectrum |
+|---|---:|---:|
+| baseline | 251.8 s | 19.36 |
+| + skip the row-group tail | 114 s | 8.78 |
+| + row-group cache | 28.7 s | 2.21 |
+| + equality fast path | 1.41 s | 0.109 |
+| + binary search when declared sorted | **1.37 s** | **0.105** |
+
+**178x.** For comparison: mzML parses a comparable run in 3.55 s, the handoff
+argued the layout supported 1.5 s, and plain Arrow decodes the same bytes in
+0.363 s. Every access pattern moved together — `get_spectra_batch` 0.105
+ms/spectrum, a full-range XIC 37.5 s → 0.21 s.
+
+## What each change was
+
+**Skip the row-group tail.** `Executor::execute` exhausted the record-batch
+reader for a group even after the last wanted range had gone by. Batches
+*before* the first range are unavoidable — parquet-cpp's Arrow reader has no
+row-range entry point, which both reviewers independently confirmed — but the
+tail is free.
+
+**Row-group cache.** The dominant cost: a query selecting one entity decoded a
+whole row group and sliced it down to a few thousand rows, so a run was decoded
+once per entity instead of once per group. `Parquet` retains the decoded batches
+of the most recent two groups, handed out by `shared_ptr` because the cache
+evicts and a reference into it would dangle the moment a caller fetched a second
+group while holding the first.
+
+**Equality fast path.** `Executor::filter` walked the predicate tree once per
+row, through a `std::function`, a type dispatch and two `shared_ptr` copies each
+time — several hundred nanoseconds of machinery around a single integer
+comparison, repeated across a page for every entity. `Query::as_equality`
+recognises the query this library actually runs; the executor resolves the
+column once and either binary searches it or scans raw values.
+
+The binary search is guarded on the row group's OWN footer declaring that leaf
+sorted ascending with nulls last. Searching an unsorted column finds one
+contiguous run and silently misses every other occurrence — for an entity index,
+a short entity that looks perfectly well formed.
+
+## Memory
+
+Peak RSS rises with the length of the pass and saturates: 66 MB at 200 spectra,
+126 MB at 2,000, 145 MB for the full 13,009. On `run2k-manygroups`, whose row
+groups are 10,000 rows instead of 1,048,576, the same pass peaks at 21 MB —
+which is what identifies the retained groups as the driver rather than a leak.
+Two groups of 1,048,576 rows materialise to about 42 MB; the remainder is
+Arrow's allocator high-water mark. The structure is bounded by construction: the
+cache holds two groups and cannot hold more.
+
+## Two predictions that did not survive measurement
+
+Recorded because both came from review and both sounded reasonable.
+
+- **`set_use_threads(true)` was to be worth 2–3x.** Measured flat (8.83 against
+  8.78 ms/spectrum). Arrow parallelises across *columns* within a read, and a
+  point signal table has three leaves. Left off, with the measurement in the
+  code so nobody re-tries it blindly.
+- **Large data pages were to cost the linear scan 52x.** Rewriting the fixture
+  with one 1M-row page per row group costs the linear scan 16% (0.1398 → 0.1620
+  ms/spectrum) and the binary search 1.3% (0.1412 → 0.1431). The binary search
+  is kept for that independence from a producer's page-size choice, not for the
+  3% it is worth on ordinary files.
+
+## Phase 4 was not done, deliberately
+
+The remaining 1.0 s over the Arrow floor is per-spectrum decode and copying.
+Reaching it means rewriting null reconstruction and delta decode — the most
+correctness-critical code in the library, and the source of the 2.15 Da and
+negative-intensity defects this project has already had — for at most a further
+1.4x on a run that is already 2.6x faster than mzML and past the target the
+layout was said to support. The measurement is recorded so the decision can be
+revisited with evidence rather than re-argued.
+
+## Gates
+
+28/28 suites in both build configurations. Digests bit-identical throughout:
+`run13k` `5604ebcf86dd4567` and `run2k` `9fae6e76aea6a57e`, scalar and batched;
+XIC 8.964569e+06.
