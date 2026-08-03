@@ -74,6 +74,62 @@ build_optional_array(const std::vector<std::optional<T>>& values)
 }
 
 /******************************************************************************/
+// Number of DFS leaves under a type.  A primitive is one leaf; a group is the
+// sum of its children.
+int leaf_count(const arrow::DataType& type)
+{
+  if (type.num_fields() == 0) return 1;
+  int leaves = 0;
+  for (const auto& field : type.fields())
+    leaves += leaf_count(*field->type());
+  return leaves;
+}
+
+/******************************************************************************/
+// True for the name this writer gives an entity index: `index` on a flat
+// metadata table, `<entity>_index` on a signal table's point/chunk struct.
+bool is_entity_index(const std::string& name)
+{
+  return name == "index" || name.ends_with("_index");
+}
+
+/******************************************************************************/
+// The DFS leaf position of the entity index, or nothing when the table is not
+// shaped the way this writer emits -- a leading primitive `index`, or a leading
+// struct whose first child is one.
+//
+// Returning nothing is the point.  A caller that cannot identify the sorted
+// leaf must decline to declare one rather than guess at zero.
+std::optional<int> entity_index_leaf_of(const arrow::Schema& schema)
+{
+  int leaves_before = 0;
+
+  for (int i = 0; i < schema.num_fields(); ++i) {
+    const auto& field = schema.field(i);
+    const auto& type = *field->type();
+
+    // A flat table: the index is a top-level primitive column.
+    if (type.num_fields() == 0) {
+      if (is_entity_index(field->name())) return leaves_before;
+      leaves_before += 1;
+      continue;
+    }
+
+    // A signal table: one struct whose first child is the index.
+    if (type.id() == arrow::Type::STRUCT) {
+      const auto& first = type.field(0);
+      if (first->type()->num_fields() == 0 && is_entity_index(first->name())) {
+        return leaves_before;
+      }
+    }
+
+    leaves_before += leaf_count(type);
+  }
+
+  return std::nullopt;
+}
+
+/******************************************************************************/
 // Write an Arrow table to a Parquet sink with the project's standard
 // properties: ZSTD, statistics, page index, store_schema, a sorting column
 // on the first leaf (the entity index), a bounded row-group size, and
@@ -84,24 +140,29 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
                          const std::shared_ptr<arrow::Table>& table,
                          const std::map<std::string, std::string>& file_kv)
 {
-  // The entity index is DFS leaf 0 in every table this writer emits: a single
-  // top-level struct of primitives whose first child is the index.
+  // Which DFS leaf is the entity index?
   //
-  // This is asserted, not derived.  An earlier version looked like a derivation
-  // -- it inspected the schema and then assigned 0 on every branch -- which
-  // read as a safeguard while being none.  If a table ever gains a field ahead
-  // of the index, or a nested group with more than one leaf, this must count
-  // leaves properly: declaring the WRONG column sorted is worse than declaring
-  // nothing, because a reader may believe it.
-  constexpr int entity_index_leaf = 0;
+  // A `SortingColumn` names a leaf by its position in the file's depth-first
+  // leaf order, so this has to be counted, not assumed.  An earlier version
+  // looked like it counted -- it inspected the schema and then assigned 0 on
+  // every branch -- which read as a safeguard while being none.
+  //
+  // When the shape is not the one this writer emits, NO sorting column is
+  // declared.  Declaring the wrong one is worse than declaring none: a reader
+  // may believe it and binary search a column that is not sorted, which finds
+  // one run and silently misses the rest.
+  const std::optional<int> entity_index_leaf =
+      entity_index_leaf_of(*table->schema());
 
   parquet::WriterProperties::Builder props_builder;
   props_builder.compression(arrow::Compression::ZSTD);
   props_builder.enable_statistics();
   props_builder.enable_write_page_index();
-  props_builder.set_sorting_columns(
-      {parquet::SortingColumn{/*column_idx=*/entity_index_leaf, /*descending=*/false,
-                              /*nulls_first=*/false}});
+  if (entity_index_leaf.has_value()) {
+    props_builder.set_sorting_columns({parquet::SortingColumn{
+        /*column_idx=*/*entity_index_leaf, /*descending=*/false,
+        /*nulls_first=*/false}});
+  }
   auto writer_props(props_builder.build());
 
   // Store the Arrow schema so the struct/types round-trip exactly.

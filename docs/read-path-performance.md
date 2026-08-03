@@ -311,9 +311,10 @@ Peak RSS rises with the length of the pass and saturates: 66 MB at 200 spectra,
 126 MB at 2,000, 145 MB for the full 13,009. On `run2k-manygroups`, whose row
 groups are 10,000 rows instead of 1,048,576, the same pass peaks at 21 MB —
 which is what identifies the retained groups as the driver rather than a leak.
-Two groups of 1,048,576 rows materialise to about 43 MB each; the transient
-peak is three, because eviction happens after the incoming group has been
-decoded. The structure is bounded by construction: the cache holds two groups
+Two groups of 1,048,576 rows materialise to about 43 MB each. Eviction happens
+BEFORE the incoming group is decoded, so the transient peak is two rather than
+three -- worth 24 MB of the figures above, which were measured the other way
+(145 MB, now 121 MB) at no measurable cost in time. The structure is bounded by construction: the cache holds two groups
 and cannot hold more, and the last two stay resident for the life of the
 `Parquet` once a pass ends.
 

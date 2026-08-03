@@ -162,6 +162,13 @@ Parquet::Impl::row_group(int32_t index)
     for (const auto& [cached, batches] : cache_) {
       if (cached == index) return batches;
     }
+
+    // Evict BEFORE decoding, not after.  Holding the outgoing group while the
+    // incoming one is built makes the transient peak three groups where two
+    // suffice -- about 43 MB of a 1,048,576-row group, for no benefit: nothing
+    // reads the evicted entry between here and the insert below.  Anything
+    // still using it holds its own shared_ptr and is unaffected.
+    if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
   }
 
   auto reader_result = reader_->GetRecordBatchReader({index});
@@ -187,9 +194,9 @@ Parquet::Impl::row_group(int32_t index)
     if (cached == index) return existing;
   }
 
-  // Evicting only drops the cache's own reference; a caller still holding the
-  // batches keeps them alive.
-  if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
+  // Room was made above; evict again only if another thread filled it since.
+  while (cache_.size() >= kCachedGroups)
+    cache_.erase(cache_.begin());
   cache_.emplace_back(index, batches);
   return batches;
 }
