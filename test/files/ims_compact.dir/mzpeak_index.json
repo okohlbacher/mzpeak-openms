@@ -1,0 +1,1 @@
+{"files": [{"name": "spectra_data.parquet", "entity_type": "spectrum", "data_kind": "data_arrays", "column_mapping": [], "parameters": []}, {"name": "spectra_metadata.parquet", "entity_type": "spectrum", "data_kind": "metadata", "column_mapping": [], "parameters": []}], "metadata": {"version": "0.9.0", "ims_calibration": {"a": 2.0, "b": 0.5, "mz_from_tof": "(a + b*tof)^2"}}}

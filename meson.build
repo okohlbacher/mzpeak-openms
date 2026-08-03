@@ -71,6 +71,7 @@ install_headers([
   'include/mzpeak/data/null_marking.h',
   'include/mzpeak/data/signals.h',
   'include/mzpeak/exception.h',
+  'include/mzpeak/ims_calibration.h',
   'include/mzpeak/index.h',
   'include/mzpeak/io/archive.h',
   'include/mzpeak/io/directory.h',

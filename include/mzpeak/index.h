@@ -9,6 +9,7 @@ directory of this repository.
 #pragma once
 
 #include "mzpeak/chromatograms.h"
+#include "mzpeak/ims_calibration.h"
 #include "mzpeak/io/archive.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/spectra.h"
@@ -45,6 +46,12 @@ public:
    * Access the spectra in the file.
    */
   Spectra spectra() const;
+
+  /**
+   * TOF -> m/z calibration declared by this archive, for the Bruker TDF
+   * "ims-compact" layout.  `valid` is false when the archive declares none.
+   */
+  const ImsCalibration& ims_calibration() const;
 
   /**
    * Access the chromatograms in the file.

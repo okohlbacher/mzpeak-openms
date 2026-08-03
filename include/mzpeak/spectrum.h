@@ -19,6 +19,7 @@ top-level directory of this repository.
 #include "mzpeak/data/array_index.h"
 #include "mzpeak/data/encoding.h"
 #include "mzpeak/data/signals.h"
+#include "mzpeak/ims_calibration.h"
 #include "mzpeak/metadata/spectrum.h"
 #include "mzpeak/metadata/table.h"
 #include "mzpeak/spectrum_metadata.h"
@@ -130,7 +131,8 @@ protected:
            std::shared_ptr<Data::Signals>,
            std::vector<Data::ArrayIndex::Dimension>,
            std::shared_ptr<Metadata::Table>,
-           std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map);
+           std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map,
+           ImsCalibration ims = {});
 
 private:
   /// The lazily-decoded peak arrays, plus the flag that serialises the decode.
@@ -157,6 +159,10 @@ private:
   // Ingredients retained for the lazy peak read + decode.
   std::shared_ptr<Data::Signals> signals_;
   std::vector<Data::ArrayIndex::Dimension> dims_;
+
+  // TOF -> m/z calibration; only used by the ims-compact layout, which stores
+  // no m/z array at all.
+  ImsCalibration ims_;
 
   std::shared_ptr<Peaks> peaks_;
 };

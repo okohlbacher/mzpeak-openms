@@ -684,3 +684,63 @@ BOOST_AUTO_TEST_CASE(selected_ion_mobility_limits_absent_are_nullopt)
   // make the loop above vacuous and pass.
   BOOST_TEST(checked == 34u);
 }
+
+// ============================================================================
+// Bruker TDF "ims-compact": no m/z array at all.
+//
+// A non-standard `tof` (Int32) column stands in for m/z, reconstructed as
+// (a + b*tof)^2 from metadata.ims_calibration, and intensities are Int32.
+// Without either piece the m/z + intensity filter matches nothing and EVERY
+// spectrum reads as empty — total data loss that looks like an empty file
+// rather than an unsupported layout.
+//
+// test/files/ims_compact.dir is a hand-built minimal archive of that shape
+// (no vendor fixture exists): a=2.0, b=0.5, tof [0, 4, 100] and Int32
+// intensity [10, 20, 30], so m/z must come back as [4, 16, 2704].
+// ============================================================================
+
+/******************************************************************************/
+BOOST_AUTO_TEST_CASE(ims_compact_reconstructs_mz_from_tof)
+{
+  auto index = MzPeak::open("../test/files/ims_compact.dir");
+
+  const auto& cal = index.ims_calibration();
+  BOOST_TEST_REQUIRE(cal.valid);
+  BOOST_TEST(std::abs(cal.a - 2.0) < 1e-12);
+  BOOST_TEST(std::abs(cal.b - 0.5) < 1e-12);
+
+  auto spectra = index.spectra();
+  BOOST_TEST_REQUIRE(spectra.size() == 1u);
+
+  auto s = spectra[0];
+  const auto& mz = s.mz();
+  const auto& intensity = s.intensity();
+
+  // The whole point: a file with no m/z column still yields m/z.
+  BOOST_TEST_REQUIRE(mz.size() == 3u);
+  BOOST_TEST(std::abs(mz[0] - 4.0) < 1e-9);
+  BOOST_TEST(std::abs(mz[1] - 16.0) < 1e-9);
+  BOOST_TEST(std::abs(mz[2] - 2704.0) < 1e-9);
+
+  // Int32 intensities: decimal() throws on integer types, so this only works
+  // if the decode dispatches on the column's declared type.
+  BOOST_TEST_REQUIRE(intensity.size() == 3u);
+  BOOST_TEST(intensity[0] == 10.0f);
+  BOOST_TEST(intensity[1] == 20.0f);
+  BOOST_TEST(intensity[2] == 30.0f);
+}
+
+/******************************************************************************/
+// An archive that declares no calibration must leave m/z EMPTY rather than
+// convert with meaningless coefficients: an empty array is visibly wrong,
+// whereas a confidently-wrong m/z axis is not.
+BOOST_AUTO_TEST_CASE(files_without_a_calibration_report_none)
+{
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  BOOST_TEST(!index.ims_calibration().valid);
+
+  // And a normal file is entirely unaffected by the tof path existing.
+  auto spectra = index.spectra();
+  auto s = spectra[0];
+  BOOST_TEST(s.mz().size() == 13589u);
+}

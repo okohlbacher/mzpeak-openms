@@ -14,6 +14,7 @@ top-level directory of this repository.
 #include <optional>
 #include <string>
 
+#include "mzpeak/ims_calibration.h"
 #include "mzpeak/spectrum.h"
 #include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/enumerable_proxy.h"
@@ -59,14 +60,35 @@ public:
   /// Default constructor: empty (zero spectra).
   Spectra() = default;
 
+  /// Neither copyable nor movable.
+  ///
+  /// The base class stores a fetch callback that binds `this`.  With implicit
+  /// copy/move that callback keeps pointing at the ORIGINAL object, so after
+  /// `auto b = a;` every `b[i]` dispatches through `a` — and dangles once `a`
+  /// dies, or silently reads a different run after `a` is reassigned.  Nothing
+  /// about the copy looks wrong at the call site.
+  ///
+  /// Deleting them costs nothing in practice: `Spectra s = index.spectra();`
+  /// initialises directly from a prvalue and is elided, which is how every
+  /// caller obtains one.  It also makes the "use one Spectra per thread" rule
+  /// enforceable rather than advisory, since a Spectra can no longer be copied
+  /// into a thread.
+  Spectra(const Spectra&) = delete;
+  Spectra& operator=(const Spectra&) = delete;
+  Spectra(Spectra&&) = delete;
+  Spectra& operator=(Spectra&&) = delete;
+
   /// Constructor for profile-only or centroid-only data.
-  explicit Spectra(std::unique_ptr<Data::Signals>, std::unique_ptr<Metadata::Table>);
+  explicit Spectra(std::unique_ptr<Data::Signals>,
+                   std::unique_ptr<Metadata::Table>,
+                   ImsCalibration ims = {});
 
   /// Constructor for mixed profile+centroid data (data = profile file, peaks =
   /// centroid file).
   explicit Spectra(std::unique_ptr<Data::Signals> data,
                    std::unique_ptr<Data::Signals> peaks,
-                   std::unique_ptr<Metadata::Table>);
+                   std::unique_ptr<Metadata::Table>,
+                   ImsCalibration ims = {});
 
   /**
    * Resolve a native spectrum id (e.g. "controllerType=0 controllerNumber=1
@@ -124,6 +146,9 @@ private:
   std::shared_ptr<Data::Signals> data_;
   std::shared_ptr<Data::Signals> peaks_; // centroid-only file (optional)
   std::shared_ptr<Metadata::Table> meta_;
+
+  // TOF -> m/z calibration, passed to each Spectrum (ims-compact layout only).
+  ImsCalibration ims_;
 
   // Cached per-spectrum descriptive metadata (RT, precursors, ion mobility, …),
   // read once at construction and shared into every Spectrum.  Stays null when

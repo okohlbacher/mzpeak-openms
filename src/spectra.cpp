@@ -24,12 +24,14 @@ namespace MzPeak {
 
 /******************************************************************************/
 Spectra::Spectra(std::unique_ptr<Data::Signals> data,
-                 std::unique_ptr<Metadata::Table> meta)
+                 std::unique_ptr<Metadata::Table> meta,
+                 ImsCalibration ims)
     : EnumerableProxy(
           0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
     , data_(std::move(data))
     , peaks_()
     , meta_(std::move(meta))
+    , ims_(ims)
 {
   resize(data_->record_count());
   load_metadata_();
@@ -38,7 +40,8 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
 /******************************************************************************/
 Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Data::Signals> peaks,
-                 std::unique_ptr<Metadata::Table> meta)
+                 std::unique_ptr<Metadata::Table> meta,
+                 ImsCalibration ims)
     : EnumerableProxy(
           0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
     , data_(std::move(data))
@@ -228,11 +231,14 @@ Spectrum Spectra::fetch(uint64_t index) const
         return d.array_type == Schema::PSI::ArrayType::Mz ||
                d.array_type == Schema::PSI::ArrayType::Intensity ||
                Schema::PSI::is_ion_mobility(d.array_type) ||
-               d.name.find("mobility") != std::string::npos;
+               d.name.find("mobility") != std::string::npos ||
+               // ims-compact keeps m/z in a non-standard `tof` column; without
+               // selecting it here the spectrum has no coordinate at all.
+               d.name.find("tof") != std::string::npos;
       }) |
       std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
 
-  return Spectrum(index, signals, std::move(dims), meta_, md_map_);
+  return Spectrum(index, signals, std::move(dims), meta_, md_map_, ims_);
 }
 
 } // namespace MzPeak

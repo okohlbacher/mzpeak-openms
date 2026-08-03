@@ -10,7 +10,9 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <arrow/io/api.h>
+#include <cmath>
 
+#include "mzpeak/ims_calibration.h"
 #include "mzpeak/util/algorithm.h"
 #include "mzpeak/util/enumerable_proxy.h"
 
@@ -68,4 +70,38 @@ BOOST_AUTO_TEST_CASE(intersect_range_rebases_onto_the_batch)
 
   // Zero-length range never selects anything.
   BOOST_TEST((intersect_range(50, 0, 0, 100) == std::pair<int64_t, int64_t>{0, 0}));
+}
+
+/******************************************************************************/
+// TOF -> m/z calibration for the Bruker TDF "ims-compact" layout, which stores
+// no m/z array: a non-standard `tof` column stands in and m/z is
+// `(a + b * tof)^2`.  A reader without this finds no m/z dimension, so its
+// m/z + intensity filter matches nothing and EVERY spectrum reads as empty —
+// total data loss that looks like an empty file.
+BOOST_AUTO_TEST_CASE(ims_calibration_converts_tof_to_mz)
+{
+  MzPeak::ImsCalibration cal;
+  cal.a = 2.0;
+  cal.b = 0.5;
+  cal.valid = true;
+
+  // (2 + 0.5*0)^2 = 4; (2 + 0.5*4)^2 = 16; (2 + 0.5*100)^2 = 2704.
+  BOOST_TEST(std::abs(cal.mz(0.0) - 4.0) < 1e-12);
+  BOOST_TEST(std::abs(cal.mz(4.0) - 16.0) < 1e-12);
+  BOOST_TEST(std::abs(cal.mz(100.0) - 2704.0) < 1e-12);
+
+  // Monotonic in tof over the physical range, so the reconstructed axis stays
+  // sorted — downstream binary searches depend on that.
+  double previous = -1.0;
+  for (double t = 0.0; t < 1e5; t += 1000.0) {
+    const double mz = cal.mz(t);
+    BOOST_TEST(mz > previous);
+    previous = mz;
+  }
+
+  // A default calibration is INVALID.  The reader must leave m/z empty rather
+  // than convert with meaningless coefficients: an empty array is visibly
+  // wrong, a confidently-wrong axis is not.
+  MzPeak::ImsCalibration none;
+  BOOST_TEST(!none.valid);
 }

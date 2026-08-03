@@ -52,6 +52,9 @@ struct Index::Impl {
   // The mzPeak format version from metadata.version (empty if absent).
   std::string version_;
 
+  // TOF -> m/z calibration for the ims-compact layout (valid=false if absent).
+  ImsCalibration ims_;
+
   // Return an iterator to the requested file.
   std::vector<Schema::File>::const_iterator find_file(const std::string_view& name)
   {
@@ -73,6 +76,9 @@ const std::vector<Schema::File>& Index::files() const { return impl_->files_; }
 
 /******************************************************************************/
 const std::string& Index::version() const { return impl_->version_; }
+
+/******************************************************************************/
+const ImsCalibration& Index::ims_calibration() const { return impl_->ims_; }
 
 /******************************************************************************/
 void Index::Impl::parse_index()
@@ -116,6 +122,34 @@ void Index::Impl::parse_index()
     if (const auto v = meta.find("version");
         v != meta.end() && v->value().is_string()) {
       version_ = v->value().as_string().c_str();
+    }
+
+    // ims-compact: {"a": ..., "b": ..., "mz_from_tof": "(a + b*tof)^2"}.
+    // Writers emit this either as a JSON object or as a STRING holding that
+    // object; accept both rather than silently reading no calibration, which
+    // would make every spectrum of such a file come back empty.
+    if (const auto ic = meta.find("ims_calibration"); ic != meta.end()) {
+      json::value parsed;
+      if (ic->value().is_string()) {
+        boost::system::error_code pe;
+        parsed = json::parse(ic->value().as_string(), pe);
+        if (pe) parsed = nullptr;
+      }
+      const json::value& calv = ic->value().is_string() ? parsed : ic->value();
+
+      if (calv.is_object()) {
+        const json::object& cal = calv.as_object();
+        const auto number = [&cal](const char* key, double& dst) {
+          const auto f = cal.find(key);
+          if (f == cal.end() || !f->value().is_number()) return false;
+          dst = f->value().to_number<double>();
+          return true;
+        };
+        // Both coefficients are required: half a calibration is not one.
+        const bool have_a = number("a", ims_.a);
+        const bool have_b = number("b", ims_.b);
+        ims_.valid = have_a && have_b;
+      }
     }
   }
 
@@ -179,10 +213,10 @@ Spectra Index::spectra() const
   if (peaks_file) {
     std::unique_ptr<Data::Signals> peaks =
         std::make_unique<Data::Signals>(parquet(*peaks_file));
-    return Spectra(std::move(data), std::move(peaks), std::move(meta));
+    return Spectra(std::move(data), std::move(peaks), std::move(meta), impl_->ims_);
   }
 
-  return Spectra(std::move(data), std::move(meta));
+  return Spectra(std::move(data), std::move(meta), impl_->ims_);
 }
 
 /******************************************************************************/
