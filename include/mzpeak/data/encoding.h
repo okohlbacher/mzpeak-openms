@@ -12,6 +12,7 @@ top-level directory of this repository.
 #include <arrow/array.h>
 #include <arrow/builder.h>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -59,7 +60,36 @@ public:
   template <typename V>
   void integer(const ArrayIndex::Dimension&, std::vector<V>&) const;
 
+  /**
+   * The unit CURIE of the column that actually supplied a dimension's values,
+   * as a CURIE (e.g. "UO:0000031", "MS:1000131"), or empty when unknown.
+   *
+   * This is not decoration.  One logical array can be spread over several
+   * physical columns holding the SAME quantity in DIFFERENT units -- the
+   * bundled `has_uv` file stores one chromatogram's intensities in detector
+   * counts and another's in absorbance units, in two columns, each null where
+   * the other has values.  The decoded numbers are correct either way, and
+   * without this the caller cannot tell which of the two they were handed.
+   *
+   * Only meaningful after the dimension has been decoded.
+   */
+  const std::string& unit_of(const ArrayIndex::Dimension& dim) const
+  {
+    static const std::string none;
+    auto it = units_.find(dim.name);
+    return it == units_.end() ? none : it->second;
+  }
+
 private:
+  /// Record which entry supplied this dimension's values.  A dimension whose
+  /// rows came from columns in two different units has no single answer, so it
+  /// records none rather than whichever was seen last.
+  void note_unit(const ArrayIndex::Dimension& dim, const std::string& unit) const
+  {
+    auto [it, inserted] = units_.try_emplace(dim.name, unit);
+    if (!inserted && it->second != unit) it->second.clear();
+  }
+
   template <typename V>
   void decode(const ArrayIndex::Dimension&, std::vector<V>&) const;
 
@@ -124,6 +154,10 @@ private:
   std::shared_ptr<Signals> signals_;
   std::shared_ptr<Util::Slice> slice_;
   Util::DeltaEstimator<T> delta_estimator_;
+
+  /// Dimension name -> unit CURIE of the column that supplied its values.
+  /// Mutable because decoding is const and this is a record of what it did.
+  mutable std::map<std::string, std::string> units_;
 };
 
 /******************************************************************************/
@@ -223,6 +257,12 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
     // This is still the point layout, not a chunked one.
     coalesced_point<V>(dim, v);
   } else {
+    for (const auto& e : entries) {
+      if (e.buffer_priority) {
+        note_unit(dim, e.unit);
+        break;
+      }
+    }
     chunked<V>(dim, v);
   }
 }
@@ -253,11 +293,18 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
     if (!e.buffer_priority) ordered.push_back(&e);
   }
 
+  // Units travel alongside the columns, not in a parallel index into
+  // `ordered`: an entry absent from the schema is skipped here, so the two
+  // vectors would not line up.
   std::vector<std::shared_ptr<Util::Slice::Raw>> columns;
+  std::vector<std::string> column_units;
   for (const auto* e : ordered) {
     auto col = signals_->array_index()->entry_column(*signals_->groups(), *e);
     if (!col.has_value()) continue;
-    if (auto raw = slice_->raw(col.value())) columns.push_back(std::move(raw));
+    if (auto raw = slice_->raw(col.value())) {
+      columns.push_back(std::move(raw));
+      column_units.push_back(e->unit);
+    }
   }
 
   if (columns.empty()) {
@@ -277,7 +324,8 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
       // incompatible things and picking either would be a guess presented as
       // fact.  In every bundled file they are strictly disjoint.
       bool written = false;
-      for (const auto& column : columns) {
+      for (std::size_t ci = 0; ci < columns.size(); ++ci) {
+        const auto& column = columns[ci];
         if (c >= column->size()) continue;
         auto arr = std::static_pointer_cast<array_type>((*column)[c]);
         if (r >= arr->length() || arr->IsNull(r)) continue;
@@ -288,6 +336,7 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
               "and there is no basis for preferring one");
         }
         (void)builder.Append(arr->Value(r));
+        note_unit(dim, column_units[ci]);
         written = true;
       }
       if (!written) (void)builder.AppendNull();

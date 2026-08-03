@@ -31,8 +31,10 @@ WavelengthSpectrum::WavelengthSpectrum(
   for (auto& dim : dims) {
     if (dim.array_type == Schema::PSI::ArrayType::ElectromagneticRadiation) {
       decoder_.decimal(dim, wavelength_);
+      wavelength_unit_ = decoder_.unit_of(dim);
     } else if (dim.array_type == Schema::PSI::ArrayType::Intensity) {
       decoder_.decimal(dim, intensity_);
+      intensity_unit_ = decoder_.unit_of(dim);
     }
   }
 }
@@ -49,6 +51,18 @@ const std::vector<WavelengthSpectrum::intensity_type>&
 WavelengthSpectrum::intensity() const
 {
   return intensity_;
+}
+
+/******************************************************************************/
+const std::string& WavelengthSpectrum::wavelength_unit() const
+{
+  return wavelength_unit_;
+}
+
+/******************************************************************************/
+const std::string& WavelengthSpectrum::intensity_unit() const
+{
+  return intensity_unit_;
 }
 
 /******************************************************************************/

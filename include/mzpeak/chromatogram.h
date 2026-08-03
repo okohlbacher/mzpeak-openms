@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "mzpeak/chromatogram_metadata.h"
@@ -34,7 +35,17 @@ public:
   // Special members are implicit (rule of zero): copyable AND movable.
 
   /**
-   * Time values (the MS:1000595 relative-time-offset array).
+   * Time values, in SECONDS.
+   *
+   * mzPeak stores chromatogram time in minutes (UO:0000031) in every file seen
+   * so far, and the specification only recommends rather than requires it.  The
+   * stored unit is read from the array index and converted here, so this agrees
+   * with EicPoint::time and SpectrumMetadata::retention_time, which are also
+   * seconds.  Returning the raw stored number instead made the same library
+   * report two chromatogram time bases differing by 60x.
+   *
+   * @throws ParquetError when the file declares a time unit that is neither
+   * minutes nor seconds -- converting it would be a guess.
    */
   const std::vector<time_type>& time() const;
 
@@ -47,6 +58,17 @@ public:
    * belongs to this chromatogram without saying which it was.
    */
   const std::vector<intensity_type>& intensity() const;
+
+  /**
+   * Unit CURIE of the values returned by @ref intensity, or empty when the file
+   * does not say.
+   *
+   * A file may store several intensity arrays in DIFFERENT units and give each
+   * chromatogram one of them -- the bundled `has_uv` fixture holds a TIC in
+   * detector counts (MS:1000131) and a DAD trace in absorbance units
+   * (UO:0000269).  Both decode correctly; only this tells them apart.
+   */
+  const std::string& intensity_unit() const;
 
   /**
    * Descriptive metadata for this chromatogram (id, type, polarity,
@@ -71,6 +93,7 @@ private:
   decoder_type decoder_;
   std::vector<time_type> time_;
   std::vector<intensity_type> intensity_;
+  std::string intensity_unit_;
   std::shared_ptr<const std::map<uint64_t, ChromatogramMetadata>> md_map_;
 };
 
