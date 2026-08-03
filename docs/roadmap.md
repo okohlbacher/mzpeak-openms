@@ -6,7 +6,7 @@ One ordered, dependency-aware plan unifying the reader gaps
 Each phase is a self-contained, testable increment validated by the
 forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 
-## Done (branch `writer_test`)
+## Done (merged to `trunk`)
 - **RDR-1** small/empty Parquet open fix (Arrow buffer).
 - **Writer P0/P1a/P1b** point directory + zip-STORE archive + spectra_metadata → **T2 cross-impl PASS** (Rust reads C++ output).
 - **e2e harness** T1 (forward intra), T2 (forward cross), T3 (reverse intra).
@@ -81,12 +81,13 @@ Verified against the code but NOT yet fixed. Ordered by severity. Each is a
   `start <= end`, chunk ordering, or non-overlap.
 
 ## Open
-- **Chunked layout decode** — the remaining 3 e2e failures. A working
-  per-chunk delta reconstruction is parked on `chunked-decoder-wip`; it is
-  **silently wrong** (1612 points where the point twin has 13589) and must not
-  be merged until the slice-reading fault is found.
-- **Imaging point count** — 2837 (ours, matching the file's declared count) vs
-  3007 (Rust) for `Example_Processed.img.mzpeak`. Unexplained.
+- **Imaging point count** — 2837 (ours, matching the file's own declared
+  `number_of_data_points`) vs 3007 (Rust) for `Example_Processed.img.mzpeak`.
+  Unexplained; our count agrees with the file, so this is not obviously our
+  defect.
+- **Ion mobility and Bruker TDF are unvalidated against real data.** No bundled
+  fixture carries a mobility array, and `test/files/ims_compact.dir` is
+  hand-built rather than a vendor archive. Both need real files.
 
 ## Phases (ordered)
 
