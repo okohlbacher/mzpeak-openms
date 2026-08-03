@@ -11,6 +11,8 @@ top-level directory of this repository.
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "mzpeak/spectrum.h"
 #include "mzpeak/spectrum_metadata.h"
@@ -28,7 +30,29 @@ class Table;
 namespace MzPeak {
 
 /**
+ * One sample of an extracted-ion chromatogram: the summed intensity within an
+ * m/z window for a single spectrum, tagged with that spectrum's retention time
+ * and index.  An EIC is the ascending-time sequence of these points.
+ */
+struct EicPoint final {
+  /// The spectrum's retention time, in SECONDS.
+  double time = 0.0;
+
+  /// Summed intensity of the points falling inside the m/z window.
+  double intensity = 0.0;
+
+  /// Index of the spectrum this sample came from.
+  std::size_t spectrum_index = 0;
+};
+
+/**
  * Access all spectra in a MzPeak file.
+ *
+ * Iteration is streaming: spectra are fetched on demand and their peak arrays
+ * decode lazily, so a run is traversed in bounded memory.  The selection
+ * helpers below resolve from the cached descriptive metadata and therefore do
+ * NOT decode peaks — only extract_ion_chromatogram() does, and only for the
+ * spectra it actually selects.
  */
 class Spectra final : public Util::EnumerableProxy<Spectrum> {
 public:
@@ -44,6 +68,57 @@ public:
                    std::unique_ptr<Data::Signals> peaks,
                    std::unique_ptr<Metadata::Table>);
 
+  /**
+   * Resolve a native spectrum id (e.g. "controllerType=0 controllerNumber=1
+   * scan=1") to its index, or nullopt when no spectrum carries that id.
+   */
+  std::optional<std::size_t> index_for_id(const std::string& id) const;
+
+  /**
+   * Fetch the spectrum with the given native id.
+   * @throws ParquetError when the id is unknown.
+   */
+  Spectrum by_id(const std::string& id) const;
+
+  /**
+   * Indices of every spectrum whose retention time lies in the INCLUSIVE range
+   * [rt_low, rt_high], in ascending time order.  Spectra with no retention time
+   * are skipped.
+   *
+   * @note Times are SECONDS, matching SpectrumMetadata::retention_time — the
+   * file stores minutes, and the reader converts.  Passing minutes here is a
+   * 60x error that silently selects the wrong scans.
+   */
+  std::vector<std::size_t> indices_in_time_range(double rt_low,
+                                                 double rt_high) const;
+
+  /**
+   * Extracted-ion chromatogram over an m/z window and an RT window (both
+   * inclusive, RT in SECONDS), optionally restricted to one MS level.
+   *
+   * Emits one point per selected spectrum in ascending time order.  A spectrum
+   * with no signal in the m/z window still emits a point with intensity 0 — an
+   * EIC is a dense trace over the selected scans, so gaps must stay visible
+   * rather than being dropped.
+   *
+   * This is the only selection helper that decodes peaks, and it decodes only
+   * the spectra that survive the RT and ms-level filters.
+   */
+  std::vector<EicPoint>
+  extract_ion_chromatogram(double mz_low,
+                           double mz_high,
+                           double rt_low,
+                           double rt_high,
+                           std::optional<int> ms_level = std::nullopt) const;
+
+  /**
+   * Read several spectra by index.  Reads proceed in ascending index order so
+   * the underlying file access is sequential, but results are returned in the
+   * SAME order as @p indices.  An out-of-range index yields a default Spectrum.
+   */
+  std::vector<Spectrum>
+  get_spectra_batch(const std::vector<std::size_t>& indices) const;
+
 private:
   // Internal data access.
   std::shared_ptr<Data::Signals> data_;
@@ -55,12 +130,18 @@ private:
   // there is no metadata table.
   std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map_;
 
-  // Populate md_map_ from meta_.  Called from the constructors so that fetch()
-  // never publishes it lazily (that was a data race between threads).
+  // Native id -> index, built alongside md_map_ so by_id() needs no file read.
+  // Ids are not guaranteed unique; the FIRST spectrum carrying an id wins.
+  std::map<std::string, std::size_t> id_to_index_;
+
+  // Populate md_map_ and id_to_index_ from meta_.  Called from the constructors
+  // so that fetch() never publishes them lazily (that was a data race).
   void load_metadata_();
 
-  // Function to fetch a specific spectrum.
-  Spectrum fetch(uint64_t);
+  // Function to fetch a specific spectrum.  Const because it mutates no Spectra
+  // state — the metadata cache is built in the constructor — which lets the
+  // selection helpers above be const without casting.
+  Spectrum fetch(uint64_t) const;
 };
 
 } // namespace MzPeak

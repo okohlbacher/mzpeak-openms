@@ -8,9 +8,11 @@ top-level directory of this repository.
 
 #include "mzpeak/spectra.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "mzpeak/data/signals.h"
+#include "mzpeak/exception.h"
 #include "mzpeak/metadata/table.h"
 #include "mzpeak/schema/group.h"
 #include "mzpeak/spectrum.h"
@@ -58,10 +60,134 @@ void Spectra::load_metadata_()
   if (!meta_) return;
   md_map_ = std::make_shared<const std::map<uint64_t, SpectrumMetadata>>(
       meta_->read_spectrum_metadata());
+
+  // Native id -> index, for by_id().  First id wins: ids SHOULD be unique, but
+  // nothing enforces it, and silently remapping an id to a later spectrum would
+  // be worse than ignoring the duplicate.
+  for (const auto& [index, md] : *md_map_) {
+    if (md.id.empty()) continue;
+    id_to_index_.emplace(md.id, static_cast<std::size_t>(index));
+  }
 }
 
 /******************************************************************************/
-Spectrum Spectra::fetch(uint64_t index)
+std::optional<std::size_t> Spectra::index_for_id(const std::string& id) const
+{
+  auto it = id_to_index_.find(id);
+  if (it == id_to_index_.end()) return std::nullopt;
+  return it->second;
+}
+
+/******************************************************************************/
+Spectrum Spectra::by_id(const std::string& id) const
+{
+  auto index = index_for_id(id);
+  if (!index) throw ParquetError("no spectrum with id '" + id + "'");
+  return fetch(static_cast<uint64_t>(*index));
+}
+
+/******************************************************************************/
+std::vector<std::size_t> Spectra::indices_in_time_range(double rt_low,
+                                                        double rt_high) const
+{
+  std::vector<std::size_t> result;
+  if (!md_map_) return result;
+  if (rt_low > rt_high) std::swap(rt_low, rt_high);
+
+  // Collect (time, index) then sort by time: the map is keyed by index, and
+  // acquisition order is not guaranteed to be time order.
+  std::vector<std::pair<double, std::size_t>> selected;
+  for (const auto& [index, md] : *md_map_) {
+    if (!md.retention_time.has_value()) continue;
+    const double t = *md.retention_time;
+    if (t < rt_low || t > rt_high) continue; // inclusive on both ends
+    selected.emplace_back(t, static_cast<std::size_t>(index));
+  }
+
+  std::ranges::sort(selected);
+  result.reserve(selected.size());
+  for (const auto& [t, index] : selected)
+    result.push_back(index);
+  return result;
+}
+
+/******************************************************************************/
+std::vector<EicPoint>
+Spectra::extract_ion_chromatogram(double mz_low,
+                                  double mz_high,
+                                  double rt_low,
+                                  double rt_high,
+                                  std::optional<int> ms_level) const
+{
+  std::vector<EicPoint> result;
+  if (mz_low > mz_high) std::swap(mz_low, mz_high);
+
+  const std::vector<std::size_t> indices = indices_in_time_range(rt_low, rt_high);
+  result.reserve(indices.size());
+
+  for (std::size_t index : indices) {
+    double time = 0.0;
+    if (md_map_) {
+      auto it = md_map_->find(static_cast<uint64_t>(index));
+      if (it != md_map_->end()) {
+        // ms-level filter is decided from metadata, before any peak decode.
+        if (ms_level.has_value() && it->second.ms_level != ms_level) continue;
+        time = it->second.retention_time.value_or(0.0);
+      } else if (ms_level.has_value()) {
+        continue;
+      }
+    }
+
+    Spectrum spectrum = fetch(static_cast<uint64_t>(index));
+    const auto& mz = spectrum.mz();
+    const auto& intensity = spectrum.intensity();
+
+    // Scan the whole array rather than breaking at the first out-of-window
+    // point: m/z is usually ascending, but the layout does not guarantee it
+    // (sorting_rank may be absent), and an early break would undercount.
+    const std::size_t n = std::min(mz.size(), intensity.size());
+    double sum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      if (mz[i] >= mz_low && mz[i] <= mz_high) {
+        sum += static_cast<double>(intensity[i]);
+      }
+    }
+
+    // Dense trace: a scan with no signal in the window still contributes a
+    // zero sample, so gaps stay visible instead of silently closing up.
+    result.push_back(EicPoint{time, sum, index});
+  }
+
+  return result;
+}
+
+/******************************************************************************/
+std::vector<Spectrum>
+Spectra::get_spectra_batch(const std::vector<std::size_t>& indices) const
+{
+  std::vector<Spectrum> result(indices.size());
+
+  // Read in ascending index order so file access is sequential, but write each
+  // result back to its ORIGINAL position so callers keep positional
+  // correspondence with the indices they passed.
+  std::vector<std::size_t> order(indices.size());
+  for (std::size_t i = 0; i < order.size(); ++i)
+    order[i] = i;
+  std::ranges::sort(order, [&indices](std::size_t a, std::size_t b) {
+    return indices[a] < indices[b];
+  });
+
+  for (std::size_t slot : order) {
+    const std::size_t index = indices[slot];
+    if (index >= size()) continue; // out of range -> default Spectrum
+    result[slot] = fetch(static_cast<uint64_t>(index));
+  }
+
+  return result;
+}
+
+/******************************************************************************/
+Spectrum Spectra::fetch(uint64_t index) const
 {
   // Dispatch to the peaks file when metadata says this is a centroid spectrum.
   // Read from the cached metadata map rather than re-querying the metadata file

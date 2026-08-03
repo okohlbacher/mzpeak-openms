@@ -15,6 +15,13 @@ top-level directory of this repository.
 namespace MzPeak {
 
 /******************************************************************************/
+Spectrum::Spectrum()
+    : index_(0)
+    , peaks_(std::make_shared<Peaks>())
+{
+}
+
+/******************************************************************************/
 Spectrum::Spectrum(
     uint64_t index,
     std::shared_ptr<Data::Signals> data,
@@ -37,6 +44,10 @@ void Spectrum::decode_() const
   // once across every copy of this Spectrum, and concurrent callers block until
   // it has finished rather than racing on the vectors.
   std::call_once(peaks_->once, [this] {
+    // A default-constructed Spectrum has no backing file; it decodes to empty
+    // rather than dereferencing a null signal reader.
+    if (!signals_) return;
+
     // The signal-file read for this spectrum happens here (not at
     // construction) so a metadata-only pass never touches the peak data.
     std::shared_ptr<Util::Slice> slice =

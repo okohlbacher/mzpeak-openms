@@ -47,9 +47,14 @@ public:
   /// The type of decoder used.
   using decoder_type = Data::Encoding::Decoder<double>;
 
-  // Special members are implicit (rule of zero): copyable AND movable.  The
-  // decoded peak arrays live in a shared_ptr, so copying is cheap and copies
-  // share the decode rather than each repeating the file read.
+  /// Default constructor: an empty spectrum with no backing file.  mz() and
+  /// intensity() return empty arrays and metadata() the default record; used
+  /// for out-of-range slots in Spectra::get_spectra_batch().
+  Spectrum();
+
+  // Other special members are implicit (rule of zero): copyable AND movable.
+  // The decoded peak arrays live in a shared_ptr, so copying is cheap and
+  // copies share the decode rather than each repeating the file read.
 
   /**
    * Mass-to-charge values.  Decodes the peak arrays on first access (lazy):

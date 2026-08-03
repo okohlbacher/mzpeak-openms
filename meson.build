@@ -173,6 +173,7 @@ test_names = [
     'parquet_writer',
     'planner',
     'query',
+    'query_api',
     'roundtrip',
     'spectra',
     'spectrum_metadata',
