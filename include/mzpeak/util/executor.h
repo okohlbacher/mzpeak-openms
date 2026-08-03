@@ -39,8 +39,8 @@ public:
 private:
   friend class Parquet;
 
-  /// Constructor.
-  Executor(std::shared_ptr<parquet::arrow::FileReader>, const Projection&);
+  /// Constructor.  `source` supplies decoded row groups and outlives this.
+  Executor(Parquet& source, const Projection&);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

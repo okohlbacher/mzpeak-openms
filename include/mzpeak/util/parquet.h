@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <arrow/record_batch.h>
 #include <parquet/metadata.h>
 #include <parquet/statistics.h>
 
@@ -70,6 +71,37 @@ public:
    * while this Parquet object exists.
    */
   parquet::arrow::FileReader& reader() const;
+
+  /**
+   * The record batches of one row group, decoded once and retained.
+   *
+   * A query that selects a single entity decodes the row group holding it and
+   * slices that down to a few thousand rows.  Reading a run entity by entity
+   * therefore decoded the same group hundreds of times -- on a 21-row-group
+   * file, 13,009 decodes where 21 would do.  This hands back the same decoded
+   * batches to every caller that lands in the group.
+   *
+   * Only the most recent few groups are kept: a decoded group is tens of
+   * megabytes, and a forward pass never looks back.
+   *
+   * Returned by shared_ptr, not by reference: the cache evicts, and a reference
+   * into it would dangle the moment a caller fetched a second group while still
+   * holding the first.
+   *
+   * @note An arrow::Array sliced out of these batches SHARES their buffers, so
+   * anything retaining such a slice keeps the whole decoded row group alive.
+   * Spectrum copies its values out and drops the slice; Chromatogram keeps its
+   * decoder, and so keeps a group resident for as long as the caller holds it.
+   * That is bounded by how many entities the caller holds, not by the run.
+   */
+  using RowGroupBatches = std::vector<std::shared_ptr<arrow::RecordBatch>>;
+  std::shared_ptr<const RowGroupBatches> row_group(int32_t);
+
+  /**
+   * `true` when @p row_group declares @p leaf_column sorted ascending with
+   * nulls last.  See StatsIndex::sorted_ascending.
+   */
+  bool sorted_ascending(int32_t row_group, int32_t leaf_column) const;
 
   /**
    * Return a planner for the given query.

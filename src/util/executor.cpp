@@ -8,6 +8,7 @@ top-level directory of this repository.
 
 #include "mzpeak/util/executor.h"
 
+#include <algorithm>
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
 #include <arrow/result.h>
@@ -15,16 +16,18 @@ top-level directory of this repository.
 #include <parquet/arrow/reader.h>
 #include <ranges>
 #include <string_view>
+#include <type_traits>
 
 #include "mzpeak/util/algorithm.h"
+#include "mzpeak/util/parquet.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
 
 /******************************************************************************/
 struct Executor::Impl {
-  Impl(std::shared_ptr<parquet::arrow::FileReader> reader, const Projection& fields)
-      : reader_(reader)
+  Impl(Parquet& source, const Projection& fields)
+      : source_(source)
       , projection_(fields)
       , slice_(nullptr)
   {
@@ -43,8 +46,15 @@ struct Executor::Impl {
 
   /// Run a query on the given record batch and return a vector
   /// indicating which rows should be kept.
+  ///
+  /// When the query is an equality on a column the row group declares sorted,
+  /// `run` receives the matching [offset, end) instead and the returned vector
+  /// is empty -- see EqualityScan.
   std::vector<bool> filter(const Planner::Plan&,
-                           std::shared_ptr<arrow::RecordBatch>&);
+                           std::shared_ptr<arrow::RecordBatch>&,
+                           bool sorted_column,
+                           std::pair<int64_t, int64_t>& run,
+                           bool& have_run);
 
   /// Capture the requested columns.
   void project(std::shared_ptr<arrow::RecordBatch>&);
@@ -62,7 +72,7 @@ struct Executor::Impl {
     int64_t row_index_;
   };
 
-  std::shared_ptr<parquet::arrow::FileReader> reader_;
+  Parquet& source_;
   Projection projection_;
   std::unique_ptr<Slice> slice_;
 };
@@ -82,10 +92,76 @@ Query::Result<Query::value_t> Executor::Impl::ArrayValueHelper::operator()()
 }
 
 /******************************************************************************/
+/*
+ * Mark the rows of one typed column equal to `wanted`.
+ *
+ * The general path below resolves the column, dispatches on its type and walks
+ * the predicate tree once PER ROW.  For the query this library actually runs --
+ * "the entity index equals N" -- that is several hundred nanoseconds of
+ * machinery around a single integer comparison, repeated across a whole page.
+ */
+struct EqualityScan {
+  std::shared_ptr<arrow::Array> array;
+  Query::value_t wanted;
+  std::vector<bool>& want_rows;
+  bool& handled;
+  /// The row group DECLARES this column sorted ascending, nulls last.
+  bool sorted;
+  /// When the sorted path applies, the matching run as [offset, end).
+  std::pair<int64_t, int64_t>& run;
+  bool& have_run;
+
+  template <Type T> void operator()() const
+  {
+    using value_type = typename type_traits<T>::value_type;
+
+    // A predicate whose value type does not match the column's is not something
+    // this scan can answer; fall back rather than silently selecting nothing.
+    if (!std::holds_alternative<value_type>(wanted)) return;
+
+    const value_type target = std::get<value_type>(wanted);
+    auto typed =
+        std::static_pointer_cast<typename type_traits<T>::array_type>(array);
+
+    // The caller leaves the mask empty so the sorted path never pays for one.
+    want_rows.assign(static_cast<std::size_t>(typed->length()), true);
+    for (int64_t i = 0; i < typed->length(); ++i) {
+      // A null never compares equal, and the general path treats an unreadable
+      // value as "no opinion" -- it yields no `false`, so the row stays
+      // selected.  Matched here so the two paths agree row for row.
+      want_rows[static_cast<std::size_t>(i)] =
+          typed->IsNull(i) || typed->Value(i) == target;
+    }
+    handled = true;
+  }
+};
+
+/******************************************************************************/
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
-                                         std::shared_ptr<arrow::RecordBatch>& batch)
+                                         std::shared_ptr<arrow::RecordBatch>& batch,
+                                         bool sorted_column,
+                                         std::pair<int64_t, int64_t>& run,
+                                         bool& have_run)
 {
-  std::vector<bool> want_rows(batch->num_rows(), true);
+  // Fast path FIRST, and only then the mask.  Allocating and initialising a
+  // bit per row of the page, for every entity, cost more than the search it was
+  // there to record -- and on the sorted path it was thrown away unread.
+  std::vector<bool> want_rows;
+
+  if (auto equality = plan.query.as_equality()) {
+    const auto& [field, wanted] = *equality;
+    if (field.second->type().has_value()) {
+      std::shared_ptr<arrow::Array> column(array(batch, field));
+      bool handled = false;
+      lift_type(field.second->type().value(),
+                EqualityScan{column, wanted, want_rows, handled, sorted_column, run,
+                             have_run});
+      if (have_run) return {};
+      if (handled) return want_rows;
+    }
+  }
+
+  want_rows.assign(static_cast<std::size_t>(batch->num_rows()), true);
 
   auto get_value =
       [&](int64_t row_index,
@@ -132,9 +208,8 @@ Executor::Impl::array(std::shared_ptr<arrow::RecordBatch>& batch,
 }
 
 /******************************************************************************/
-Executor::Executor(std::shared_ptr<parquet::arrow::FileReader> reader,
-                   const Projection& fields)
-    : impl_(std::make_unique<Impl>(std::move(reader), fields))
+Executor::Executor(Parquet& source, const Projection& fields)
+    : impl_(std::make_unique<Impl>(source, fields))
 {
 }
 
@@ -172,12 +247,29 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
   for (const auto& row_group : ranges) {
     int64_t row_group_start = 0;
 
-    auto batch_reader =
-        impl_->check("invalid batch reader",
-                     impl_->reader_->GetRecordBatchReader({row_group.first}));
+    // The last row any range of this group wants.  Batches past it hold
+    // nothing for this query.
+    int64_t wanted_end = 0;
+    for (const auto& range : row_group.second) {
+      wanted_end = std::max(wanted_end, range.offset + range.length);
+    }
 
-    for (auto batch_r : *batch_reader) {
-      auto batch = impl_->check("invalid record batch", batch_r);
+    // Does THIS row group declare the predicate's column sorted?  Asked per
+    // group because the declaration is per group.
+    bool sorted_column = false;
+    if (auto equality = plan.query.as_equality()) {
+      sorted_column = impl_->source_.sorted_ascending(
+          row_group.first, equality->first.second->absolute_index());
+    }
+
+    // Decoded once per row group and retained, so reading a run entity by
+    // entity costs one decode per group rather than one per entity.
+    auto batches = impl_->source_.row_group(row_group.first);
+
+    for (const auto& cached : *batches) {
+      if (row_group_start >= wanted_end) break;
+
+      std::shared_ptr<arrow::RecordBatch> batch = cached;
       int64_t rows = batch->num_rows();
 
       for (const auto& range : row_group.second) {
@@ -192,8 +284,19 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
         if (length == 0) continue;
 
         auto sliced = batch->Slice(offset, length);
-        auto want_rows = impl_->filter(plan, sliced);
-        Algorithm::spans(want_rows, project_wanted, sliced);
+
+        std::pair<int64_t, int64_t> run{0, 0};
+        bool have_run = false;
+        auto want_rows = impl_->filter(plan, sliced, sorted_column, run, have_run);
+
+        if (have_run) {
+          if (run.second > run.first) {
+            project_wanted(static_cast<std::size_t>(run.first),
+                           static_cast<std::size_t>(run.second - 1), sliced);
+          }
+        } else {
+          Algorithm::spans(want_rows, project_wanted, sliced);
+        }
       }
 
       row_group_start += batch->num_rows();

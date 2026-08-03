@@ -6,13 +6,14 @@ top-level directory of this repository.
 
 */
 
+#include "mzpeak/util/query.h"
+
 #include <cassert>
 #include <functional>
 #include <variant>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/compat.h" // IWYU pragma: keep
-#include "mzpeak/util/query.h"
 
 namespace MzPeak::Util {
 
@@ -288,6 +289,20 @@ Trampoline<Query::Result<bool>> EvalHelper<Fn, V>::eval_node(const Query::Node& 
   }
 
   return result;
+}
+
+/******************************************************************************/
+std::optional<std::pair<Schema::Column, Query::value_t>> Query::as_equality() const
+{
+  // A negated equality is an inequality, and an inequality selects almost every
+  // row -- the fast path below would be a pessimisation as well as wrong.
+  if (not_) return std::nullopt;
+  if (!std::holds_alternative<Predicate>(tree_)) return std::nullopt;
+
+  const Predicate& predicate = std::get<Predicate>(tree_);
+  if (predicate.op != Op::EQ) return std::nullopt;
+
+  return std::make_pair(predicate.dest, predicate.val);
 }
 
 } // namespace MzPeak::Util
