@@ -130,6 +130,40 @@ std::optional<int> entity_index_leaf_of(const arrow::Schema& schema)
 }
 
 /******************************************************************************/
+// Is the entity-index column actually ascending?
+//
+// Deriving WHICH leaf is the index is not the same as knowing it is sorted.
+// Every table this writer builds happens to be emitted in ascending index
+// order, but that is an ordering property of a dozen separate builders rather
+// than something the schema guarantees -- and a reader may binary search on the
+// declaration.  One pass over a column the writer already holds in memory
+// settles it.
+bool entity_index_is_ascending(const arrow::Table& table)
+{
+  if (table.num_rows() == 0) return true;
+  if (table.num_columns() == 0) return false;
+
+  auto combined = table.CombineChunks();
+  if (!combined.ok()) return false;
+  auto column = (*combined)->column(0);
+  if (column->num_chunks() != 1) return false;
+
+  std::shared_ptr<arrow::Array> values = column->chunk(0);
+  if (values->type_id() == arrow::Type::STRUCT) {
+    values = std::static_pointer_cast<arrow::StructArray>(values)->field(0);
+  }
+
+  auto index = std::dynamic_pointer_cast<arrow::UInt64Array>(values);
+  if (!index) return false;
+  if (index->null_count() != 0) return false; // nulls_first=false would be a lie
+
+  for (int64_t i = 1; i < index->length(); ++i) {
+    if (index->Value(i) < index->Value(i - 1)) return false;
+  }
+  return true;
+}
+
+/******************************************************************************/
 // Write an Arrow table to a Parquet sink with the project's standard
 // properties: ZSTD, statistics, page index, store_schema, a sorting column
 // on the first leaf (the entity index), a bounded row-group size, and
