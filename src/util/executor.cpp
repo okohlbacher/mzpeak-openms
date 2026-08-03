@@ -47,14 +47,8 @@ struct Executor::Impl {
   /// Run a query on the given record batch and return a vector
   /// indicating which rows should be kept.
   ///
-  /// When the query is an equality on a column the row group declares sorted,
-  /// `run` receives the matching [offset, end) instead and the returned vector
-  /// is empty -- see EqualityScan.
   std::vector<bool> filter(const Planner::Plan&,
-                           std::shared_ptr<arrow::RecordBatch>&,
-                           bool sorted_column,
-                           std::pair<int64_t, int64_t>& run,
-                           bool& have_run);
+                           std::shared_ptr<arrow::RecordBatch>&);
 
   /// Capture the requested columns.
   void project(std::shared_ptr<arrow::RecordBatch>&);
@@ -105,11 +99,6 @@ struct EqualityScan {
   Query::value_t wanted;
   std::vector<bool>& want_rows;
   bool& handled;
-  /// The row group DECLARES this column sorted ascending, nulls last.
-  bool sorted;
-  /// When the sorted path applies, the matching run as [offset, end).
-  std::pair<int64_t, int64_t>& run;
-  bool& have_run;
 
   template <Type T> void operator()() const
   {
@@ -123,7 +112,8 @@ struct EqualityScan {
     auto typed =
         std::static_pointer_cast<typename type_traits<T>::array_type>(array);
 
-    // The caller leaves the mask empty so the sorted path never pays for one.
+    // The caller leaves the mask unsized so a path that does not need one never
+    // pays for it.
     want_rows.assign(static_cast<std::size_t>(typed->length()), true);
     for (int64_t i = 0; i < typed->length(); ++i) {
       // A null never compares equal, and the general path treats an unreadable
@@ -138,10 +128,7 @@ struct EqualityScan {
 
 /******************************************************************************/
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
-                                         std::shared_ptr<arrow::RecordBatch>& batch,
-                                         bool sorted_column,
-                                         std::pair<int64_t, int64_t>& run,
-                                         bool& have_run)
+                                         std::shared_ptr<arrow::RecordBatch>& batch)
 {
   // Fast path FIRST, and only then the mask.  Allocating and initialising a
   // bit per row of the page, for every entity, cost more than the search it was
@@ -154,9 +141,7 @@ std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
       std::shared_ptr<arrow::Array> column(array(batch, field));
       bool handled = false;
       lift_type(field.second->type().value(),
-                EqualityScan{column, wanted, want_rows, handled, sorted_column, run,
-                             have_run});
-      if (have_run) return {};
+                EqualityScan{column, wanted, want_rows, handled});
       if (handled) return want_rows;
     }
   }
@@ -254,14 +239,6 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
       wanted_end = std::max(wanted_end, range.offset + range.length);
     }
 
-    // Does THIS row group declare the predicate's column sorted?  Asked per
-    // group because the declaration is per group.
-    bool sorted_column = false;
-    if (auto equality = plan.query.as_equality()) {
-      sorted_column = impl_->source_.sorted_ascending(
-          row_group.first, equality->first.second->absolute_index());
-    }
-
     // Decoded once per row group and retained, so reading a run entity by
     // entity costs one decode per group rather than one per entity.
     auto batches = impl_->source_.row_group(row_group.first);
@@ -285,18 +262,8 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
         auto sliced = batch->Slice(offset, length);
 
-        std::pair<int64_t, int64_t> run{0, 0};
-        bool have_run = false;
-        auto want_rows = impl_->filter(plan, sliced, sorted_column, run, have_run);
-
-        if (have_run) {
-          if (run.second > run.first) {
-            project_wanted(static_cast<std::size_t>(run.first),
-                           static_cast<std::size_t>(run.second - 1), sliced);
-          }
-        } else {
-          Algorithm::spans(want_rows, project_wanted, sliced);
-        }
+        auto want_rows = impl_->filter(plan, sliced);
+        Algorithm::spans(want_rows, project_wanted, sliced);
       }
 
       row_group_start += batch->num_rows();

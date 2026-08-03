@@ -98,12 +98,6 @@ public:
   std::shared_ptr<const RowGroupBatches> row_group(int32_t);
 
   /**
-   * `true` when @p row_group declares @p leaf_column sorted ascending with
-   * nulls last.  See StatsIndex::sorted_ascending.
-   */
-  bool sorted_ascending(int32_t row_group, int32_t leaf_column) const;
-
-  /**
    * Return a planner for the given query.
    */
   Planner planner(const Query&);

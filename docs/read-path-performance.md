@@ -276,10 +276,9 @@ Full forward pass over `run13k` (13,009 spectra, 21.2 M peaks, 21 row groups):
 | baseline | 251.8 s | 19.36 |
 | + skip the row-group tail | 114 s | 8.78 |
 | + row-group cache | 28.7 s | 2.21 |
-| + equality fast path | 1.41 s | 0.109 |
-| + binary search when declared sorted | **1.37 s** | **0.105** |
+| + equality fast path | **1.37 s** | **0.105** |
 
-**178x.** For comparison: mzML parses a comparable run in 3.55 s, the handoff
+**184x.** For comparison: mzML parses a comparable run in 3.55 s, the handoff
 argued the layout supported 1.5 s, and plain Arrow decodes the same bytes in
 0.363 s. Every access pattern moved together — `get_spectra_batch` 0.105
 ms/spectrum, a full-range XIC 37.5 s → 0.21 s.
@@ -304,12 +303,7 @@ row, through a `std::function`, a type dispatch and two `shared_ptr` copies each
 time — several hundred nanoseconds of machinery around a single integer
 comparison, repeated across a page for every entity. `Query::as_equality`
 recognises the query this library actually runs; the executor resolves the
-column once and either binary searches it or scans raw values.
-
-The binary search is guarded on the row group's OWN footer declaring that leaf
-sorted ascending with nulls last. Searching an unsorted column finds one
-contiguous run and silently misses every other occurrence — for an entity index,
-a short entity that looks perfectly well formed.
+column once and loops over its raw values.
 
 ## Memory
 
@@ -329,11 +323,27 @@ Recorded because both came from review and both sounded reasonable.
   8.78 ms/spectrum). Arrow parallelises across *columns* within a read, and a
   point signal table has three leaves. Left off, with the measurement in the
   code so nobody re-tries it blindly.
-- **Large data pages were to cost the linear scan 52x.** Rewriting the fixture
-  with one 1M-row page per row group costs the linear scan 16% (0.1398 → 0.1620
-  ms/spectrum) and the binary search 1.3% (0.1412 → 0.1431). The binary search
-  is kept for that independence from a producer's page-size choice, not for the
-  3% it is worth on ordinary files.
+- **Large data pages were to cost the scan 52x.** Rewriting the fixture with one
+  1M-row page per row group instead of Arrow's ~20,000-row default costs about
+  5% (0.1415 → 0.1480 ms/spectrum). The scan is not what a page-sized range
+  costs; decoding it is.
+
+## A correction
+
+An intermediate commit (`c0131b6`) claimed to add a binary search over the
+entity index, guarded on the row group's declared sort order, and reported
+figures for it. **That code was never in the build.** A scripted edit removed
+the search body while leaving its parameters in place, so the plumbing was dead
+and every measurement attributed to it was really measuring the linear scan.
+Removing the dead parameters changed the result by nothing (1.363–1.381 s
+against 1.356–1.458 s), which is the evidence that it never ran.
+
+The idea is not necessarily wrong, but it needs care that the removed code did
+not take: with nulls present the general path KEEPS null rows (an unreadable
+value yields no `false`), and a sorted column stores its nulls in one run at the
+end, so the selection is two disjoint intervals — `[first_equal, last_equal]`
+and `[nulls, end)` — which a single interval cannot express. Any future attempt
+must either exclude batches containing nulls or return both intervals.
 
 ## Phase 4 was not done, deliberately
 
