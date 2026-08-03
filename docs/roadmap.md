@@ -22,24 +22,17 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 - **Thread safety** — lazy peak decode serialised with `std::call_once` and
   shared across copies; ThreadSanitizer reports 0 races.
 
+## Fixed since the review
+
+Multi-scan spectra now report their earliest scan (commit 92b8372), and
+`Spectra` is non-copyable/non-movable so its fetch callback can no longer be
+left bound to another object (commit b599ba4).
+
 ## Open — from the 2026-08-03 adversarial review (Codex)
 
 Verified against the code but NOT yet fixed. Ordered by severity. Each is a
 *silent* failure unless noted.
 
-- **Multi-scan spectra take the last scan's RT and ion mobility.**
-  `src/util/metadata_model.cpp` overwrites the scalar scan fields for every
-  joined scan row. Scans at 1.0 and 1.1 min yield 66 s where the spec requires
-  the minimum, 60 s — an RT query for 59-61 s then silently misses the spectrum.
-  Affects summed/averaged spectra and ion-mobility frames. The same last-row-wins
-  loss hits ion mobility and scan parameters. Also: even a single scan replaces
-  the Float64 `spectrum.time` with the Float32 `scan_start_time`, costing
-  precision at exact boundaries.
-- **Copying or moving `Spectra` leaves its fetch callback bound to the old
-  object.** The constructors bind `this`; copy/move are implicit. After
-  `auto b = a;`, `b[0]` dispatches through `a`. Moving one into a thread, or
-  assigning from a temporary, can dangle. Not file-dependent — ordinary C++
-  ownership triggers it.
 - **A mixed profile+centroid collection can omit centroid-only tail spectra.**
   `Spectra` sizes itself from the profile table alone; without a
   `spectrum_count` KV the fallback uses the profile table's maximum index. A run
