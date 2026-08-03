@@ -141,3 +141,102 @@ BOOST_AUTO_TEST_CASE(unknown_buffer_format_curie_falls_back_to_point)
   BOOST_CHECK(buffer_format_from_string("not_a_real_format") == BufferFormat::Point);
   BOOST_CHECK(buffer_format_from_string("") == BufferFormat::Point);
 }
+
+/******************************************************************************/
+// The chunked file holds the SAME run as small.mzpeak, so the point-layout
+// twin is the oracle: intensities must match exactly (both store them
+// verbatim), and m/z must match exactly at real points.  Null-marked points are
+// reconstructed from neighbouring runs and the two layouts can see slightly
+// different run extents, so those get a tolerance far below any meaningful mass
+// accuracy.
+BOOST_AUTO_TEST_CASE(chunked_matches_the_point_layout_twin)
+{
+  auto chunked = MzPeak::open("../test/files/small.chunked.mzpeak").spectra();
+  auto point = MzPeak::open("../test/files/small.mzpeak").spectra();
+  BOOST_TEST_REQUIRE(chunked.size() == point.size());
+
+  for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(7)}) {
+    auto c = chunked[i];
+    auto p = point[i];
+    const auto& cmz = c.mz();
+    const auto& pmz = p.mz();
+    const auto& cin = c.intensity();
+    const auto& pin = p.intensity();
+
+    BOOST_TEST_REQUIRE(cmz.size() == pmz.size());
+    BOOST_TEST_REQUIRE(cin.size() == pin.size());
+
+    for (std::size_t k = 0; k < cmz.size(); ++k) {
+      if (cin[k] != pin[k]) {
+        BOOST_TEST(cin[k] == pin[k]);
+        break;
+      }
+      const double tolerance = (pin[k] == 0.0f) ? 1e-5 : 0.0;
+      if (std::abs(cmz[k] - pmz[k]) > tolerance) {
+        BOOST_TEST(cmz[k] == pmz[k]);
+        break;
+      }
+    }
+  }
+}
+
+/******************************************************************************/
+// Regression: spectrum 0 is PROFILE (MS:1000128) yet ALSO declares a peak
+// count, because the file carries a centroid array for it as well.  Dispatching
+// on "does it have peaks" rather than on the representation returned 1612
+// centroids in place of 13589 profile points — the wrong array, silently, at a
+// plausible length, and it hid the chunked path entirely.
+BOOST_AUTO_TEST_CASE(profile_spectrum_reads_the_profile_array_not_the_peaks)
+{
+  auto chunked = MzPeak::open("../test/files/small.chunked.mzpeak").spectra();
+
+  auto s = chunked[0];
+  const auto& md = s.metadata();
+  BOOST_TEST(md.representation == std::string("MS:1000128"));
+  BOOST_TEST(md.number_of_data_points.value_or(0) == 13589u);
+  BOOST_TEST(md.number_of_peaks.value_or(0) > 0u); // both arrays exist
+  BOOST_TEST(s.mz().size() == 13589u);
+}
+
+/******************************************************************************/
+// Null marking still applies once the chunks are assembled: a chunk boundary
+// must not introduce a discontinuity, a NaN, or a negative intensity.
+BOOST_AUTO_TEST_CASE(null_marking_applies_to_the_assembled_axis)
+{
+  auto spectra = MzPeak::open("../test/files/small.chunked.mzpeak").spectra();
+  auto s = spectra[0];
+  const auto& mz = s.mz();
+  const auto& intensity = s.intensity();
+  BOOST_TEST_REQUIRE(mz.size() == intensity.size());
+
+  for (std::size_t k = 1; k < mz.size(); ++k) {
+    if (!(mz[k] > mz[k - 1]) || !std::isfinite(mz[k])) {
+      BOOST_TEST(mz[k] > mz[k - 1]);
+      break;
+    }
+  }
+  for (std::size_t k = 0; k < intensity.size(); ++k) {
+    if (intensity[k] < 0.0f) {
+      BOOST_TEST(intensity[k] >= 0.0f);
+      break;
+    }
+  }
+}
+
+/******************************************************************************/
+// has_uv stores two intensity columns for one logical array (detector counts
+// and absorbance); each chromatogram populates exactly one.  Both are `point`
+// format, so this must take the coalescing path rather than being mistaken for
+// a chunked layout, and must yield as many intensities as time points.
+BOOST_AUTO_TEST_CASE(multiple_point_columns_coalesce_into_one_array)
+{
+  auto index = MzPeak::open("../test/files/has_uv.mzpeak");
+  auto chromatograms = index.chromatograms();
+  BOOST_TEST_REQUIRE(chromatograms.size() >= 2u);
+
+  for (std::size_t i = 0; i < 2; ++i) {
+    auto c = chromatograms[i];
+    BOOST_TEST(c.time().size() == c.intensity().size());
+    BOOST_TEST(!c.time().empty());
+  }
+}
