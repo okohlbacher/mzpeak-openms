@@ -132,3 +132,65 @@ row-group decode per spectrum, which is Phase 2.
 | `run2k` checksum | `3fba0c5528aac85a`, 3,254,000 peaks — unchanged |
 | `run2k` XIC [205, 205.01] | 8.964569e+06 — unchanged |
 | peak RSS | 62.3 MB vs 62.2 MB baseline |
+
+---
+
+# What the Phase 0 harness does NOT establish
+
+An adversarial review (Codex, plus an independent Kimi run that reproduced the
+baseline and built its own many-row-group fixture) attacked the measurements
+above. These are the limits that survived checking. They are recorded because
+the projection in Phase 0 is weaker than it first reads.
+
+**The 0.4–0.6 s projection was optimistic; 1.0–1.5 s is defensible.** The
+profile shows `Signals::select` is 99.6% of a forward pass, so the 88% figure
+does carry over to total time (87.6%). But the ~0.4% that is *not* `select` —
+the point decoder's per-element copies — is 0.05 ms/spectrum, i.e. **0.64 s
+over `run13k` on its own**, on top of the 0.315 s Arrow floor. Caching cannot
+remove it.
+
+**The synthetic fixture has no nulls, so null marking is unexercised.** The
+bundled `small.mzpeak` carries 39,968 nulls in each signal column — 18.4% of
+rows. Null reconstruction runs *after* `select` and survives every phase
+planned here. It is also boundary-sensitive: reconstruction must see the whole
+assembled entity, which is why `encoding.h` concatenates before filling.
+
+**Nor does it exercise the chunked or Numpress layouts**, whose per-chunk
+copies are O(points) and likewise survive row-group reuse. The writer is
+point-only.
+
+**Nor absent statistics or page indexes.** The writer always emits both. A
+producer that emits neither makes the planner fall back to a full scan of
+*every* row group for a single spectrum.
+
+**Page geometry is a producer choice and moves the residual predicate cost by
+orders of magnitude.** Arrow 25 defaults to 20,000 rows per page; a producer
+writing one page per row group would make the per-row predicate evaluate
+1,048,576 rows per spectrum instead of 20,000. The measured 9% is not portable.
+
+**A spectrum larger than a row group defeats cache reuse.** At 1,627 points no
+spectrum spans more than two groups. A diaPASEF frame of 2 M points spans
+three, and each is decoded for exactly one spectrum — the Phase 2 cache buys
+nothing there beyond the shared boundary groups.
+
+**Timers exclude `open()`.** In particular the "metadata pass" number times
+13,009 lookups into an already-built map, not reading 13,009 metadata rows;
+`Spectra` reads the whole metadata model in its constructor.
+
+**The Arrow floor uses a different I/O path** (`arrow::io::ReadableFile`) than
+the reader (a custom adapter, or `zip_fseek` for archives), and every mode runs
+once with no warm-up. It is a floor for a warm unpacked directory, not for a
+cold archive.
+
+## Gates, restated
+
+`checksum` now hashes the mobility array as well, and runs the same pass a
+second time through `get_spectra_batch`, failing if the two digests differ —
+without that, a stitching defect that only the batch path had would leave the
+digest untouched.
+
+| fixture | peaks | digest |
+|---|---:|---|
+| `run2k` | 3,254,000 | `9fae6e76aea6a57e` |
+
+(The earlier `3fba0c5528aac85a` predates mobility being hashed.)

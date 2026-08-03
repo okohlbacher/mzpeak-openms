@@ -160,6 +160,9 @@ int batch_pass(const std::filesystem::path& path,
   auto spectra = index.spectra();
   const std::size_t n = limit > 0 ? std::min(limit, spectra.size()) : spectra.size();
 
+  // A zero batch size is an infinite loop, not a degenerate case.
+  if (batch == 0) batch = 512;
+
   auto start = clock_type::now();
   std::size_t peaks = 0;
   for (std::size_t b = 0; b < n; b += batch) {
@@ -197,8 +200,16 @@ int xic(const std::filesystem::path& path, double mz_low, double mz_high)
   double total = 0.0;
   for (const auto& point : trace)
     total += point.intensity;
+  // A window that matches nothing looks exactly like a fast XIC, so report
+  // how many samples actually carried signal.  Retention time is required to
+  // select a spectrum at all, so a run without RT yields an empty trace and a
+  // meaningless ms/spectrum -- that shows up here as 0 of 0.
+  std::size_t hits = 0;
+  for (const auto& point : trace)
+    if (point.intensity > 0.0) ++hits;
   report("xic", since(start), trace.size(), trace.size());
-  std::println("  summed intensity {:.6e} over {} samples", total, trace.size());
+  std::println("  summed intensity {:.6e} over {} samples, {} with signal", total,
+               trace.size(), hits);
   return 0;
 }
 
@@ -220,21 +231,52 @@ int checksum(const std::filesystem::path& path)
   uint64_t digest = 1469598103934665603ULL; // FNV-1a offset basis
   auto mix = [&digest](uint64_t v) { digest = (digest ^ v) * 1099511628211ULL; };
 
-  std::size_t peaks = 0;
-  for (std::size_t i = 0; i < spectra.size(); ++i) {
-    const MzPeak::Spectrum s = spectra[i];
+  // Mobility is hashed too: a diaPASEF spectrum whose mobility array comes
+  // back one short passes a check that only compares m/z with intensity.
+  auto absorb = [&mix](const MzPeak::Spectrum& s) -> std::size_t {
     const auto& mz = s.mz();
     const auto& intensity = s.intensity();
+    const auto& mobility = s.ion_mobility_array();
     mix(mz.size());
-    peaks += mz.size();
+    mix(mobility.size());
     for (std::size_t j = 0; j < mz.size(); ++j) {
       mix(std::bit_cast<uint64_t>(mz[j]));
       mix(std::bit_cast<uint32_t>(intensity[j]));
     }
+    for (double m : mobility)
+      mix(std::bit_cast<uint64_t>(m));
+    return mz.size();
+  };
+
+  std::size_t peaks = 0;
+  for (std::size_t i = 0; i < spectra.size(); ++i)
+    peaks += absorb(spectra[i]);
+
+  const uint64_t scalar_digest = digest;
+  report("checksum", since(start), spectra.size(), peaks);
+  std::println("  digest {:016x}", scalar_digest);
+
+  // The same run through get_spectra_batch.  The two paths are the same code
+  // today, but the whole point of the batching work is to make them different,
+  // and a stitching defect that only the batch path has would otherwise leave
+  // this digest untouched.
+  digest = 1469598103934665603ULL;
+  start = clock_type::now();
+  std::size_t batch_peaks = 0;
+  for (std::size_t b = 0; b < spectra.size(); b += 512) {
+    std::vector<std::size_t> want(std::min<std::size_t>(512, spectra.size() - b));
+    std::iota(want.begin(), want.end(), b);
+    for (const auto& s : spectra.get_spectra_batch(want))
+      batch_peaks += absorb(s);
   }
 
-  report("checksum", since(start), spectra.size(), peaks);
+  report("checksum (batch)", since(start), spectra.size(), batch_peaks);
   std::println("  digest {:016x}", digest);
+
+  if (digest != scalar_digest || batch_peaks != peaks) {
+    std::println(stderr, "MISMATCH: the batch path decoded something different");
+    return 1;
+  }
   return 0;
 }
 
