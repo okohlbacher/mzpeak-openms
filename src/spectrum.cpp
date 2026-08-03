@@ -9,6 +9,7 @@ top-level directory of this repository.
 #include "mzpeak/spectrum.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -100,6 +101,37 @@ void Spectrum::decode_() const
       peaks_->mz.reserve(tof.size());
       for (double t : tof)
         peaks_->mz.push_back(ims_.mz(t));
+    }
+
+    // Nothing downstream can distinguish a short array from a genuinely small
+    // one, so check the decode here rather than letting it become a plausible
+    // result.  A missing intensity chunk shifts every later m/z against its
+    // intensity, and an EIC over such a spectrum simply reports less signal.
+    // This is the class of defect that once produced 1612 points where 13589
+    // were expected.
+    if (peaks_->mz.size() != peaks_->intensity.size()) {
+      throw ParquetError("spectrum " + std::to_string(index_) + ": decoded " +
+                         std::to_string(peaks_->mz.size()) + " m/z values but " +
+                         std::to_string(peaks_->intensity.size()) + " intensities");
+    }
+
+    // Cross-check against the count the file states for itself.  Which count
+    // applies depends on which array this spectrum is: profile spectra declare
+    // number_of_data_points and centroid spectra number_of_peaks, and one file
+    // may carry both counts for the same spectrum.
+    const SpectrumMetadata& md = metadata();
+    std::optional<uint64_t> expected;
+    if (md.representation == "MS:1000127") {
+      expected = md.number_of_peaks;
+    } else if (md.representation == "MS:1000128") {
+      expected = md.number_of_data_points;
+    }
+
+    if (expected.has_value() && *expected != peaks_->mz.size()) {
+      throw ParquetError("spectrum " + std::to_string(index_) + ": decoded " +
+                         std::to_string(peaks_->mz.size()) +
+                         " points but the file declares " +
+                         std::to_string(*expected));
     }
   });
 }

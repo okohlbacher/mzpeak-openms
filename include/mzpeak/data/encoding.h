@@ -108,6 +108,13 @@ private:
                    bool needs_delta_model,
                    std::vector<V>& out) const;
 
+  /// Concatenate every Arrow chunk of one point column, then reconstruct nulls
+  /// once over the whole entity (see the call site for why).
+  template <typename V>
+  void concatenated(const Schema::Column&,
+                    const ArrayIndex::Dimension&,
+                    std::vector<V>&) const;
+
   template <typename N, typename V>
   void point(const Schema::Column&, const N& null_decoder, std::vector<V>&) const;
 
@@ -196,13 +203,17 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
       throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
     }
 
-    if (dim.needs_delta_model()) {
-      using N = NullMarking::Decoder<V, T>;
-      point<N, V>(field.value(), N{delta_estimator_}, v);
-    } else {
-      using N = Util::Decoders::NullToZero<V>;
-      point<N, V>(field.value(), N{}, v);
-    }
+    // Assemble the whole entity BEFORE reconstructing nulls.
+    //
+    // Feeding the null decoder one physical Arrow chunk at a time makes
+    // reconstruction depend on record-batch boundaries, which are a storage
+    // artifact the writer chooses freely.  When a batch boundary falls between
+    // a run and its flanking null, that null is anchored to the run on the
+    // WRONG side — subtracting a delta from the following run instead of adding
+    // one to the preceding run.  The result stays monotonic and plausible, so
+    // nothing downstream notices.  The spec is explicit that an entry must be
+    // buffered before null filling.
+    concatenated<V>(field.value(), dim, v);
   } else if (std::ranges::all_of(entries, [](const auto& e) {
                return e.buffer_format == Schema::BufferFormat::Point;
              })) {
@@ -413,6 +424,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
   // concatenate.  Numpress output is dense — the compressor has no notion of a
   // null — so there is nothing for null marking to reconstruct afterwards.
   if (transform_entry != nullptr) {
+    auto ends_for_transform = raw_of(end_entry);
     auto byte_lists = raw_of(transform_entry);
     if (byte_lists == nullptr) {
       throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
@@ -439,6 +451,16 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       }
       auto bytes = std::static_pointer_cast<arrow::UInt8Array>(list->values());
 
+      std::shared_ptr<arrow::DoubleArray> ends;
+      if (ends_for_transform != nullptr) {
+        const std::size_t which =
+            static_cast<std::size_t>(&chunk - &(*byte_lists)[0]);
+        if (which < ends_for_transform->size()) {
+          ends = std::dynamic_pointer_cast<arrow::DoubleArray>(
+              (*ends_for_transform)[which]);
+        }
+      }
+
       for (int64_t r = 0; r < list->length(); ++r) {
         if (list->IsNull(r)) continue;
         const int64_t begin = list->value_offset(r);
@@ -450,6 +472,8 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
           raw.push_back(bytes->Value(begin + k));
         }
 
+        const std::size_t before = v.size();
+
         if (linear) {
           for (double x : Util::numpress_decode_linear(raw)) {
             v.push_back(static_cast<V>(x));
@@ -459,6 +483,22 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
             v.push_back(static_cast<V>(x));
           }
         }
+
+        // NOT bounded against chunk_end, deliberately.
+        //
+        // chunk_end marks the last REAL point of the chunk, but a null-marked
+        // array continues past it with flanking zero-intensity points.  In the
+        // delta path those are nulls, so walking back to the last valid entry
+        // lands exactly on chunk_end; under Numpress the compressor has no
+        // notion of a null, so they decode as dense zeros and the final value
+        // legitimately overshoots the bound — measured 3.9e-4 past it on
+        // small.numpress.mzpeak, against a 1.6e-8 round-trip error at the
+        // declared end itself.  Distinguishing the two needs the intensity
+        // array, which this function does not have: it decodes one dimension.
+        //
+        // Loosening the tolerance until it passed would have hidden that rather
+        // than checked anything.
+        (void)before;
       }
     }
     return;
@@ -518,6 +558,9 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
   std::vector<V> assembled_values;
   std::vector<bool> assembled_valid;
+
+  // End of the previous chunk, for the ordering check below.
+  std::optional<double> previous_end;
 
   for (std::size_t c = 0; c < values_raw->size(); ++c) {
     auto starts = std::dynamic_pointer_cast<arrow::DoubleArray>((*starts_raw)[c]);
@@ -598,12 +641,29 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       // equality is not guaranteed in general even though every bundled chunk
       // matches to the bit.
       if (ends != nullptr && !ends->IsNull(r)) {
+        // A chunk must not run backwards, and chunks must not overlap or go
+        // backwards relative to each other: either means the rows were joined
+        // wrongly, which is otherwise undetectable.
+        if (!(starts->Value(r) <= ends->Value(r))) {
+          throw ParquetError("chunk_start exceeds chunk_end (" + dim.name + ")");
+        }
+        if (previous_end.has_value() && starts->Value(r) < *previous_end) {
+          throw ParquetError("chunks overlap or are out of order (" + dim.name +
+                             ")");
+        }
+        previous_end = ends->Value(r);
+
         for (std::size_t k = assembled_values.size(); k > before; --k) {
           if (!assembled_valid[k - 1]) continue;
           const double last = static_cast<double>(assembled_values[k - 1]);
           const double expected = ends->Value(r);
+          // Tight: the bound exists to catch a mis-joined or corrupt values
+          // list, and every chunk of every bundled file reproduces its
+          // chunk_end to the bit.  1e-6 relative would tolerate ~0.001 Da at
+          // m/z 1000 — far more than any real accumulation error, and enough to
+          // let genuine corruption through.
           const double scale = std::max(std::abs(expected), 1.0);
-          if (std::abs(last - expected) > 1e-6 * scale) {
+          if (std::abs(last - expected) > 1e-9 * scale) {
             throw ParquetError("chunk does not end at its declared chunk_end (" +
                                dim.name + ")");
           }
@@ -622,6 +682,33 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       (void)builder.Append(assembled_values[i]);
     } else {
       (void)builder.AppendNull();
+    }
+  }
+
+  finish<V>(builder, dim, v);
+}
+
+/******************************************************************************/
+template <typename T>
+template <typename V>
+void Decoder<T>::concatenated(const Schema::Column& col,
+                              const ArrayIndex::Dimension& dim,
+                              std::vector<V>& v) const
+{
+  using array_type = Util::type_traits<Util::enum_type_v<V>>::array_type;
+
+  auto chunks = slice_->raw(col);
+  if (chunks == nullptr) return;
+
+  builder_for<V> builder;
+  for (const auto& chunk : *chunks) {
+    auto typed = std::static_pointer_cast<array_type>(chunk);
+    for (int64_t r = 0; r < typed->length(); ++r) {
+      if (typed->IsNull(r)) {
+        (void)builder.AppendNull();
+      } else {
+        (void)builder.Append(typed->Value(r));
+      }
     }
   }
 

@@ -47,9 +47,16 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
     , data_(std::move(data))
     , peaks_(std::move(peaks))
     , meta_(std::move(meta))
+    , ims_(ims)
 {
-  // Both files share the same spectrum_count KV; read it from data_.
-  resize(data_->record_count());
+  // Size from BOTH tables, not just the profile one.  The two normally share a
+  // spectrum_count KV, but when that is absent the count falls back to the
+  // table's own maximum index — and a run whose last spectra are centroid-only
+  // then reports a size that stops short of them.  Iteration and batch reads
+  // would skip those spectra while by_id() still found them.
+  std::size_t count = data_->record_count();
+  if (peaks_) count = std::max(count, peaks_->record_count());
+  resize(count);
   load_metadata_();
 }
 

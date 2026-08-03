@@ -24,25 +24,42 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 
 ## Fixed since the review
 
-Multi-scan spectra now report their earliest scan (commit 92b8372), and
-`Spectra` is non-copyable/non-movable so its fetch callback can no longer be
-left bound to another object (commit b599ba4).
+- Multi-scan spectra report their earliest scan (92b8372).
+- `Spectra` is non-copyable/non-movable, so its fetch callback cannot be left
+  bound to another object (b599ba4).
+- Decoded cardinality is checked: m/z against intensity, and both against the
+  count the file declares for itself.
+- Mixed collections size from BOTH tables, so centroid-only tail spectra are no
+  longer omitted.
+- Null reconstruction operates on the whole entity in the point layout too, not
+  per Arrow record batch. Point and chunked decoding are now bit-identical, and
+  the reconstructed-point error against the reference fell from 2.5e-06 to
+  8.5e-07 Da.
+- `chunk_end` validation tightened to 1e-9 relative and extended with
+  start <= end and chunk-ordering checks.
+
+## Backlog — validation against real vendor files
+
+Two capabilities are implemented and spec-conformant but have never been run
+against real data, because no such file is available here. Neither should be
+trusted numerically until one is.
+
+- **Ion mobility** (`Spectrum::ion_mobility_array()`,
+  `SelectedIonInfo::ion_mobility_lower/_upper_limit`). No bundled fixture
+  carries a mobility array, so the tests pin only the CV mapping and the
+  absent-data behaviour. Needs one real diaPASEF run: check that every MS2 scan
+  reports a non-null mobility, that the array is parallel to m/z, and that the
+  window limits partition the frame's peaks without overlap.
+- **Bruker TDF "ims-compact"**. Exercised end to end by a hand-built fixture
+  (`test/files/ims_compact.dir`), not a vendor archive. Needs one real TDF
+  conversion: check the reconstructed m/z against the vendor's own values, and
+  that Int32 intensities survive.
 
 ## Open — from the 2026-08-03 adversarial review (Codex)
 
 Verified against the code but NOT yet fixed. Ordered by severity. Each is a
 *silent* failure unless noted.
 
-- **A mixed profile+centroid collection can omit centroid-only tail spectra.**
-  `Spectra` sizes itself from the profile table alone; without a
-  `spectrum_count` KV the fallback uses the profile table's maximum index. A run
-  with profile index 0 and centroid-only index 1 reports `size() == 1`, so
-  iteration and batch reads skip index 1 while `by_id()` still finds it.
-- **Decoded cardinality is never checked.** Nothing compares the decoded array
-  lengths against each other or against the metadata count, and the EIC uses
-  `min()` of the two lengths — so a short intensity array yields a plausible low
-  trace rather than an error. The earlier 1612-vs-13589 defect was exactly this
-  class.
 - **Intensity units are lost when point columns coalesce.** `has_uv` merges a
   counts column and an absorbance column into one array with no unit accessor,
   and if both were ever non-null on one row the primary silently wins. Verified
@@ -52,12 +69,6 @@ Verified against the code but NOT yet fixed. Ordered by severity. Each is a
   null (`[100, 101, null, 110]`) is filled rather than rejected, though the spec
   calls that unrecoverable; a singleton with no regression model can use a zero
   delta and produce repeated coordinates.
-- **Null-reconstruction scope is not the normative one.** The point path
-  reconstructs per physical Arrow chunk (a storage artifact) and should instead
-  assemble the whole entity first; the chunked path assembles everything and
-  reconstructs once, where the reference applies `fill_nulls_for()` per semantic
-  chunk. Both currently agree with the reference to <=8.7e-07 Da, so this is
-  correctness-of-model rather than a live numeric error.
 - **Checked and NOT a defect — do not re-chase.** The numpress path skips null
   reconstruction on the assumption that numpress output is dense. One reviewer
   argued the reference converts zero to null and then fills for numpress-linear
@@ -68,23 +79,10 @@ Verified against the code but NOT yet fixed. Ordered by severity. Each is a
   the assumption holds for its output. Revisit only if a writer is found that
   null-marks *and* numpress-encodes the same axis.
 
-- **`chunk_end` validation is still incomplete.** It now fires, but the
-  Numpress path returns before reaching it, and the 1e-6 relative tolerance
-  permits ~0.001 Da at m/z 1000 — loose for this purpose. It also does not check
-  `start <= end`, chunk ordering, or non-overlap.
-
-## Open
 - **Imaging point count** — 2837 (ours, matching the file's own declared
   `number_of_data_points`) vs 3007 (Rust) for `Example_Processed.img.mzpeak`.
   Unexplained; our count agrees with the file, so this is not obviously our
   defect.
-- **Ion mobility and Bruker TDF are unvalidated against real data.** No bundled
-  fixture carries a mobility array, and `test/files/ims_compact.dir` is
-  hand-built rather than a vendor archive. Both need real files.
-
-## Phases (ordered)
-
-### Phase 1 — Reader correctness quick wins  *(small, independent, no design)*
 - **RDR-2** missing row-group stats → conservatively INCLUDE (not prune).
 - **RDR-11** `record_count` fallback (missing count KV → real count, not 0/max).
 - **RDR-12** null-check nullable columns in query eval.

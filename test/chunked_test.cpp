@@ -171,8 +171,11 @@ BOOST_AUTO_TEST_CASE(chunked_matches_the_point_layout_twin)
         BOOST_TEST(cin[k] == pin[k]);
         break;
       }
-      const double tolerance = (pin[k] == 0.0f) ? 1e-5 : 0.0;
-      if (std::abs(cmz[k] - pmz[k]) > tolerance) {
+      // EXACT, including at reconstructed points.  Both layouts assemble the
+      // whole entity before filling nulls, so neither depends on how the writer
+      // happened to split chunks or record batches.  Any tolerance here would
+      // hide exactly the boundary-dependence this asserts is gone.
+      if (cmz[k] != pmz[k]) {
         BOOST_TEST(cmz[k] == pmz[k]);
         break;
       }
