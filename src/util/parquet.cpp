@@ -14,6 +14,7 @@ directory of this repository.
 #include <boost/json.hpp>
 #include <charconv>
 #include <memory>
+#include <mutex>
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <ranges>
@@ -117,6 +118,13 @@ struct Parquet::Impl {
   std::vector<std::pair<int32_t, std::shared_ptr<const Parquet::RowGroupBatches>>>
       cache_;
 
+  /// Guards cache_.  Before this cache existed a Parquet was effectively
+  /// read-only once opened, so two threads reading one file raced only inside
+  /// Arrow; now every query mutates this vector, which is a torn-vector race
+  /// rather than a merely unsupported one.  StatsIndex guards its own smaller
+  /// cache the same way.
+  std::mutex cache_mutex_;
+
   // Shared by every planner over this file; see StatsIndex.
   std::shared_ptr<StatsIndex> stats_;
 };
@@ -149,8 +157,11 @@ void Parquet::Impl::parse_schema()
 std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
-  for (const auto& [cached, batches] : cache_) {
-    if (cached == index) return batches;
+  {
+    std::lock_guard<std::mutex> guard(cache_mutex_);
+    for (const auto& [cached, batches] : cache_) {
+      if (cached == index) return batches;
+    }
   }
 
   auto reader_result = reader_->GetRecordBatchReader({index});
@@ -168,8 +179,16 @@ Parquet::Impl::row_group(int32_t index)
     batches->push_back(*maybe_batch);
   }
 
-  // Evicting here only drops the cache's own reference; a caller still holding
-  // the batches keeps them alive.
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+
+  // Another thread may have decoded the same group while this one was working.
+  // Keep its copy rather than adding a second entry for the same index.
+  for (const auto& [cached, existing] : cache_) {
+    if (cached == index) return existing;
+  }
+
+  // Evicting only drops the cache's own reference; a caller still holding the
+  // batches keeps them alive.
   if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
   cache_.emplace_back(index, batches);
   return batches;
