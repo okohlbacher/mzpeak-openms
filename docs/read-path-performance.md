@@ -311,9 +311,17 @@ Peak RSS rises with the length of the pass and saturates: 66 MB at 200 spectra,
 126 MB at 2,000, 145 MB for the full 13,009. On `run2k-manygroups`, whose row
 groups are 10,000 rows instead of 1,048,576, the same pass peaks at 21 MB —
 which is what identifies the retained groups as the driver rather than a leak.
-Two groups of 1,048,576 rows materialise to about 42 MB; the remainder is
-Arrow's allocator high-water mark. The structure is bounded by construction: the
-cache holds two groups and cannot hold more.
+Two groups of 1,048,576 rows materialise to about 43 MB each; the transient
+peak is three, because eviction happens after the incoming group has been
+decoded. The structure is bounded by construction: the cache holds two groups
+and cannot hold more, and the last two stay resident for the life of the
+`Parquet` once a pass ends.
+
+The cache is mutex-guarded. Before it existed a `Parquet` was effectively
+read-only once opened, so two threads reading one file raced only inside Arrow;
+retaining decoded groups turned that into a torn-vector race on our own state.
+The lock is taken once per row group, not per entity, and is not measurable
+(0.105 ms/spectrum with and without).
 
 ## Two predictions that did not survive measurement
 

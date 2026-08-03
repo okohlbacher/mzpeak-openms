@@ -84,20 +84,16 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
                          const std::shared_ptr<arrow::Table>& table,
                          const std::map<std::string, std::string>& file_kv)
 {
-  // F9: resolve the entity-index leaf column index from the table schema
-  // instead of hardcoding 0.  All current tables have a single top-level
-  // struct whose first child is the entity index; DFS leaf numbering puts it
-  // at flat leaf 0.  Deriving it from the schema keeps this correct if the
-  // table structure ever gains a pre-index field.
-  int entity_index_leaf = 0;
-  if (table->schema()->num_fields() > 0) {
-    const auto& top = table->schema()->field(0);
-    if (top->type()->id() == arrow::Type::STRUCT) {
-      // First child of the first struct is the entity index.
-      // No non-struct fields precede it, so its flat Parquet leaf index is 0.
-      entity_index_leaf = 0;
-    }
-  }
+  // The entity index is DFS leaf 0 in every table this writer emits: a single
+  // top-level struct of primitives whose first child is the index.
+  //
+  // This is asserted, not derived.  An earlier version looked like a derivation
+  // -- it inspected the schema and then assigned 0 on every branch -- which
+  // read as a safeguard while being none.  If a table ever gains a field ahead
+  // of the index, or a nested group with more than one leaf, this must count
+  // leaves properly: declaring the WRONG column sorted is worse than declaring
+  // nothing, because a reader may believe it.
+  constexpr int entity_index_leaf = 0;
 
   parquet::WriterProperties::Builder props_builder;
   props_builder.compression(arrow::Compression::ZSTD);
