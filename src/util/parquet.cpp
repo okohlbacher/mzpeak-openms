@@ -118,11 +118,8 @@ struct Parquet::Impl {
   std::vector<std::pair<int32_t, std::shared_ptr<const Parquet::RowGroupBatches>>>
       cache_;
 
-  /// Guards cache_.  Before this cache existed a Parquet was effectively
-  /// read-only once opened, so two threads reading one file raced only inside
-  /// Arrow; now every query mutates this vector, which is a torn-vector race
-  /// rather than a merely unsupported one.  StatsIndex guards its own smaller
-  /// cache the same way.
+  /// Guards cache_ AND the decode, which shares one file position.  See
+  /// row_group().
   std::mutex cache_mutex_;
 
   // Shared by every planner over this file; see StatsIndex.
@@ -157,19 +154,31 @@ void Parquet::Impl::parse_schema()
 std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
-  {
-    std::lock_guard<std::mutex> guard(cache_mutex_);
-    for (const auto& [cached, batches] : cache_) {
-      if (cached == index) return batches;
-    }
+  // The lock is held across the DECODE as well as the bookkeeping.
+  //
+  // Guarding only the cache would leave the real hazard untouched: the decode
+  // reads through one parquet::arrow::FileReader whose source is a single
+  // seek-and-read handle (Util::ArrowFile_, and for an archive one zip_file_t
+  // driven by zip_fseek).  Two threads decoding different row groups would race
+  // on that file position, and Parquet pages carry no CRC by default, so the
+  // result is silently wrong rather than an error.
+  //
+  // The cost is real but the right way round: concurrent readers serialise on
+  // decode instead of corrupting each other, an uncontended lock costs nothing,
+  // and a thread that waits finds the group already cached rather than decoding
+  // it a second time.
+  std::lock_guard<std::mutex> guard(cache_mutex_);
 
-    // Evict BEFORE decoding, not after.  Holding the outgoing group while the
-    // incoming one is built makes the transient peak three groups where two
-    // suffice -- about 43 MB of a 1,048,576-row group, for no benefit: nothing
-    // reads the evicted entry between here and the insert below.  Anything
-    // still using it holds its own shared_ptr and is unaffected.
-    if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
+  for (const auto& [cached, batches] : cache_) {
+    if (cached == index) return batches;
   }
+
+  // Evict BEFORE decoding, not after.  Holding the outgoing group while the
+  // incoming one is built makes the transient peak three groups where two
+  // suffice -- about 21 MB for a 1,048,576-row group of three leaves -- for no
+  // benefit: nothing reads the evicted entry between here and the insert below,
+  // and anything still using it holds its own shared_ptr.
+  if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
 
   auto reader_result = reader_->GetRecordBatchReader({index});
   if (!reader_result.ok()) {
@@ -186,17 +195,6 @@ Parquet::Impl::row_group(int32_t index)
     batches->push_back(*maybe_batch);
   }
 
-  std::lock_guard<std::mutex> guard(cache_mutex_);
-
-  // Another thread may have decoded the same group while this one was working.
-  // Keep its copy rather than adding a second entry for the same index.
-  for (const auto& [cached, existing] : cache_) {
-    if (cached == index) return existing;
-  }
-
-  // Room was made above; evict again only if another thread filled it since.
-  while (cache_.size() >= kCachedGroups)
-    cache_.erase(cache_.begin());
   cache_.emplace_back(index, batches);
   return batches;
 }

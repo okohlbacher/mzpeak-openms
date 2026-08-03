@@ -321,8 +321,15 @@ and cannot hold more, and the last two stay resident for the life of the
 The cache is mutex-guarded. Before it existed a `Parquet` was effectively
 read-only once opened, so two threads reading one file raced only inside Arrow;
 retaining decoded groups turned that into a torn-vector race on our own state.
-The lock is taken once per row group, not per entity, and is not measurable
-(0.105 ms/spectrum with and without).
+The lock covers the decode as well as the bookkeeping, because the layer below
+is a single seek-and-read file position: two threads decoding different groups
+would race on it, and Parquet pages carry no CRC by default, so that corrupts
+silently rather than failing. Concurrent readers therefore serialise on decode
+instead of corrupting each other.
+
+It is taken once per entity, not once per row group — `Signals::select` builds a
+planner and an executor per entity, and each `execute` asks for every group it
+touches. Uncontended it is not measurable (0.105 ms/spectrum with and without).
 
 ## Two predictions that did not survive measurement
 
