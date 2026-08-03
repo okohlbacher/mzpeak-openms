@@ -74,6 +74,10 @@ struct Parquet::Impl {
       throw ParquetError(msg + status.ToString());
     }
 
+    // NOT set_use_threads(true): measured flat (8.83 vs 8.78 ms/spectrum over
+    // three runs each).  Arrow parallelises across COLUMNS within a read, and a
+    // point signal table has three leaves, so there is almost nothing to
+    // overlap.  Worth revisiting only for a file with many auxiliary arrays.
     std::unique_ptr<parquet::arrow::FileReader> reader;
     status = reader_builder.Build(&reader);
 

@@ -8,6 +8,7 @@ top-level directory of this repository.
 
 #include "mzpeak/util/executor.h"
 
+#include <algorithm>
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
 #include <arrow/result.h>
@@ -172,11 +173,23 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
   for (const auto& row_group : ranges) {
     int64_t row_group_start = 0;
 
+    // The last row any range of this group wants.  Everything after it is
+    // decoded and discarded, and for a query selecting one entity that is most
+    // of the group.  There is no row-range entry point in parquet-cpp's Arrow
+    // reader -- batches BEFORE the first range are unavoidable -- but the tail
+    // is free to skip.
+    int64_t wanted_end = 0;
+    for (const auto& range : row_group.second) {
+      wanted_end = std::max(wanted_end, range.offset + range.length);
+    }
+
     auto batch_reader =
         impl_->check("invalid batch reader",
                      impl_->reader_->GetRecordBatchReader({row_group.first}));
 
     for (auto batch_r : *batch_reader) {
+      if (row_group_start >= wanted_end) break;
+
       auto batch = impl_->check("invalid record batch", batch_r);
       int64_t rows = batch->num_rows();
 
