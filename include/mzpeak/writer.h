@@ -47,6 +47,103 @@ struct SpectrumData {
 };
 
 /**
+ * One chromatogram to be written.
+ *
+ * @note There is no `products` member.  An SRM/MRM transition's Q3 isolation
+ * window belongs in a product facet that no reference implementation writes and
+ * whose reader path is unimplemented, so writing a chromatogram whose type
+ * implies a product would produce a file that silently lacks the transition.
+ * The writer REJECTS those types rather than emitting one; see
+ * @ref write_run_directory.
+ */
+struct ChromatogramData {
+  /// Time values in SECONDS.  Stored as minutes, which the format expects; the
+  /// conversion happens in the writer so callers use one time base throughout.
+  std::vector<double> time;
+
+  std::vector<float> intensity;
+
+  /// MS:1000626 chromatogram type CURIE, e.g. "MS:1000235" (total ion current)
+  /// or "MS:1000812" (absorption chromatogram).  Empty is permitted but leaves
+  /// the chromatogram unidentifiable.
+  std::string chromatogram_type;
+
+  /// Unit CURIE for @ref intensity.  Defaults to detector counts; an optical
+  /// absorbance trace is UO:0000269 and a reader cannot tell them apart
+  /// afterwards without this.
+  std::string intensity_unit = "MS:1000131";
+
+  /// Scan polarity: 1 positive, -1 negative.  Absent means unknown -- unlike
+  /// the reference writer, which records 0 for unknown.
+  std::optional<int> polarity;
+
+  /// Native identifier; auto-generated ("chromatogram=N") when absent.
+  std::optional<std::string> id;
+};
+
+/**
+ * One UV/Vis (wavelength) spectrum to be written.
+ */
+struct WavelengthSpectrumData {
+  /// Wavelength values in NANOMETRES.
+  std::vector<float> wavelength;
+
+  std::vector<float> intensity;
+
+  /// Acquisition time in SECONDS; stored as minutes.
+  std::optional<double> time;
+
+  /// Unit CURIE for @ref intensity.  UV detectors commonly report absorbance
+  /// (UO:0000269) rather than detector counts.
+  std::string intensity_unit = "MS:1000131";
+
+  /// Native identifier; auto-generated ("wavelength_spectrum=N") when absent.
+  std::optional<std::string> id;
+};
+
+/**
+ * Everything one mzPeak archive holds.  A real run mixes entity types -- mass
+ * spectra alongside a TIC and a diode-array trace -- so they are written
+ * together rather than through one entry point per type.
+ */
+struct RunContents {
+  std::vector<SpectrumData> spectra;
+  std::vector<ChromatogramData> chromatograms;
+  std::vector<WavelengthSpectrumData> wavelength_spectra;
+};
+
+/**
+ * Write a whole run as an unpacked DIRECTORY.
+ *
+ * Emits only the members the contents require, plus `mzpeak_index.json`.
+ * Metadata uses the split (flat column + `column_mapping`) layout, which is
+ * what the current reference reader resolves through; the nested layout is
+ * readable but the reference cannot open it as metadata.
+ *
+ * Summary fields for wavelength spectra (lowest/highest observed wavelength,
+ * lambda max, base peak intensity, total ion current) are computed from the
+ * data actually written.  The reference writer derives its range from the
+ * unsorted input after sorting a copy for output, and seeds its maximum at
+ * zero so an all-negative absorbance spectrum records a maximum of 0; neither
+ * is reproduced here.
+ *
+ * @throws ParquetError on I/O or encoding errors, if any entity's parallel
+ *         arrays differ in length, or if a chromatogram's type implies an
+ *         SRM/MRM product selection this format cannot carry.
+ */
+void write_run_directory(const std::filesystem::path& dir,
+                         const RunContents& contents,
+                         const RunMetadata* run_metadata = nullptr);
+
+/**
+ * Write a whole run as a single ZIP ARCHIVE (`.mzpeak`), with STORED members
+ * as the specification mandates.  See @ref write_run_directory.
+ */
+void write_run_archive(const std::filesystem::path& zip_path,
+                       const RunContents& contents,
+                       const RunMetadata* run_metadata = nullptr);
+
+/**
  * Write a point-layout mzPeak file as an unpacked DIRECTORY.
  *
  * Produces, inside `dir`: `spectra_data.parquet` (point-layout profile

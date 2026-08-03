@@ -141,4 +141,97 @@ void write_spectra_metadata_facets(const std::string& dir,
 std::array<std::string, 3>
 spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows);
 
+/**
+ * One chromatogram's metadata row.
+ */
+struct ChromatogramMetaRow {
+  uint64_t index;
+  std::string id;
+  /// MS:1000626 chromatogram type CURIE (e.g. "MS:1000235" total ion current).
+  std::string chromatogram_type;
+  std::optional<int> polarity;
+  uint64_t number_of_data_points;
+};
+
+/**
+ * One wavelength spectrum's metadata row.
+ *
+ * `time` is MINUTES, as stored; the public writer converts from the seconds its
+ * callers use.  The observed-range and maximum fields are computed from the
+ * data actually written -- the reference writer derives them from the unsorted
+ * input after sorting a copy for output, and seeds its maximum at zero so an
+ * all-negative absorbance spectrum records a maximum of 0.
+ */
+struct WavelengthMetaRow {
+  uint64_t index;
+  std::string id;
+  std::optional<double> time;
+  uint64_t number_of_data_points;
+  std::optional<double> lowest_observed_wavelength;
+  std::optional<double> highest_observed_wavelength;
+  std::optional<double> lambda_max;
+  std::optional<float> base_peak_intensity;
+  std::optional<float> total_ion_current;
+};
+
+/**
+ * Write a point-layout chromatograms data table.
+ *
+ * Schema: a `point` struct of {chromatogram_index: uint64, time: float64,
+ * intensity: float32}.  @p time is in MINUTES, as the format stores it.
+ */
+void write_point_chromatograms_data(
+    const std::string& path,
+    const std::vector<uint64_t>& chromatogram_index,
+    const std::vector<double>& time,
+    const std::vector<float>& intensity,
+    const std::map<std::string, std::string>& file_kv);
+
+/// In-memory sibling of @ref write_point_chromatograms_data.
+std::string
+point_chromatograms_data_bytes(const std::vector<uint64_t>& chromatogram_index,
+                               const std::vector<double>& time,
+                               const std::vector<float>& intensity,
+                               const std::map<std::string, std::string>& file_kv);
+
+/**
+ * Write a point-layout wavelength-spectra data table.
+ *
+ * Schema: a `point` struct of {wavelength_spectrum_index: uint64,
+ * wavelength: float32, intensity: float32}.  Wavelength is float32 to match the
+ * reference layout; nanometre axes do not need more.
+ */
+void write_point_wavelength_data(const std::string& path,
+                                 const std::vector<uint64_t>& spectrum_index,
+                                 const std::vector<float>& wavelength,
+                                 const std::vector<float>& intensity,
+                                 const std::map<std::string, std::string>& file_kv);
+
+/// In-memory sibling of @ref write_point_wavelength_data.
+std::string
+point_wavelength_data_bytes(const std::vector<uint64_t>& spectrum_index,
+                            const std::vector<float>& wavelength,
+                            const std::vector<float>& intensity,
+                            const std::map<std::string, std::string>& file_kv);
+
+/// Write chromatograms_metadata.parquet (flat, split-layout columns).
+void write_chromatograms_metadata(const std::string& path,
+                                  const std::vector<ChromatogramMetaRow>& rows,
+                                  const std::map<std::string, std::string>& file_kv);
+
+/// In-memory sibling of @ref write_chromatograms_metadata.
+std::string
+chromatograms_metadata_bytes(const std::vector<ChromatogramMetaRow>& rows,
+                             const std::map<std::string, std::string>& file_kv);
+
+/// Write wavelength_spectra_metadata.parquet (flat, split-layout columns).
+void write_wavelength_metadata(const std::string& path,
+                               const std::vector<WavelengthMetaRow>& rows,
+                               const std::map<std::string, std::string>& file_kv);
+
+/// In-memory sibling of @ref write_wavelength_metadata.
+std::string
+wavelength_metadata_bytes(const std::vector<WavelengthMetaRow>& rows,
+                          const std::map<std::string, std::string>& file_kv);
+
 } // namespace MzPeak::Util

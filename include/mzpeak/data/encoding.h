@@ -247,6 +247,7 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
     // one to the preceding run.  The result stays monotonic and plausible, so
     // nothing downstream notices.  The spec is explicit that an entry must be
     // buffered before null filling.
+    note_unit(dim, entries[0].unit);
     concatenated<V>(field.value(), dim, v);
   } else if (std::ranges::all_of(entries, [](const auto& e) {
                return e.buffer_format == Schema::BufferFormat::Point;

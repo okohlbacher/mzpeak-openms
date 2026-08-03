@@ -166,6 +166,345 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
 }
 
 /******************************************************************************/
+// A file to be emitted, held as bytes.  Both the directory and archive writers
+// consume the same list, so an archive and an unpacked directory of the same
+// run differ only in how the bytes land.
+struct Member {
+  std::string name;
+  std::string bytes;
+};
+
+/******************************************************************************/
+// Chromatogram types whose defining feature is a product (Q3) selection.
+//
+// The product facet is specified but no reference implementation writes one and
+// the reference reader's product path is unimplemented, so a file claiming to
+// be an SRM trace would carry Q1 and silently lack the transition -- and still
+// look valid.  Refusing is the honest outcome; a caller who does not need Q3
+// can write the chromatogram under a type that does not promise one.
+//
+// Both spellings are listed: mzdata emits MS:1000472/MS:1000473 for SIM/SRM
+// while its own reader expects MS:1001472/MS:1001473.
+bool implies_product(const std::string& type)
+{
+  static constexpr std::string_view kProductBearing[] = {"MS:1001472", "MS:1001473",
+                                                         "MS:1000472", "MS:1000473"};
+  return std::ranges::find(kProductBearing, type) != std::end(kProductBearing);
+}
+
+/******************************************************************************/
+void validate_run(const RunContents& contents)
+{
+  validate(contents.spectra, "write_run");
+
+  for (std::size_t i = 0; i < contents.chromatograms.size(); ++i) {
+    const ChromatogramData& c = contents.chromatograms[i];
+    if (c.time.size() != c.intensity.size()) {
+      throw ParquetError("write_run: chromatogram " + std::to_string(i) +
+                         " has mismatched time/intensity lengths");
+    }
+    if (implies_product(c.chromatogram_type)) {
+      throw ParquetError(
+          "write_run: chromatogram " + std::to_string(i) + " has type '" +
+          c.chromatogram_type +
+          "', which selects a product (Q3) that this format cannot yet carry; "
+          "writing it would silently drop the transition");
+    }
+  }
+
+  for (std::size_t i = 0; i < contents.wavelength_spectra.size(); ++i) {
+    const WavelengthSpectrumData& w = contents.wavelength_spectra[i];
+    if (w.wavelength.size() != w.intensity.size()) {
+      throw ParquetError("write_run: wavelength spectrum " + std::to_string(i) +
+                         " has mismatched wavelength/intensity lengths");
+    }
+  }
+}
+
+/******************************************************************************/
+// One intensity unit per file: the coalesced multi-unit layout needs a column
+// per unit, which this writer does not emit.  Mixing them silently would label
+// absorbance as detector counts.
+const std::string& single_intensity_unit(const RunContents& contents,
+                                         bool chromatograms)
+{
+  static const std::string fallback = "MS:1000131";
+  const std::string* unit = nullptr;
+
+  auto check_one = [&](const std::string& u, const char* what, std::size_t i) {
+    if (unit == nullptr) {
+      unit = &u;
+    } else if (*unit != u) {
+      throw ParquetError(std::string("write_run: ") + what + " " +
+                         std::to_string(i) + " uses intensity unit '" + u +
+                         "' but an earlier one uses '" + *unit +
+                         "'; this writer emits a single intensity column per "
+                         "file and cannot carry both");
+    }
+  };
+
+  if (chromatograms) {
+    for (std::size_t i = 0; i < contents.chromatograms.size(); ++i)
+      check_one(contents.chromatograms[i].intensity_unit, "chromatogram", i);
+  } else {
+    for (std::size_t i = 0; i < contents.wavelength_spectra.size(); ++i)
+      check_one(contents.wavelength_spectra[i].intensity_unit, "wavelength spectrum",
+                i);
+  }
+  return unit ? *unit : fallback;
+}
+
+/******************************************************************************/
+// Flatten chromatograms into parallel point columns, converting the API's
+// seconds to the minutes the format stores, and emitting each chromatogram's
+// points in ascending time order so sorting_rank 0 holds.
+struct ChromatogramColumns {
+  std::vector<uint64_t> index;
+  std::vector<double> time;
+  std::vector<float> intensity;
+};
+
+ChromatogramColumns flatten_chromatograms(const std::vector<ChromatogramData>& in)
+{
+  ChromatogramColumns c;
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    std::vector<std::size_t> order(in[i].time.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return in[i].time[a] < in[i].time[b];
+    });
+    for (std::size_t k : order) {
+      c.index.push_back(static_cast<uint64_t>(i));
+      c.time.push_back(in[i].time[k] / 60.0); // seconds -> minutes
+      c.intensity.push_back(in[i].intensity[k]);
+    }
+  }
+  return c;
+}
+
+/******************************************************************************/
+struct WavelengthColumns {
+  std::vector<uint64_t> index;
+  std::vector<float> wavelength;
+  std::vector<float> intensity;
+};
+
+WavelengthColumns flatten_wavelength(const std::vector<WavelengthSpectrumData>& in)
+{
+  WavelengthColumns c;
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    std::vector<std::size_t> order(in[i].wavelength.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return in[i].wavelength[a] < in[i].wavelength[b];
+    });
+    for (std::size_t k : order) {
+      c.index.push_back(static_cast<uint64_t>(i));
+      c.wavelength.push_back(in[i].wavelength[k]);
+      c.intensity.push_back(in[i].intensity[k]);
+    }
+  }
+  return c;
+}
+
+/******************************************************************************/
+std::vector<Util::ChromatogramMetaRow>
+build_chromatogram_rows(const std::vector<ChromatogramData>& in)
+{
+  std::vector<Util::ChromatogramMetaRow> rows;
+  rows.reserve(in.size());
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    rows.push_back({/*index=*/static_cast<uint64_t>(i),
+                    /*id=*/in[i].id.value_or("chromatogram=" + std::to_string(i)),
+                    /*chromatogram_type=*/in[i].chromatogram_type,
+                    /*polarity=*/in[i].polarity,
+                    /*number_of_data_points=*/in[i].time.size()});
+  }
+  return rows;
+}
+
+/******************************************************************************/
+// Summary fields are computed from the values actually written.
+//
+// The maximum is a real maximum, seeded from the first element rather than from
+// zero: a baseline-subtracted absorbance spectrum is entirely negative, and a
+// zero-seeded maximum records lambda max 0 and base peak 0 for it -- plausible,
+// and wrong.  The observed range comes from the sorted output, not the input
+// order, for the same reason.
+std::vector<Util::WavelengthMetaRow>
+build_wavelength_rows(const std::vector<WavelengthSpectrumData>& in)
+{
+  std::vector<Util::WavelengthMetaRow> rows;
+  rows.reserve(in.size());
+
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    const WavelengthSpectrumData& w = in[i];
+
+    Util::WavelengthMetaRow row;
+    row.index = static_cast<uint64_t>(i);
+    row.id = w.id.value_or("wavelength_spectrum=" + std::to_string(i));
+    row.time =
+        w.time.has_value() ? std::optional<double>(*w.time / 60.0) : std::nullopt;
+    row.number_of_data_points = w.wavelength.size();
+
+    if (!w.wavelength.empty()) {
+      auto [lo, hi] = std::ranges::minmax_element(w.wavelength);
+      row.lowest_observed_wavelength = static_cast<double>(*lo);
+      row.highest_observed_wavelength = static_cast<double>(*hi);
+    }
+
+    if (!w.intensity.empty()) {
+      auto peak = std::ranges::max_element(w.intensity);
+      row.base_peak_intensity = *peak;
+      row.lambda_max = static_cast<double>(
+          w.wavelength[static_cast<std::size_t>(peak - w.intensity.begin())]);
+      row.total_ion_current =
+          std::accumulate(w.intensity.begin(), w.intensity.end(), 0.0f);
+    }
+
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+/******************************************************************************/
+// Encode every member of a run, and produce the matching mzpeak_index.json.
+std::vector<Member> build_run_members(const RunContents& contents,
+                                      const RunMetadata* run_metadata)
+{
+  using Schema::DataKind;
+  std::vector<Member> members;
+  std::vector<Util::IndexFileEntry> files;
+
+  // ---- mass spectra ------------------------------------------------------
+  const std::size_t total_spectra = contents.spectra.size();
+  if (!contents.spectra.empty()) {
+    if (any_profile(contents.spectra)) {
+      PointColumns data(flatten(contents.spectra, /*want_centroid=*/false));
+      members.push_back({"spectra_data.parquet",
+                         Util::point_spectra_data_bytes(
+                             data.spectrum_index, data.mz, data.intensity,
+                             point_file_kv(total_spectra, data.mz.size()))});
+      files.push_back({"spectra_data.parquet", "spectrum",
+                       Schema::data_kind_to_string(DataKind::DataArray)});
+    }
+    if (any_centroid(contents.spectra)) {
+      PointColumns peaks(flatten(contents.spectra, /*want_centroid=*/true));
+      members.push_back({"spectra_peaks.parquet",
+                         Util::point_spectra_data_bytes(
+                             peaks.spectrum_index, peaks.mz, peaks.intensity,
+                             point_file_kv(total_spectra, peaks.mz.size()))});
+      files.push_back({"spectra_peaks.parquet", "spectrum",
+                       Schema::data_kind_to_string(DataKind::Peaks)});
+    }
+
+    auto rows(build_metadata_rows(contents.spectra));
+    members.push_back(
+        {"spectra_metadata.parquet", Util::spectra_metadata_bytes(rows)});
+    files.push_back(
+        {"spectra_metadata.parquet",
+         "spectrum",
+         Schema::data_kind_to_string(DataKind::Metadata),
+         {{"ms level", "ms_level", "MS:1000511", ""},
+          {"scan polarity", "scan_polarity", "MS:1000465", ""},
+          {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
+          {"number of data points", "number_of_data_points", "MS:1003060", ""},
+          {"number of peaks", "number_of_peaks", "MS:1003059", ""}}});
+
+    std::array<std::string, 3> facets(Util::spectra_metadata_facet_bytes(rows));
+    members.push_back({"spectra_metadata_scans.parquet", std::move(facets[0])});
+    members.push_back({"spectra_metadata_precursors.parquet", std::move(facets[1])});
+    members.push_back(
+        {"spectra_metadata_selected_ions.parquet", std::move(facets[2])});
+    files.push_back(
+        {"spectra_metadata_scans.parquet",
+         "spectrum",
+         Schema::data_kind_to_string(DataKind::Scans),
+         {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
+    files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
+                     Schema::data_kind_to_string(DataKind::Precursors)});
+    files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
+                     Schema::data_kind_to_string(DataKind::SelectedIons)});
+  }
+
+  // ---- chromatograms -----------------------------------------------------
+  if (!contents.chromatograms.empty()) {
+    const std::string unit(single_intensity_unit(contents, /*chromatograms=*/true));
+    ChromatogramColumns c(flatten_chromatograms(contents.chromatograms));
+
+    members.push_back(
+        {"chromatograms_data.parquet",
+         Util::point_chromatograms_data_bytes(
+             c.index, c.time, c.intensity,
+             {{"chromatogram_array_index",
+               Util::point_chromatograms_array_index_json(unit)},
+              {"chromatogram_count", std::to_string(contents.chromatograms.size())},
+              {"chromatogram_data_point_count", std::to_string(c.time.size())}})});
+    files.push_back({"chromatograms_data.parquet", "chromatogram",
+                     Schema::data_kind_to_string(DataKind::DataArray)});
+
+    members.push_back({"chromatograms_metadata.parquet",
+                       Util::chromatograms_metadata_bytes(
+                           build_chromatogram_rows(contents.chromatograms),
+                           {{"chromatogram_count",
+                             std::to_string(contents.chromatograms.size())}})});
+    files.push_back(
+        {"chromatograms_metadata.parquet",
+         "chromatogram",
+         Schema::data_kind_to_string(DataKind::Metadata),
+         {{"chromatogram type", "chromatogram_type", "MS:1000626", ""},
+          {"scan polarity", "scan_polarity", "MS:1000465", ""},
+          {"number of data points", "number_of_data_points", "MS:1003060", ""}}});
+  }
+
+  // ---- wavelength spectra ------------------------------------------------
+  if (!contents.wavelength_spectra.empty()) {
+    const std::string unit(single_intensity_unit(contents, /*chromatograms=*/false));
+    WavelengthColumns w(flatten_wavelength(contents.wavelength_spectra));
+    const std::size_t count = contents.wavelength_spectra.size();
+
+    members.push_back({"wavelength_spectra_data.parquet",
+                       Util::point_wavelength_data_bytes(
+                           w.index, w.wavelength, w.intensity,
+                           {{"wavelength_spectrum_array_index",
+                             Util::point_wavelength_array_index_json(unit)},
+                            {"wavelength_spectrum_count", std::to_string(count)},
+                            {"wavelength_spectrum_data_point_count",
+                             std::to_string(w.wavelength.size())}})});
+    files.push_back({"wavelength_spectra_data.parquet", "wavelength_spectrum",
+                     Schema::data_kind_to_string(DataKind::DataArray)});
+
+    members.push_back({"wavelength_spectra_metadata.parquet",
+                       Util::wavelength_metadata_bytes(
+                           build_wavelength_rows(contents.wavelength_spectra),
+                           {{"wavelength_spectrum_count", std::to_string(count)}})});
+    files.push_back(
+        {"wavelength_spectra_metadata.parquet",
+         "wavelength_spectrum",
+         Schema::data_kind_to_string(DataKind::Metadata),
+         {{"number of data points", "number_of_data_points", "MS:1003060", ""},
+          {"lowest observed wavelength", "lowest_observed_wavelength", "MS:1000619",
+           "UO:0000018"},
+          {"highest observed wavelength", "highest_observed_wavelength",
+           "MS:1000618", "UO:0000018"},
+          {"lambda max", "lambda_max", "MS:1003812", "UO:0000018"},
+          {"base peak intensity", "base_peak_intensity", "MS:1000505", ""},
+          {"total ion current", "total_ion_current", "MS:1000285", ""}}});
+  }
+
+  // Run-level metadata goes in unconditionally.  The reference writer copies it
+  // only in its chromatogram close path, so a wavelength-only archive can lose
+  // the version, CV list and run description entirely.
+  std::string index_json(
+      run_metadata != nullptr
+          ? Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json())
+          : Util::mzpeak_index_json(files, "0.9.0"));
+  members.push_back({"mzpeak_index.json", std::move(index_json)});
+
+  return members;
+}
+
+/******************************************************************************/
 // Add a STORED (uncompressed) member to a zip archive from an in-memory
 // buffer.  The buffer must outlive zip_close (libzip reads the source
 // lazily), so callers keep the backing std::string in scope.
@@ -379,6 +718,86 @@ void write_spectra_archive(const fs::path& zip_path,
                            const RunMetadata& metadata)
 {
   write_spectra_archive_impl(zip_path, spectra, &metadata);
+}
+
+/******************************************************************************/
+void write_run_directory(const fs::path& dir,
+                         const RunContents& contents,
+                         const RunMetadata* run_metadata)
+{
+  validate_run(contents);
+
+  fs::path tmp_dir = dir;
+  tmp_dir += ".tmp";
+
+  try {
+    fs::create_directories(tmp_dir);
+  } catch (const fs::filesystem_error& e) {
+    throw ParquetError(std::string("write_run_directory: ") + e.what());
+  }
+
+  try {
+    for (const Member& member : build_run_members(contents, run_metadata)) {
+      std::ofstream out(tmp_dir / member.name, std::ios::binary);
+      if (!out) {
+        throw ParquetError("cannot open for writing: " +
+                           (tmp_dir / member.name).string());
+      }
+      out.write(member.bytes.data(),
+                static_cast<std::streamsize>(member.bytes.size()));
+      out.close();
+      if (!out) {
+        throw ParquetError("error writing: " + (tmp_dir / member.name).string());
+      }
+    }
+
+    // Remove any existing target before the atomic rename (POSIX rename
+    // returns ENOTEMPTY for non-empty directories).
+    if (fs::exists(dir)) fs::remove_all(dir);
+    fs::rename(tmp_dir, dir);
+  } catch (...) {
+    if (fs::exists(tmp_dir)) fs::remove_all(tmp_dir);
+    throw;
+  }
+}
+
+/******************************************************************************/
+void write_run_archive(const fs::path& zip_path,
+                       const RunContents& contents,
+                       const RunMetadata* run_metadata)
+{
+  validate_run(contents);
+
+  // The member bytes back the libzip sources and MUST stay alive until
+  // zip_close returns.
+  std::vector<Member> members(build_run_members(contents, run_metadata));
+
+  int errnum = 0;
+  zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
+  if (archive == nullptr) {
+    zip_error_t error;
+    zip_error_init_with_code(&error, errnum);
+    std::string msg("write_run_archive: failed to create archive " +
+                    zip_path.string() + ": " + zip_error_strerror(&error));
+    zip_error_fini(&error);
+    throw ParquetError(msg);
+  }
+
+  try {
+    for (const Member& member : members) {
+      add_stored_member(archive, member.name.c_str(), member.bytes);
+    }
+  } catch (...) {
+    zip_discard(archive);
+    throw;
+  }
+
+  if (zip_close(archive) != 0) {
+    std::string msg("write_run_archive: failed to finalize archive " +
+                    zip_path.string() + ": " + zip_strerror(archive));
+    zip_discard(archive);
+    throw ParquetError(msg);
+  }
 }
 
 } // namespace MzPeak
