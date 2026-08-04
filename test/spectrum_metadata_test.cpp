@@ -26,9 +26,14 @@ directory of this repository.
 #define BOOST_TEST_MODULE SpectrumMetadata
 #include <boost/test/included/unit_test.hpp>
 
+#include <boost/json.hpp>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/open.h"
 #include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/spectra.h"
@@ -743,4 +748,58 @@ BOOST_AUTO_TEST_CASE(files_without_a_calibration_report_none)
   auto spectra = index.spectra();
   auto s = spectra[0];
   BOOST_TEST(s.mz().size() == 13589u);
+}
+
+/******************************************************************************/
+// The declared transform is checked, not just the coefficients.
+//
+// A real Bruker timsTOF archive states its calibration as
+//   {"a": 9.999541689497574, "b": 4.9255392623237526e-05,
+//    "mz_from_tof": "(a + b*tof)^2", "tof_encoding": "absolute",
+//    "codec": "ims-compact"}
+// -- which is the transform this reader implements.  A file naming a DIFFERENT
+// one must be refused: its coefficients would be fed to the wrong formula and
+// every m/z would come out wrong while staying entirely plausible.
+BOOST_AUTO_TEST_CASE(an_unimplemented_tof_transform_is_refused)
+{
+  namespace fs = std::filesystem;
+
+  const fs::path source("../test/files/ims_compact.dir");
+  const fs::path scratch(fs::temp_directory_path() / "mzp-test-ims-transform");
+  fs::remove_all(scratch);
+  fs::copy(source, scratch, fs::copy_options::recursive);
+
+  const fs::path index_path(scratch / "mzpeak_index.json");
+  std::string json;
+  {
+    std::ifstream in(index_path, std::ios::binary);
+    json.assign(std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+  }
+
+  // As written, the fixture declares the transform we implement and opens.
+  BOOST_CHECK_NO_THROW(MzPeak::open(scratch));
+
+  // Claim a transform we do not implement, keeping the same coefficients.
+  auto root = boost::json::parse(json).as_object();
+  root["metadata"].as_object()["ims_calibration"].as_object()["mz_from_tof"] =
+      "a + b*tof*tof";
+  {
+    std::ofstream out(index_path, std::ios::binary);
+    out << boost::json::serialize(root);
+  }
+  BOOST_CHECK_THROW(MzPeak::open(scratch), MzPeak::JsonError);
+
+  // A non-absolute TOF encoding is refused for the same reason.
+  root["metadata"].as_object()["ims_calibration"].as_object()["mz_from_tof"] =
+      "(a + b*tof)^2";
+  root["metadata"].as_object()["ims_calibration"].as_object()["tof_encoding"] =
+      "delta";
+  {
+    std::ofstream out(index_path, std::ios::binary);
+    out << boost::json::serialize(root);
+  }
+  BOOST_CHECK_THROW(MzPeak::open(scratch), MzPeak::JsonError);
+
+  fs::remove_all(scratch);
 }

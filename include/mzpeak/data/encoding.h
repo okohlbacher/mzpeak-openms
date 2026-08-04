@@ -465,6 +465,22 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
       encoding_entry = &e;
       break;
     case BufferFormat::ChunkSecondary:
+      // Several secondary columns of one dimension is the chunked equivalent
+      // of the coalesced point layout -- the same logical array split across
+      // columns that may differ in UNIT, each null where the others have
+      // values.  The point path merges those; this one has only ever kept the
+      // last, which returns one entity's values under another's unit.
+      //
+      // Refused rather than merged: no bundled fixture has the shape, so a
+      // merge here would be an unexercised guess, and the failure it replaces
+      // is silent.  The point layout handles the case today.
+      if (secondary_entry != nullptr && secondary_entry->unit != e.unit) {
+        throw ParquetError(
+            "dimension '" + dim.name +
+            "' has chunked secondary columns in more than one unit ('" +
+            secondary_entry->unit + "' and '" + e.unit +
+            "'); this reader cannot merge them");
+      }
       secondary_entry = &e;
       break;
     case BufferFormat::ChunkTransform:

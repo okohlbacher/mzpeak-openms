@@ -8,8 +8,10 @@ top-level directory of this repository.
 
 #include "mzpeak/spectrum.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -62,6 +64,24 @@ void Spectrum::decode_() const
     // so that query silently produced a garbage slice and a corrupt array.
     decoder_type decoder(signals_, std::move(slice),
                          Util::DeltaEstimator<double>(metadata().mz_delta_model));
+
+    // Refuse a role stored in two physical types rather than concatenating it.
+    // The array index groups on data type, so a file holding intensity as both
+    // float32 and float64 presents two Intensity dimensions.  The cardinality
+    // checks below would catch some of those, but only after the fact and with
+    // a message about counts rather than about the cause -- and a doubled
+    // mobility array passes them entirely.
+    auto only_one = [this](Schema::PSI::ArrayType role, const char* what) {
+      const std::size_t count = std::ranges::count_if(
+          dims_, [role](const auto& d) { return d.array_type == role; });
+      if (count > 1) {
+        throw ParquetError("spectrum " + std::to_string(index_) + ": the " + what +
+                           " array is stored in more than one physical type; "
+                           "this reader cannot merge them");
+      }
+    };
+    only_one(Schema::PSI::ArrayType::Mz, "m/z");
+    only_one(Schema::PSI::ArrayType::Intensity, "intensity");
 
     // The ims-compact layout stores no m/z array: a non-standard `tof` column
     // stands in for it and m/z is reconstructed from the index calibration.

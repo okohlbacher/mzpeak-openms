@@ -8,8 +8,11 @@ directory of this repository.
 
 #include "mzpeak/wavelength_spectrum.h"
 
+#include <algorithm>
+#include <ranges>
 #include <vector>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/util/delta_estimator.h"
 
@@ -28,6 +31,20 @@ WavelengthSpectrum::WavelengthSpectrum(
     , intensity_()
     , md_map_(std::move(md_map))
 {
+  // See Chromatogram: a role stored in two physical types would otherwise be
+  // concatenated into one plausible-looking vector.
+  auto only_one = [&dims](Schema::PSI::ArrayType role, const char* what) {
+    const std::size_t count = std::ranges::count_if(
+        dims, [role](const auto& d) { return d.array_type == role; });
+    if (count > 1) {
+      throw ParquetError(std::string("wavelength spectrum: the ") + what +
+                         " array is stored in more than one physical type; "
+                         "this reader cannot merge them");
+    }
+  };
+  only_one(Schema::PSI::ArrayType::ElectromagneticRadiation, "wavelength");
+  only_one(Schema::PSI::ArrayType::Intensity, "intensity");
+
   for (auto& dim : dims) {
     if (dim.array_type == Schema::PSI::ArrayType::ElectromagneticRadiation) {
       decoder_.decimal(dim, wavelength_);

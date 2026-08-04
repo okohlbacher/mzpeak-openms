@@ -49,6 +49,39 @@ spectrum_column_from_table(const std::shared_ptr<arrow::Table>& table)
   return table->GetColumnByName("spectrum");
 }
 
+/// A facet's rows together with the index entry that describes its columns.
+///
+/// Carried as one value so that every accessor can consult `column_mapping`
+/// without threading a second argument through seventy-odd call sites.  The
+/// pointer indirections make it a drop-in for the StructArray it wraps.
+struct Facet {
+  std::shared_ptr<arrow::StructArray> array;
+
+  /// The index's entry for the file this facet came from, or null when the
+  /// caller has none.  Only used to resolve a column by CV accession.
+  const Schema::File* file = nullptr;
+
+  const arrow::StructArray* operator->() const { return array.get(); }
+  const arrow::StructArray& operator*() const { return *array; }
+  explicit operator bool() const { return array != nullptr; }
+};
+
+/// Recover the CV accession a caller encoded in a field name, e.g.
+/// "MS_1000016_scan_start_time_unit_UO_0000031" -> "MS:1000016".
+std::optional<std::string> accession_of(std::string_view name)
+{
+  if (name.size() < 4) return std::nullopt;
+  if (name.compare(0, 3, "MS_") != 0 && name.compare(0, 3, "UO_") != 0) {
+    return std::nullopt;
+  }
+  const std::size_t end = name.find('_', 3);
+  if (end == std::string_view::npos) return std::nullopt;
+
+  std::string accession(name.substr(0, end));
+  accession[2] = ':';
+  return accession;
+}
+
 /// Resolve a child field by name, tolerating the newer flat column naming.
 ///
 /// Older writers encode the CV term in the column name
@@ -58,9 +91,10 @@ spectrum_column_from_table(const std::shared_ptr<arrow::Table>& table)
 /// resolve here: exact match first, then the mechanically de-prefixed and
 /// de-suffixed form, then the handful of genuine renames that transformation
 /// cannot reach.
-std::shared_ptr<arrow::Array> resolve_field(const arrow::StructArray& s,
+std::shared_ptr<arrow::Array> resolve_field(const Facet& facet,
                                             std::string_view name)
 {
+  const arrow::StructArray& s = *facet;
   if (auto f = s.GetFieldByName(std::string(name))) return f;
 
   std::string plain(name);
@@ -106,6 +140,28 @@ std::shared_ptr<arrow::Array> resolve_field(const arrow::StructArray& s,
     }
   }
 
+  // Last resort: ask the index which column carries this CV term.
+  //
+  // Everything above guesses at the column NAME.  A writer is free to call the
+  // column anything it likes and declare the binding in `column_mapping`
+  // instead -- that is what the mapping is for, and it is the only way to find
+  // such a column.  The reference writer's plain names happen to fall out of
+  // the transformation above, which is why this was never reached and never
+  // missed.
+  if (facet.file != nullptr) {
+    if (auto accession = accession_of(name)) {
+      if (auto path = facet.file->path_for(*accession)) {
+        // A mapping path may be dotted (`isolation_window.target`); the facet
+        // is already the struct that owns the leaf, so take the last component.
+        std::string_view leaf(*path);
+        if (auto dot = leaf.rfind('.'); dot != std::string_view::npos) {
+          leaf.remove_prefix(dot + 1);
+        }
+        if (auto f = s.GetFieldByName(std::string(leaf))) return f;
+      }
+    }
+  }
+
   return nullptr;
 }
 
@@ -144,10 +200,9 @@ struct_from_table(const std::shared_ptr<arrow::Table>& table)
 /// Optional integer field of any stored width (uint8/int8/uint64/...),
 /// returned as the caller's integer type T.
 template <typename T>
-std::optional<T>
-opt_int(const std::shared_ptr<arrow::StructArray>& s, const char* name, int64_t row)
+std::optional<T> opt_int(const Facet& s, const char* name, int64_t row)
 {
-  auto field(resolve_field(*s, name));
+  auto field(resolve_field(s, name));
   if (!field || field->IsNull(row)) return std::nullopt;
   switch (field->type_id()) {
   case arrow::Type::UINT8:
@@ -180,35 +235,52 @@ opt_int(const std::shared_ptr<arrow::StructArray>& s, const char* name, int64_t 
 }
 
 /// Optional float64 field.
-std::optional<double> opt_double(const std::shared_ptr<arrow::StructArray>& s,
-                                 const char* name,
-                                 int64_t row)
+/// Optional real-valued field, whatever width the writer chose.
+///
+/// Accepting only the exact Arrow type the reference writer happens to emit
+/// makes a perfectly valid file read as null: the specification permits any
+/// promoted numeric type, so a producer writing an isolation-window target as
+/// float64 where the reference writes float32 loses it silently.  Integers are
+/// accepted too -- a whole-numbered quantity is legitimately stored that way.
+std::optional<double> opt_double(const Facet& s, const char* name, int64_t row)
 {
-  auto field(resolve_field(*s, name));
+  auto field(resolve_field(s, name));
   if (!field || field->IsNull(row)) return std::nullopt;
-  if (field->type_id() != arrow::Type::DOUBLE) return std::nullopt;
-  return std::static_pointer_cast<arrow::DoubleArray>(field)->Value(row);
+
+  switch (field->type_id()) {
+  case arrow::Type::DOUBLE:
+    return std::static_pointer_cast<arrow::DoubleArray>(field)->Value(row);
+  case arrow::Type::FLOAT:
+    return static_cast<double>(
+        std::static_pointer_cast<arrow::FloatArray>(field)->Value(row));
+  case arrow::Type::HALF_FLOAT:
+    return std::nullopt; // no lossless path, and nothing emits it
+  default:
+    break;
+  }
+  // Fall back to the integer widths, which opt_int already understands.
+  if (auto whole = opt_int<int64_t>(s, name, row)) {
+    return static_cast<double>(*whole);
+  }
+  return std::nullopt;
 }
 
 /// Optional float32 field.
-std::optional<float> opt_float(const std::shared_ptr<arrow::StructArray>& s,
-                               const char* name,
-                               int64_t row)
+/// Optional real-valued field narrowed to float.  See @ref opt_double for why
+/// the stored width is not assumed.
+std::optional<float> opt_float(const Facet& s, const char* name, int64_t row)
 {
-  auto field(resolve_field(*s, name));
-  if (!field || field->IsNull(row)) return std::nullopt;
-  if (field->type_id() != arrow::Type::FLOAT) return std::nullopt;
-  return std::static_pointer_cast<arrow::FloatArray>(field)->Value(row);
+  auto value = opt_double(s, name, row);
+  if (!value) return std::nullopt;
+  return static_cast<float>(*value);
 }
 
 /// Optional string field (large_string or string); nullopt if absent/null.
 /// Distinct from get_string (which flattens null to empty) because ion-mobility
 /// type must preserve the null-vs-empty distinction.
-std::optional<std::string> opt_string(const std::shared_ptr<arrow::StructArray>& s,
-                                      const char* name,
-                                      int64_t row)
+std::optional<std::string> opt_string(const Facet& s, const char* name, int64_t row)
 {
-  auto field(resolve_field(*s, name));
+  auto field(resolve_field(s, name));
   if (!field || field->IsNull(row)) return std::nullopt;
   if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
     return large->GetString(row);
@@ -220,11 +292,9 @@ std::optional<std::string> opt_string(const std::shared_ptr<arrow::StructArray>&
 }
 
 /// String field (large_string or string); empty string if absent/null.
-std::string get_string(const std::shared_ptr<arrow::StructArray>& s,
-                       const char* name,
-                       int64_t row)
+std::string get_string(const Facet& s, const char* name, int64_t row)
 {
-  auto field(resolve_field(*s, name));
+  auto field(resolve_field(s, name));
   if (!field || field->IsNull(row)) return {};
   if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
     return large->GetString(row);
@@ -282,7 +352,7 @@ std::string format_double_canonical(double v)
 /// Security note (T-01-01): GetFieldByName returns nullptr for an unknown
 /// name — every arm is null-checked before use, so a wrong child name
 /// silently skips that arm rather than producing UB.
-CvParam extract_one_cv_param(const arrow::StructArray& items, int64_t k)
+CvParam extract_one_cv_param(const Facet& items, int64_t k)
 {
   CvParam p;
 
@@ -310,6 +380,7 @@ CvParam extract_one_cv_param(const arrow::StructArray& items, int64_t k)
   if (val_field && !val_field->IsNull(k)) {
     auto val_struct = std::dynamic_pointer_cast<arrow::StructArray>(val_field);
     if (val_struct) {
+      const Facet value{val_struct, items.file};
       // "string" arm — large_string; check first (most common in fixtures).
       if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
               val_struct->GetFieldByName("string"))) {
@@ -357,14 +428,13 @@ CvParam extract_one_cv_param(const arrow::StructArray& items, int64_t k)
 /// Mirrors the offset/length idiom already used by read_mz_delta_models.
 /// Each item body is handled by extract_one_cv_param so plans 01-02/01-03
 /// can reuse that helper for lone-CvParam structs (not lists).
-std::vector<CvParam>
-read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
-                         const char* list_field_name,
-                         int64_t row)
+std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
+                                              const char* list_field_name,
+                                              int64_t row)
 {
   std::vector<CvParam> out;
 
-  auto list_col = resolve_field(*parent, list_field_name);
+  auto list_col = resolve_field(parent, list_field_name);
   if (!list_col || list_col->IsNull(row)) return out;
 
   auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(list_col);
@@ -377,7 +447,7 @@ read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
   int64_t length = la->value_length(row);
   out.reserve(static_cast<std::size_t>(length));
   for (int64_t k = 0; k < length; ++k) {
-    out.push_back(extract_one_cv_param(*items, begin + k));
+    out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
   }
   return out;
 }
@@ -387,23 +457,26 @@ read_cv_params_from_list(const std::shared_ptr<arrow::StructArray>& parent,
 /// Older writers nest each facet as a struct column of the primary table; newer
 /// ones give it a flat file of its own.  Both reduce to "a list of structs with
 /// these child names", so every pass below is written once.
-std::vector<std::shared_ptr<arrow::StructArray>>
-facets_of(const std::shared_ptr<arrow::Table>& table,
-          const char* nested,
-          const std::shared_ptr<arrow::Table>& separate)
+std::vector<Facet> facets_of(const std::shared_ptr<arrow::Table>& table,
+                             const char* nested,
+                             const std::shared_ptr<arrow::Table>& separate,
+                             const Schema::File* nested_file = nullptr,
+                             const Schema::File* separate_file = nullptr)
 {
-  std::vector<std::shared_ptr<arrow::StructArray>> facets;
+  std::vector<Facet> facets;
   if (table) {
     if (auto col = table->GetColumnByName(nested)) {
       for (const auto& chunk : col->chunks()) {
         if (chunk->type_id() != arrow::Type::STRUCT) continue;
-        facets.push_back(std::static_pointer_cast<arrow::StructArray>(chunk));
+        facets.push_back(
+            Facet{std::static_pointer_cast<arrow::StructArray>(chunk), nested_file});
       }
       return facets;
     }
   }
   if (separate) {
-    if (auto st = struct_from_table(separate)) facets.push_back(st);
+    if (auto st = struct_from_table(separate))
+      facets.push_back(Facet{st, separate_file});
   }
   return facets;
 }
@@ -418,9 +491,8 @@ facets_of(const std::shared_ptr<arrow::Table>& table,
 /// H1: join by source_index VALUE, NEVER by row position — the facet has its
 /// own row count and ordering, and chunk boundaries differ per column.
 template <typename Entity>
-void attach_precursors(
-    std::map<uint64_t, Entity>& out,
-    const std::vector<std::shared_ptr<arrow::StructArray>>& facets)
+void attach_precursors(std::map<uint64_t, Entity>& out,
+                       const std::vector<Facet>& facets)
 {
   for (const auto& prec : facets) {
     for (int64_t r = 0; r < prec->length(); ++r) {
@@ -446,28 +518,29 @@ void attach_precursors(
       pi.precursor_id = get_string(prec, "precursor_id", r);
 
       // Isolation window: nested struct field.
-      auto iw_field = resolve_field(*prec, "isolation_window");
+      auto iw_field = resolve_field(prec, "isolation_window");
       if (iw_field && !iw_field->IsNull(r)) {
         auto iw_struct = std::dynamic_pointer_cast<arrow::StructArray>(iw_field);
         if (iw_struct) {
+          const Facet iw{iw_struct, prec.file};
           pi.isolation_window.target_mz =
-              opt_float(iw_struct, "MS_1000827_isolation_window_target_mz", r);
+              opt_float(iw, "MS_1000827_isolation_window_target_mz", r);
           pi.isolation_window.lower_offset =
-              opt_float(iw_struct, "MS_1000828_isolation_window_lower_offset", r);
+              opt_float(iw, "MS_1000828_isolation_window_lower_offset", r);
           pi.isolation_window.upper_offset =
-              opt_float(iw_struct, "MS_1000829_isolation_window_upper_offset", r);
+              opt_float(iw, "MS_1000829_isolation_window_upper_offset", r);
           pi.isolation_window.parameters =
-              read_cv_params_from_list(iw_struct, "parameters", r);
+              read_cv_params_from_list(iw, "parameters", r);
         }
       }
 
       // Activation: nested struct carrying a parameters list.
-      auto act_field = resolve_field(*prec, "activation");
+      auto act_field = resolve_field(prec, "activation");
       if (act_field && !act_field->IsNull(r)) {
         auto act_struct = std::dynamic_pointer_cast<arrow::StructArray>(act_field);
         if (act_struct) {
-          pi.activation_parameters =
-              read_cv_params_from_list(act_struct, "parameters", r);
+          const Facet act{act_struct, prec.file};
+          pi.activation_parameters = read_cv_params_from_list(act, "parameters", r);
         }
       }
 
@@ -484,9 +557,8 @@ void attach_precursors(
 /// attached to an arbitrary precursor — with several precursors per entity,
 /// `precursors.back()` silently mis-assigns the transition.
 template <typename Entity>
-void attach_selected_ions(
-    std::map<uint64_t, Entity>& out,
-    const std::vector<std::shared_ptr<arrow::StructArray>>& facets)
+void attach_selected_ions(std::map<uint64_t, Entity>& out,
+                          const std::vector<Facet>& facets)
 {
   for (const auto& si : facets) {
     for (int64_t r = 0; r < si->length(); ++r) {
@@ -558,10 +630,10 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
 
   for (const auto& chunk : col->chunks()) {
     if (chunk->type_id() != arrow::Type::STRUCT) continue;
-    auto spectrum(std::static_pointer_cast<arrow::StructArray>(chunk));
+    const Facet spectrum{std::static_pointer_cast<arrow::StructArray>(chunk)};
 
-    auto index_field(resolve_field(*spectrum, "index"));
-    auto model_field(resolve_field(*spectrum, "mz_delta_model"));
+    auto index_field(resolve_field(spectrum, "index"));
+    auto model_field(resolve_field(spectrum, "mz_delta_model"));
     if (!index_field || !model_field) continue;
     if (index_field->type_id() != arrow::Type::UINT64) continue;
 
@@ -614,6 +686,10 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   std::map<uint64_t, SpectrumMetadata> out;
   if (!files.primary) return out;
 
+  // Each facet resolves its columns through its OWN index entry: the mapping
+  // that names a column lives with the file that holds it.
+  const Schema::File* primary_file = &files.primary->index_file();
+
   // Read the primary table ONCE; when the facets are nested struct columns they
   // all come from it.  A split-layout file additionally reads one small table
   // per facet, each joined by `source_index` VALUE (never by row position — the
@@ -631,26 +707,33 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // Each facet is either a struct column of this one table (older writers) or a
   // flat table of its own (newer writers).  Normalise both to a list of
   // StructArrays so the passes below are identical for either layout.
-  auto facets_for = [&table](const char* nested,
-                             const std::shared_ptr<arrow::Table>& separate) {
-    return facets_of(table, nested, separate);
+  auto file_of = [](Parquet* p) -> const Schema::File* {
+    return p ? &p->index_file() : nullptr;
+  };
+  auto facets_for = [&](const char* nested,
+                        const std::shared_ptr<arrow::Table>& separate,
+                        Parquet* separate_source) {
+    return facets_of(table, nested, separate, primary_file,
+                     file_of(separate_source));
   };
 
-  std::vector<std::shared_ptr<arrow::StructArray>> spectrum_facets;
+  std::vector<Facet> spectrum_facets;
   if (auto col = spectrum_column_from_table(table)) {
     for (const auto& chunk : col->chunks()) {
       if (chunk->type_id() != arrow::Type::STRUCT) continue;
-      spectrum_facets.push_back(std::static_pointer_cast<arrow::StructArray>(chunk));
+      spectrum_facets.push_back(
+          Facet{std::static_pointer_cast<arrow::StructArray>(chunk), primary_file});
     }
   } else if (table->GetColumnByName("index")) {
     // Flat layout: the primary table IS the spectrum facet.
-    if (auto st = struct_from_table(table)) spectrum_facets.push_back(st);
+    if (auto st = struct_from_table(table))
+      spectrum_facets.push_back(Facet{st, primary_file});
   } else {
     return out; // not a spectrum metadata table
   }
 
   for (const auto& spectrum : spectrum_facets) {
-    auto index_field(resolve_field(*spectrum, "index"));
+    auto index_field(resolve_field(spectrum, "index"));
     if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
     auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
 
@@ -696,7 +779,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
       m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
       // Delta model for null-marking reconstruction (large_list<double>).
-      if (auto dm = resolve_field(*spectrum, "mz_delta_model")) {
+      if (auto dm = resolve_field(spectrum, "mz_delta_model")) {
         if (!dm->IsNull(r)) {
           auto ll = std::dynamic_pointer_cast<arrow::LargeListArray>(dm);
           auto sl = std::dynamic_pointer_cast<arrow::ListArray>(dm);
@@ -730,7 +813,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           declared_count = *cnt;
         }
 
-        auto aux_field = resolve_field(*spectrum, "auxiliary_arrays");
+        auto aux_field = resolve_field(spectrum, "auxiliary_arrays");
         if (aux_field && !aux_field->IsNull(r)) {
           auto aux_list =
               std::dynamic_pointer_cast<arrow::LargeListArray>(aux_field);
@@ -752,20 +835,22 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
                   auto name_struct =
                       std::dynamic_pointer_cast<arrow::StructArray>(name_field);
                   if (name_struct) {
-                    aa.name = extract_one_cv_param(*name_struct, begin + k);
+                    aa.name = extract_one_cv_param(Facet{name_struct, spectrum.file},
+                                                   begin + k);
                   }
                 }
 
                 // Scalar string fields.
-                aa.data_type = get_string(aux_items, "data_type", begin + k);
-                aa.compression = get_string(aux_items, "compression", begin + k);
-                aa.unit = get_string(aux_items, "unit", begin + k);
+                const Facet aux{aux_items, spectrum.file};
+                aa.data_type = get_string(aux, "data_type", begin + k);
+                aa.compression = get_string(aux, "compression", begin + k);
+                aa.unit = get_string(aux, "unit", begin + k);
                 aa.data_processing_ref =
-                    get_string(aux_items, "data_processing_ref", begin + k);
+                    get_string(aux, "data_processing_ref", begin + k);
 
                 // parameters: large_list<CvParam>.
                 aa.parameters =
-                    read_cv_params_from_list(aux_items, "parameters", begin + k);
+                    read_cv_params_from_list(aux, "parameters", begin + k);
 
                 // ---------------------------------------------------------
                 // PART B — RAW-BYTE VALUE DECODE (FIXTURE-GATED FOLLOW-UP).
@@ -781,7 +866,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
                 // Treat data_type as an opaque lowercase Arrow dtype string
                 // (Pitfall 5) — do NOT route through any PSI::DataType enum.
                 // ---------------------------------------------------------
-                auto data_field = resolve_field(*aux_items, "data");
+                auto data_field = resolve_field(aux, "data");
                 if (data_field && !data_field->IsNull(begin + k)) {
                   auto data_list =
                       std::dynamic_pointer_cast<arrow::LargeListArray>(data_field);
@@ -897,8 +982,10 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // chromatogram reader -- see attach_precursors / attach_selected_ions.
   // Order matters: ions attach to the precursors pass 2 created.
   // -------------------------------------------------------------------
-  attach_precursors(out, facets_for("precursor", precursors_table));
-  attach_selected_ions(out, facets_for("selected_ion", selected_ions_table));
+  attach_precursors(out,
+                    facets_for("precursor", precursors_table, files.precursors));
+  attach_selected_ions(
+      out, facets_for("selected_ion", selected_ions_table, files.selected_ions));
 
   // -------------------------------------------------------------------
   // PASS 4: scan column — scan_parameters + scan_windows (accepted add-on).
@@ -910,7 +997,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
     // representative (earliest) scan rather than the last row read.
     std::map<uint64_t, std::optional<float>> earliest_scan;
 
-    for (const auto& scan : facets_for("scan", scans_table)) {
+    for (const auto& scan : facets_for("scan", scans_table, files.scans)) {
       {
         for (int64_t r = 0; r < scan->length(); ++r) {
           // F7: outer struct null => row carries no scan data, skip.
@@ -979,7 +1066,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
-          auto sw_field = resolve_field(*scan, "scan_windows");
+          auto sw_field = resolve_field(scan, "scan_windows");
           if (sw_field && !sw_field->IsNull(r)) {
             auto sw_list =
                 std::dynamic_pointer_cast<arrow::LargeListArray>(sw_field);
@@ -990,16 +1077,17 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
                 int64_t begin = sw_list->value_offset(r);
                 int64_t length = sw_list->value_length(r);
                 it->second.scan_windows.reserve(static_cast<std::size_t>(length));
+                const Facet window{sw_items, scan.file};
                 for (int64_t k = 0; k < length; ++k) {
                   ScanWindow sw;
                   sw.lower_limit = opt_float(
-                      sw_items, "MS_1000501_scan_window_lower_limit_unit_MS_1000040",
+                      window, "MS_1000501_scan_window_lower_limit_unit_MS_1000040",
                       begin + k);
                   sw.upper_limit = opt_float(
-                      sw_items, "MS_1000500_scan_window_upper_limit_unit_MS_1000040",
+                      window, "MS_1000500_scan_window_upper_limit_unit_MS_1000040",
                       begin + k);
                   sw.parameters =
-                      read_cv_params_from_list(sw_items, "parameters", begin + k);
+                      read_cv_params_from_list(window, "parameters", begin + k);
                   it->second.scan_windows.push_back(std::move(sw));
                 }
               }
@@ -1020,6 +1108,10 @@ read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
   std::map<uint64_t, ChromatogramMetadata> out;
   if (!files.primary) return out;
 
+  // Each facet resolves its columns through its OWN index entry: the mapping
+  // that names a column lives with the file that holds it.
+  const Schema::File* primary_file = &files.primary->index_file();
+
   auto table = read_metadata_table(*files.primary);
   auto precursors_table =
       files.precursors ? read_metadata_table(*files.precursors) : nullptr;
@@ -1028,17 +1120,18 @@ read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
 
   // The primary facet is a `chromatogram` struct column (nested layout) or the
   // table's own top-level columns (split layout).
-  std::vector<std::shared_ptr<arrow::StructArray>> primary;
+  std::vector<Facet> primary;
   if (table->GetColumnByName("chromatogram")) {
-    primary = facets_of(table, "chromatogram", nullptr);
+    primary = facets_of(table, "chromatogram", nullptr, primary_file);
   } else if (table->GetColumnByName("index")) {
-    if (auto st = struct_from_table(table)) primary.push_back(st);
+    if (auto st = struct_from_table(table))
+      primary.push_back(Facet{st, primary_file});
   } else {
     return out; // not a chromatogram metadata table
   }
 
   for (const auto& chrom : primary) {
-    auto index_field(resolve_field(*chrom, "index"));
+    auto index_field(resolve_field(chrom, "index"));
     if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
     auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
 
@@ -1075,8 +1168,13 @@ read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
     }
   }
 
-  attach_precursors(out, facets_of(table, "precursor", precursors_table));
-  attach_selected_ions(out, facets_of(table, "selected_ion", selected_ions_table));
+  attach_precursors(
+      out, facets_of(table, "precursor", precursors_table, primary_file,
+                     files.precursors ? &files.precursors->index_file() : nullptr));
+  attach_selected_ions(
+      out,
+      facets_of(table, "selected_ion", selected_ions_table, primary_file,
+                files.selected_ions ? &files.selected_ions->index_file() : nullptr));
 
   return out;
 }
@@ -1088,23 +1186,28 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
   std::map<uint64_t, WavelengthSpectrumMetadata> out;
   if (!files.primary) return out;
 
+  // Each facet resolves its columns through its OWN index entry: the mapping
+  // that names a column lives with the file that holds it.
+  const Schema::File* primary_file = &files.primary->index_file();
+
   auto table = read_metadata_table(*files.primary);
   auto scans_table = files.scans ? read_metadata_table(*files.scans) : nullptr;
 
   // The primary struct column is named `spectrum`, exactly as for mass spectra
   // — the entity type is carried by the file's role in the index, not by the
   // column name.
-  std::vector<std::shared_ptr<arrow::StructArray>> primary;
+  std::vector<Facet> primary;
   if (table->GetColumnByName("spectrum")) {
-    primary = facets_of(table, "spectrum", nullptr);
+    primary = facets_of(table, "spectrum", nullptr, primary_file);
   } else if (table->GetColumnByName("index")) {
-    if (auto st = struct_from_table(table)) primary.push_back(st);
+    if (auto st = struct_from_table(table))
+      primary.push_back(Facet{st, primary_file});
   } else {
     return out;
   }
 
   for (const auto& spectrum : primary) {
-    auto index_field(resolve_field(*spectrum, "index"));
+    auto index_field(resolve_field(spectrum, "index"));
     if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
     auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
 
@@ -1153,7 +1256,9 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
   // their limits to m/z units even for wavelength spectra, so a nanometre bound
   // arrives labelled as m/z; reading it would launder that error into our API.
   std::map<uint64_t, std::optional<float>> earliest_scan;
-  for (const auto& scan : facets_of(table, "scan", scans_table)) {
+  for (const auto& scan :
+       facets_of(table, "scan", scans_table, primary_file,
+                 files.scans ? &files.scans->index_file() : nullptr)) {
     for (int64_t r = 0; r < scan->length(); ++r) {
       if (scan->IsNull(r)) continue;
       auto src_idx = opt_int<uint64_t>(scan, "source_index", r);
@@ -1208,7 +1313,8 @@ read_entity_id_map(Parquet& metadata, const std::string& col_name)
 
   for (const auto& chunk : col->chunks()) {
     if (chunk->type_id() != arrow::Type::STRUCT) continue;
-    auto arr(std::static_pointer_cast<arrow::StructArray>(chunk));
+    const Facet arr{std::static_pointer_cast<arrow::StructArray>(chunk),
+                    &metadata.index_file()};
 
     for (int64_t r = 0; r < arr->length(); ++r) {
       if (arr->IsNull(r)) continue;
