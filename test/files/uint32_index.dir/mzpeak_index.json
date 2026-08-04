@@ -1,0 +1,703 @@
+{
+  "files": [
+    {
+      "name": "spectra_data.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "data arrays"
+    },
+    {
+      "name": "spectra_peaks.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "peaks"
+    },
+    {
+      "name": "spectra_metadata.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "metadata"
+    },
+    {
+      "name": "wavelength_spectra_metadata.parquet",
+      "entity_type": "wavelength spectrum",
+      "data_kind": "metadata"
+    },
+    {
+      "name": "wavelength_spectra_data.parquet",
+      "entity_type": "wavelength spectrum",
+      "data_kind": "data arrays"
+    },
+    {
+      "name": "chromatograms_metadata.parquet",
+      "entity_type": "chromatogram",
+      "data_kind": "metadata"
+    },
+    {
+      "name": "chromatograms_data.parquet",
+      "entity_type": "chromatogram",
+      "data_kind": "data arrays"
+    }
+  ],
+  "metadata": {
+    "sample_list": [],
+    "scan_settings_list": [],
+    "file_description": {
+      "contents": [
+        {
+          "accession": "MS:1000579",
+          "name": "MS1 spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000127",
+          "name": "centroid spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000128",
+          "name": "profile spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000235",
+          "name": "total ion current chromatogram",
+          "unit": null,
+          "value": null
+        }
+      ],
+      "source_files": [
+        {
+          "id": "acqmethod.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "acqmethod.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "39974f92e5633df5c88dde497b9c4621ec5ee61a"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "Contents.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "Contents.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "6c89ea7b043bf943c50adce455bc1859e27f6acd"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "DAD1.cd",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "DAD1.cd",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "baee754162191fc7c57744565e45d1a69ba53750"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "DAD1.cg",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "DAD1.cg",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "eed03e70fa27d2ac886f18de1bd450e10a425140"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "DAD1.sd",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "DAD1.sd",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "55cc863c6750fe6dafb4da54067ea08dd4ccff2e"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "DAD1.sp",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "DAD1.sp",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "9946aeb19d713e2cdcb321042232f9713997242a"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "DefaultMassCal.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "DefaultMassCal.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "9cad760232e962f049d47c2217c9340a0e58dcde"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "Devices.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "Devices.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "038dbaca6519ae6891cbc074a541335151dc9ba2"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSActualDefs.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSActualDefs.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "3791251e786aa6656906d97cec87b544e727fd2f"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSMassCal.bin",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSMassCal.bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "b0a0dcc27e725325a4a93b527e01f4bed0bebecb"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSPeak.bin",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSPeak.bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "85f4d3907458103368b0e2d70cbda647354040f7"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSPeriodicActuals.bin",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSPeriodicActuals.bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "f5176033b2b94fe747b983579c1513139e78ecd7"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSScan.bin",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSScan.bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "bbfa6bd16e306cce7114fd2899d0574f21d01283"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSScan.xsd",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSScan.xsd",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "4a0bf38d7e813940724b73eae7109c420f3a4814"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "MSTS.xml",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "MSTS.xml",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "b405fe7fbc6c8de05ff1e5d341a9abb299ba4a62"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "TCC1.cd",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "TCC1.cd",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "3c4136959e5dc8e61bec07f710d15d4238764291"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "TCC1.cg",
+          "location": "file:///C:/dev/pwiz/pwiz/data/vendor_readers/Agilent/Reader_Agilent_Test.data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.d/AcqData",
+          "name": "TCC1.cg",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "8e386f32e6444546f75667daa93aa8adc83a63e3"
+            },
+            {
+              "accession": "MS:1001509",
+              "name": "Agilent MassHunter format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1001508",
+              "name": "Agilent MassHunter nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "TOFsulfasMS4GHzDualMode_x002b_DADSpectra_x002b_UVSignal272-NoProfile.mzML",
+          "location": "file:///C:\\Users\\mobiu\\Downloads",
+          "name": "TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.mzML",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "7d7d49429e576121715a067f62f806d693054ee0"
+            }
+          ]
+        }
+      ]
+    },
+    "run": {
+      "default_data_processing_id": "pwiz_Reader_conversion",
+      "default_instrument_id": 0,
+      "default_source_file_id": "MSScan.bin",
+      "id": "TOFsulfasMS4GHzDualMode_x002b_DADSpectra_x002b_UVSignal272-NoProfile",
+      "start_time": "2007-10-20T20:12:18Z"
+    },
+    "instrument_configuration_list": [
+      {
+        "components": [
+          {
+            "component_type": "ionsource",
+            "order": 1,
+            "parameters": [
+              {
+                "accession": "MS:1000397",
+                "name": "microelectrospray",
+                "unit": null,
+                "value": null
+              },
+              {
+                "accession": "MS:1000057",
+                "name": "electrospray inlet",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "analyzer",
+            "order": 2,
+            "parameters": [
+              {
+                "accession": "MS:1000084",
+                "name": "time-of-flight",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "detector",
+            "order": 3,
+            "parameters": [
+              {
+                "accession": "MS:1000114",
+                "name": "microchannel plate detector",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "detector",
+            "order": 4,
+            "parameters": [
+              {
+                "accession": "MS:1000116",
+                "name": "photomultiplier",
+                "unit": null,
+                "value": null
+              }
+            ]
+          }
+        ],
+        "id": 0,
+        "parameters": [
+          {
+            "accession": "MS:1000490",
+            "name": "Agilent instrument model",
+            "unit": null,
+            "value": null
+          },
+          {
+            "accession": "MS:1000529",
+            "name": "instrument serial number",
+            "unit": null,
+            "value": 0
+          },
+          {
+            "accession": null,
+            "name": "instrument model",
+            "unit": null,
+            "value": "TOF"
+          }
+        ],
+        "software_reference": "MassHunter"
+      }
+    ],
+    "data_processing_method_list": [
+      {
+        "id": "pwiz_Reader_Agilent_conversion",
+        "methods": [
+          {
+            "order": 0,
+            "parameters": [
+              {
+                "accession": "MS:1000544",
+                "name": "Conversion to mzML",
+                "unit": null,
+                "value": null
+              }
+            ],
+            "software_reference": "pwiz"
+          }
+        ]
+      },
+      {
+        "id": "pwiz_Reader_conversion",
+        "methods": [
+          {
+            "order": 0,
+            "parameters": [
+              {
+                "accession": "MS:1000544",
+                "name": "Conversion to mzML",
+                "unit": null,
+                "value": null
+              }
+            ],
+            "software_reference": "pwiz_3.0.25087"
+          }
+        ]
+      },
+      {
+        "id": "mzpeak_conversion1",
+        "methods": [
+          {
+            "order": 1,
+            "parameters": [
+              {
+                "accession": null,
+                "name": "conversion options",
+                "unit": null,
+                "value": "-y -z -u ./test/data/TOFsulfasMS4GHzDualMode+DADSpectra+UVSignal272-NoProfile.mzML -o ./has_uv.mzpeak"
+              }
+            ],
+            "software_reference": "mzpeak_prototyping_convert1"
+          }
+        ]
+      }
+    ],
+    "software_list": [
+      {
+        "id": "MassHunter",
+        "parameters": [
+          {
+            "accession": "MS:1000678",
+            "name": "MassHunter Data Acquisition",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "version": "8.0"
+      },
+      {
+        "id": "pwiz",
+        "parameters": [
+          {
+            "accession": "MS:1000615",
+            "name": "ProteoWizard software",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "version": "3.0.23059"
+      },
+      {
+        "id": "pwiz_3.0.25087",
+        "parameters": [
+          {
+            "accession": "MS:1000615",
+            "name": "ProteoWizard software",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "version": "3.0.25087"
+      },
+      {
+        "id": "mzpeak_prototyping_convert1",
+        "parameters": [
+          {
+            "accession": "MS:1000799",
+            "name": "custom unreleased software tool",
+            "unit": null,
+            "value": "mzpeak_prototyping_convert"
+          }
+        ],
+        "version": "0.1.0"
+      }
+    ]
+  }
+}

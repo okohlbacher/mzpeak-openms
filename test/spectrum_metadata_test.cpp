@@ -834,3 +834,28 @@ BOOST_AUTO_TEST_CASE(plain_list_columns_read_like_large_list)
   BOOST_TEST(small_scanwin == large_scanwin);
   BOOST_TEST(small_prec == large_prec);
 }
+
+/******************************************************************************/
+// A uint32 entity index and narrow-string metadata read like the reference.
+//
+// The spec recommends unsigned 32- OR 64-bit index columns; requiring exactly
+// UINT64 silently emptied the whole metadata map for a uint32 index.  And the
+// CvParam struct's accession/name/unit were each cast to a single string width,
+// so the other width emptied the field -- and an empty accession makes the term
+// unmatchable (R5).  uint32_index.dir is has_uv rewritten with a uint32 index
+// and 32-bit strings; its metadata must still read.
+BOOST_AUTO_TEST_CASE(uint32_index_and_narrow_strings_read)
+{
+  auto chroms = MzPeak::open("../test/files/uint32_index.dir").chromatograms();
+  BOOST_TEST_REQUIRE(chroms.size() == 2u);
+
+  // id and chromatogram_type come through the uint32 index and narrow strings.
+  BOOST_TEST(chroms[0].metadata().id == "TIC");
+  BOOST_TEST(chroms[0].metadata().chromatogram_type == "MS:1000235");
+  BOOST_TEST_REQUIRE(chroms[0].metadata().number_of_data_points.has_value());
+  BOOST_TEST(*chroms[0].metadata().number_of_data_points == 212u);
+
+  auto uv = MzPeak::open("../test/files/uint32_index.dir").wavelength_spectra();
+  BOOST_TEST_REQUIRE(uv.size() == 520u);
+  BOOST_TEST(uv[0].metadata().id == "merged=212 row=0");
+}
