@@ -45,6 +45,15 @@ void validate(const std::vector<SpectrumData>& spectra, const char* context)
       throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
                          " has mismatched mz/intensity lengths");
     }
+    // Points are written in ascending m/z under a sorting_rank:0 declaration.
+    // A NaN makes the sort comparator ill-defined (undefined behaviour) and
+    // could leave the stored coordinate array non-ascending, contradicting the
+    // declaration a reader may binary search on.
+    if (std::ranges::any_of(spectra[i].mz, [](double m) { return std::isnan(m); })) {
+      throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
+                         " has a NaN m/z; points are written in ascending order "
+                         "and NaN has no place in that order");
+    }
   }
 }
 

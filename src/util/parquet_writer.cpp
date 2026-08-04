@@ -191,8 +191,14 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
   // declared.  Declaring the wrong one is worse than declaring none: a reader
   // may believe it and binary search a column that is not sorted, which finds
   // one run and silently misses the rest.
-  const std::optional<int> entity_index_leaf =
-      entity_index_leaf_of(*table->schema());
+  std::optional<int> entity_index_leaf = entity_index_leaf_of(*table->schema());
+
+  // Deriving WHICH leaf is the index is not the same as knowing it is sorted.
+  // If the data is not actually ascending, declare no sorting column rather than
+  // a false one -- a reader may believe it and binary search unsorted data.
+  if (entity_index_leaf.has_value() && !entity_index_is_ascending(*table)) {
+    entity_index_leaf.reset();
+  }
 
   parquet::WriterProperties::Builder props_builder;
   props_builder.compression(arrow::Compression::ZSTD);

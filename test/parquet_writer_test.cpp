@@ -12,12 +12,15 @@ directory of this repository.
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
 #include <arrow/io/file.h>
+#include <arrow/io/memory.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
 #include <arrow/util/key_value_metadata.h>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <memory>
+#include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <string>
 #include <vector>
@@ -117,4 +120,33 @@ BOOST_AUTO_TEST_CASE(round_trips_point_spectra_data)
   auto count_result(kv->Get("spectrum_count"));
   BOOST_TEST(count_result.ok());
   BOOST_TEST(count_result.ValueOrDie() == "2");
+}
+
+/******************************************************************************/
+// The sorting-column declaration is gated on the data actually being ascending,
+// not merely on the index leaf being identifiable.
+//
+// A reader may binary search a column the footer declares sorted; declaring a
+// column sorted when it is not silently drops rows.  The writer verifies the
+// index is ascending and declares no sorting column when it is not.
+BOOST_AUTO_TEST_CASE(non_ascending_index_declares_no_sorting_column)
+{
+  const std::map<std::string, std::string> kv;
+  namespace fs = std::filesystem;
+
+  auto sorting_count = [&](std::vector<uint64_t> index) -> std::size_t {
+    const fs::path path = fs::temp_directory_path() / "mzp-sortgate.parquet";
+    MzPeak::Util::write_point_spectra_data(
+        path.string(), index, {100.0, 200.0, 300.0}, {1.0f, 2.0f, 3.0f}, kv);
+    auto reader = parquet::ParquetFileReader::OpenFile(path.string());
+    std::size_t n = reader->metadata()->RowGroup(0)->sorting_columns().size();
+    reader->Close();
+    fs::remove(path);
+    return n;
+  };
+
+  // Ascending index: a sorting column IS declared.
+  BOOST_TEST(sorting_count({0, 1, 2}) == 1u);
+  // Descending index: NONE, because the data contradicts the declaration.
+  BOOST_TEST(sorting_count({2, 1, 0}) == 0u);
 }

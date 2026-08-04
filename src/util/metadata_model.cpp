@@ -197,6 +197,33 @@ struct_from_table(const std::shared_ptr<arrow::Table>& table)
   return *st;
 }
 
+/// A list column's element array and one row's [begin, begin+length) slice,
+/// resolving `list` and `large_list` identically.
+///
+/// The specification requires a reader to treat `list` == `large_list` (32-bit
+/// vs 64-bit offsets are a physical detail).  The reference writer emits
+/// `large_list`, so casting only to LargeListArray reads every plain-`list`
+/// column -- parameters, scan windows, auxiliary arrays -- as empty from a
+/// perfectly conformant third-party archive.
+struct ListSlice {
+  std::shared_ptr<arrow::Array> values;
+  int64_t begin = 0;
+  int64_t length = 0;
+};
+
+std::optional<ListSlice> list_slice(const std::shared_ptr<arrow::Array>& field,
+                                    int64_t row)
+{
+  if (!field || field->IsNull(row)) return std::nullopt;
+  if (auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(field)) {
+    return ListSlice{la->values(), la->value_offset(row), la->value_length(row)};
+  }
+  if (auto l = std::dynamic_pointer_cast<arrow::ListArray>(field)) {
+    return ListSlice{l->values(), l->value_offset(row), l->value_length(row)};
+  }
+  return std::nullopt;
+}
+
 /// Optional integer field of any stored width (uint8/int8/uint64/...),
 /// returned as the caller's integer type T.
 template <typename T>
@@ -332,6 +359,65 @@ std::string format_double_canonical(double v)
   return s;
 }
 
+/// An entity-index column of any unsigned/integer width, read as uint64.
+///
+/// The spec recommends unsigned 32- or 64-bit for index columns.  Requiring
+/// exactly UINT64 silently dropped every row of a facet whose index was, say,
+/// uint32 -- the whole metadata map came back empty with no error.
+struct IndexColumn {
+  std::shared_ptr<arrow::Array> array;
+
+  static std::optional<IndexColumn> of(const std::shared_ptr<arrow::Array>& a)
+  {
+    if (!a) return std::nullopt;
+    switch (a->type_id()) {
+    case arrow::Type::UINT64:
+    case arrow::Type::UINT32:
+    case arrow::Type::INT64:
+    case arrow::Type::INT32:
+      return IndexColumn{a};
+    default:
+      return std::nullopt;
+    }
+  }
+
+  int64_t length() const { return array->length(); }
+  bool IsNull(int64_t r) const { return array->IsNull(r); }
+  uint64_t Value(int64_t r) const
+  {
+    switch (array->type_id()) {
+    case arrow::Type::UINT64:
+      return std::static_pointer_cast<arrow::UInt64Array>(array)->Value(r);
+    case arrow::Type::UINT32:
+      return std::static_pointer_cast<arrow::UInt32Array>(array)->Value(r);
+    case arrow::Type::INT64:
+      return static_cast<uint64_t>(
+          std::static_pointer_cast<arrow::Int64Array>(array)->Value(r));
+    case arrow::Type::INT32:
+      return static_cast<uint64_t>(
+          std::static_pointer_cast<arrow::Int32Array>(array)->Value(r));
+    default:
+      return 0;
+    }
+  }
+};
+
+/// Read a `string` or `large_string` child @p name of @p items at row @p k,
+/// treating the two widths identically (R3).  Empty when absent or null.
+std::optional<std::string>
+string_at(const arrow::StructArray& items, const char* name, int64_t k)
+{
+  auto field = items.GetFieldByName(name);
+  if (!field || field->IsNull(k)) return std::nullopt;
+  if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+    return f->GetString(k);
+  }
+  if (auto f = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+    return f->GetString(k);
+  }
+  return std::nullopt;
+}
+
 /// Extract one CvParam from list item @p k of an items StructArray.
 ///
 /// @param items  the flat values() array of a large_list<struct<value,
@@ -356,23 +442,13 @@ CvParam extract_one_cv_param(const Facet& items, int64_t k)
 {
   CvParam p;
 
-  // accession: string
-  if (auto f = std::dynamic_pointer_cast<arrow::StringArray>(
-          resolve_field(items, "accession"))) {
-    if (!f->IsNull(k)) p.accession = f->GetString(k);
-  }
-
-  // name: large_string
-  if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
-          resolve_field(items, "name"))) {
-    if (!f->IsNull(k)) p.name = f->GetString(k);
-  }
-
-  // unit: string
-  if (auto f = std::dynamic_pointer_cast<arrow::StringArray>(
-          resolve_field(items, "unit"))) {
-    if (!f->IsNull(k)) p.unit = f->GetString(k);
-  }
+  // accession / name / unit: `string` and `large_string` are equivalent (R3).
+  // A per-field single-width cast silently emptied whichever field the writer
+  // happened to store in the other width -- and since CV parameters resolve by
+  // accession, an empty accession makes the whole term unmatchable.
+  if (auto a = string_at(*items, "accession", k)) p.accession = *a;
+  if (auto n = string_at(*items, "name", k)) p.name = *n;
+  if (auto u = string_at(*items, "unit", k)) p.unit = *u;
 
   // value: struct<integer:int64, float:double, string:large_string, boolean:bool>
   // Exact child names are lowercase and come from the Parquet schema (Pitfall 1).
@@ -381,13 +457,10 @@ CvParam extract_one_cv_param(const Facet& items, int64_t k)
     auto val_struct = std::dynamic_pointer_cast<arrow::StructArray>(val_field);
     if (val_struct) {
       const Facet value{val_struct, items.file};
-      // "string" arm — large_string; check first (most common in fixtures).
-      if (auto f = std::dynamic_pointer_cast<arrow::LargeStringArray>(
-              val_struct->GetFieldByName("string"))) {
-        if (!f->IsNull(k)) {
-          p.value = f->GetString(k);
-          return p;
-        }
+      // "string" arm — either width (R3); check first (most common in fixtures).
+      if (auto str = string_at(*val_struct, "string", k)) {
+        p.value = *str;
+        return p;
       }
       // "integer" arm — Int64.
       if (auto f = std::dynamic_pointer_cast<arrow::Int64Array>(
@@ -434,17 +507,14 @@ std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
 {
   std::vector<CvParam> out;
 
-  auto list_col = resolve_field(parent, list_field_name);
-  if (!list_col || list_col->IsNull(row)) return out;
+  auto slice = list_slice(resolve_field(parent, list_field_name), row);
+  if (!slice) return out;
 
-  auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(list_col);
-  if (!la || la->IsNull(row)) return out;
-
-  auto items = std::dynamic_pointer_cast<arrow::StructArray>(la->values());
+  auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values);
   if (!items) return out;
 
-  int64_t begin = la->value_offset(row);
-  int64_t length = la->value_length(row);
+  const int64_t begin = slice->begin;
+  const int64_t length = slice->length;
   out.reserve(static_cast<std::size_t>(length));
   for (int64_t k = 0; k < length; ++k) {
     out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
@@ -632,12 +702,10 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
     if (chunk->type_id() != arrow::Type::STRUCT) continue;
     const Facet spectrum{std::static_pointer_cast<arrow::StructArray>(chunk)};
 
-    auto index_field(resolve_field(spectrum, "index"));
     auto model_field(resolve_field(spectrum, "mz_delta_model"));
-    if (!index_field || !model_field) continue;
-    if (index_field->type_id() != arrow::Type::UINT64) continue;
-
-    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+    auto index_col = IndexColumn::of(resolve_field(spectrum, "index"));
+    if (!index_col || !model_field) continue;
+    const IndexColumn& index = *index_col;
 
     // mz_delta_model is a (large) list of float64.
     auto large_list(std::dynamic_pointer_cast<arrow::LargeListArray>(model_field));
@@ -649,7 +717,7 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
     if (!values) continue;
 
     for (int64_t r = 0; r < spectrum->length(); ++r) {
-      if (index->IsNull(r)) continue;
+      if (index.IsNull(r)) continue;
       bool null_model = large_list ? large_list->IsNull(r) : list->IsNull(r);
       if (null_model) continue;
 
@@ -664,7 +732,7 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
       for (int64_t k = 0; k < length; ++k) {
         betas.push_back(values->Value(offset + k));
       }
-      out[index->Value(r)] = std::move(betas);
+      out[index.Value(r)] = std::move(betas);
     }
   }
 
@@ -733,17 +801,17 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   }
 
   for (const auto& spectrum : spectrum_facets) {
-    auto index_field(resolve_field(spectrum, "index"));
-    if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
-    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+    auto index_col = IndexColumn::of(resolve_field(spectrum, "index"));
+    if (!index_col) continue;
+    const IndexColumn& index = *index_col;
 
     for (int64_t r = 0; r < spectrum->length(); ++r) {
       // F7: outer struct null => children are unreliable, skip the row.
       if (spectrum->IsNull(r)) continue;
-      if (index->IsNull(r)) continue;
+      if (index.IsNull(r)) continue;
 
       SpectrumMetadata m;
-      m.index = index->Value(r);
+      m.index = index.Value(r);
       m.id = get_string(spectrum, "id", r);
       m.ms_level = opt_int<int>(spectrum, "MS_1000511_ms_level", r);
       // RT: `spectrum.time` is in minutes — the spec makes this normative
@@ -813,16 +881,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           declared_count = *cnt;
         }
 
-        auto aux_field = resolve_field(spectrum, "auxiliary_arrays");
-        if (aux_field && !aux_field->IsNull(r)) {
-          auto aux_list =
-              std::dynamic_pointer_cast<arrow::LargeListArray>(aux_field);
-          if (aux_list && !aux_list->IsNull(r)) {
+        auto aux_slice = list_slice(resolve_field(spectrum, "auxiliary_arrays"), r);
+        if (aux_slice) {
+          {
             auto aux_items =
-                std::dynamic_pointer_cast<arrow::StructArray>(aux_list->values());
+                std::dynamic_pointer_cast<arrow::StructArray>(aux_slice->values);
             if (aux_items) {
-              int64_t begin = aux_list->value_offset(r);
-              int64_t length = aux_list->value_length(r);
+              int64_t begin = aux_slice->begin;
+              int64_t length = aux_slice->length;
               m.auxiliary_arrays.reserve(static_cast<std::size_t>(length));
 
               for (int64_t k = 0; k < length; ++k) {
@@ -866,16 +932,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
                 // Treat data_type as an opaque lowercase Arrow dtype string
                 // (Pitfall 5) — do NOT route through any PSI::DataType enum.
                 // ---------------------------------------------------------
-                auto data_field = resolve_field(aux, "data");
-                if (data_field && !data_field->IsNull(begin + k)) {
-                  auto data_list =
-                      std::dynamic_pointer_cast<arrow::LargeListArray>(data_field);
-                  if (data_list && !data_list->IsNull(begin + k)) {
+                auto data_slice = list_slice(resolve_field(aux, "data"), begin + k);
+                if (data_slice) {
+                  {
                     auto data_values = std::dynamic_pointer_cast<arrow::UInt8Array>(
-                        data_list->values());
+                        data_slice->values);
                     if (data_values) {
-                      int64_t d_begin = data_list->value_offset(begin + k);
-                      int64_t d_length = data_list->value_length(begin + k);
+                      int64_t d_begin = data_slice->begin;
+                      int64_t d_length = data_slice->length;
 
                       if (d_length == 0) {
                         // Legitimately empty decoded array.
@@ -1066,16 +1130,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
-          auto sw_field = resolve_field(scan, "scan_windows");
-          if (sw_field && !sw_field->IsNull(r)) {
-            auto sw_list =
-                std::dynamic_pointer_cast<arrow::LargeListArray>(sw_field);
-            if (sw_list && !sw_list->IsNull(r)) {
+          auto sw_slice = list_slice(resolve_field(scan, "scan_windows"), r);
+          if (sw_slice) {
+            {
               auto sw_items =
-                  std::dynamic_pointer_cast<arrow::StructArray>(sw_list->values());
+                  std::dynamic_pointer_cast<arrow::StructArray>(sw_slice->values);
               if (sw_items) {
-                int64_t begin = sw_list->value_offset(r);
-                int64_t length = sw_list->value_length(r);
+                int64_t begin = sw_slice->begin;
+                int64_t length = sw_slice->length;
                 it->second.scan_windows.reserve(static_cast<std::size_t>(length));
                 const Facet window{sw_items, scan.file};
                 for (int64_t k = 0; k < length; ++k) {
@@ -1131,17 +1193,17 @@ read_chromatogram_metadata(const ChromatogramMetadataFiles& files)
   }
 
   for (const auto& chrom : primary) {
-    auto index_field(resolve_field(chrom, "index"));
-    if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
-    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+    auto index_col = IndexColumn::of(resolve_field(chrom, "index"));
+    if (!index_col) continue;
+    const IndexColumn& index = *index_col;
 
     for (int64_t r = 0; r < chrom->length(); ++r) {
       // F7: outer struct null => children are unreliable, skip the row.
       if (chrom->IsNull(r)) continue;
-      if (index->IsNull(r)) continue;
+      if (index.IsNull(r)) continue;
 
       ChromatogramMetadata m;
-      m.index = index->Value(r);
+      m.index = index.Value(r);
       m.id = get_string(chrom, "id", r);
       m.chromatogram_type = get_string(chrom, "MS_1000626_chromatogram_type", r);
       m.polarity = opt_int<int>(chrom, "MS_1000465_scan_polarity", r);
@@ -1207,16 +1269,16 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
   }
 
   for (const auto& spectrum : primary) {
-    auto index_field(resolve_field(spectrum, "index"));
-    if (!index_field || index_field->type_id() != arrow::Type::UINT64) continue;
-    auto index(std::static_pointer_cast<arrow::UInt64Array>(index_field));
+    auto index_col = IndexColumn::of(resolve_field(spectrum, "index"));
+    if (!index_col) continue;
+    const IndexColumn& index = *index_col;
 
     for (int64_t r = 0; r < spectrum->length(); ++r) {
       if (spectrum->IsNull(r)) continue;
-      if (index->IsNull(r)) continue;
+      if (index.IsNull(r)) continue;
 
       WavelengthSpectrumMetadata m;
-      m.index = index->Value(r);
+      m.index = index.Value(r);
       m.id = get_string(spectrum, "id", r);
       // Minutes on disk (UO:0000031) -> seconds here, matching
       // SpectrumMetadata::retention_time.  The scan facet overrides below.

@@ -19,9 +19,11 @@ directory of this repository.
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
+#include <set>
 
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/open.h"
+#include "mzpeak/run_metadata.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/util/json_writer.h"
 #include "mzpeak/wavelength_spectra.h"
@@ -505,4 +507,57 @@ BOOST_AUTO_TEST_CASE(a_column_is_found_through_column_mapping_alone)
   auto chromatograms = MzPeak::open(scratch.path).chromatograms();
   BOOST_TEST_REQUIRE(chromatograms.size() == 1u);
   BOOST_TEST(chromatograms[0].metadata().chromatogram_type == "MS:1000235");
+}
+
+/******************************************************************************/
+// cv_list names every CV prefix the archive uses, not a hardcoded MS+UO.
+//
+// The array index and column mappings always use MS and UO, so those are a
+// floor; anything a caller carries through run metadata must be declared too.
+// An NCIT term in the run metadata previously produced a cv_list that did not
+// mention NCIT -- a conformance failure (cv_list MUST name every prefix used).
+BOOST_AUTO_TEST_CASE(cv_list_names_every_prefix_used)
+{
+  Scratch scratch("mzp-test-cvlist");
+
+  MzPeak::RunMetadata md(boost::json::parse(R"({
+    "file_description": {"contents": [
+      {"accession": "NCIT:C25441", "name": "sample type"},
+      {"accession": "MS:1000579", "name": "MS1 spectrum"}
+    ]}
+  })")
+                             .as_object());
+
+  MzPeak::RunContents run;
+  MzPeak::SpectrumData s;
+  s.mz = {100.0, 200.0};
+  s.intensity = {1.0f, 2.0f};
+  s.id = "scan=1";
+  run.spectra.push_back(s);
+  MzPeak::write_run_directory(scratch.path, run, &md);
+
+  std::string json;
+  {
+    std::ifstream in(scratch.path / "mzpeak_index.json", std::ios::binary);
+    json.assign(std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+  }
+  auto cv_list = boost::json::parse(json)
+                     .as_object()
+                     .at("metadata")
+                     .as_object()
+                     .at("cv_list")
+                     .as_array();
+
+  std::set<std::string> ids;
+  for (const auto& cv : cv_list) {
+    const auto& o = cv.as_object();
+    ids.emplace(o.at("id").as_string());
+    // Every entry carries the schema-required version and uri.
+    BOOST_TEST(o.contains("version"));
+    BOOST_TEST(o.contains("uri"));
+  }
+  BOOST_TEST(ids.count("MS") == 1u);
+  BOOST_TEST(ids.count("UO") == 1u);
+  BOOST_TEST(ids.count("NCIT") == 1u); // the caller's prefix, previously dropped
 }

@@ -31,6 +31,45 @@ top-level directory of this repository.
 
 namespace MzPeak::Data::Encoding {
 
+/// A list column of either offset width, exposing the row-wise accessors that
+/// `list` and `large_list` share.
+///
+/// The specification requires a reader to treat `list` == `large_list`.  The
+/// reference writer emits `large_list`, so a bare LargeListArray cast reads a
+/// conformant third-party chunked file -- whose chunk value/secondary columns
+/// are plain `list` -- as malformed.
+struct AnyListArray {
+  std::shared_ptr<arrow::LargeListArray> large;
+  std::shared_ptr<arrow::ListArray> small;
+
+  static AnyListArray of(const std::shared_ptr<arrow::Array>& array)
+  {
+    AnyListArray v;
+    v.large = std::dynamic_pointer_cast<arrow::LargeListArray>(array);
+    if (!v.large) v.small = std::dynamic_pointer_cast<arrow::ListArray>(array);
+    return v;
+  }
+
+  explicit operator bool() const { return large != nullptr || small != nullptr; }
+  int64_t length() const { return large ? large->length() : small->length(); }
+  bool IsNull(int64_t r) const
+  {
+    return large ? large->IsNull(r) : small->IsNull(r);
+  }
+  int64_t value_offset(int64_t r) const
+  {
+    return large ? large->value_offset(r) : small->value_offset(r);
+  }
+  int64_t value_length(int64_t r) const
+  {
+    return large ? large->value_length(r) : small->value_length(r);
+  }
+  std::shared_ptr<arrow::Array> values() const
+  {
+    return large ? large->values() : small->values();
+  }
+};
+
 /**
  * Decode mzPeak signal data encoding (point and chunk).
  *
@@ -527,12 +566,11 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     }
 
     for (const auto& chunk : *byte_lists) {
-      auto list = std::dynamic_pointer_cast<arrow::LargeListArray>(chunk);
+      auto list = AnyListArray::of(chunk);
       if (!list) {
-        throw ParquetError("chunk transform column is not a large_list: " +
-                           dim.name);
+        throw ParquetError("chunk transform column is not a list: " + dim.name);
       }
-      auto bytes = std::static_pointer_cast<arrow::UInt8Array>(list->values());
+      auto bytes = std::static_pointer_cast<arrow::UInt8Array>(list.values());
 
       std::shared_ptr<arrow::DoubleArray> ends;
       if (ends_for_transform != nullptr) {
@@ -544,10 +582,10 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
         }
       }
 
-      for (int64_t r = 0; r < list->length(); ++r) {
-        if (list->IsNull(r)) continue;
-        const int64_t begin = list->value_offset(r);
-        const int64_t length = list->value_length(r);
+      for (int64_t r = 0; r < list.length(); ++r) {
+        if (list.IsNull(r)) continue;
+        const int64_t begin = list.value_offset(r);
+        const int64_t length = list.value_length(r);
 
         std::vector<uint8_t> raw;
         raw.reserve(static_cast<std::size_t>(length));
@@ -598,16 +636,15 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     builder_for<V> builder;
 
     for (const auto& chunk : *lists) {
-      auto list = std::dynamic_pointer_cast<arrow::LargeListArray>(chunk);
+      auto list = AnyListArray::of(chunk);
       if (!list) {
-        throw ParquetError("chunk secondary column is not a large_list: " +
-                           dim.name);
+        throw ParquetError("chunk secondary column is not a list: " + dim.name);
       }
-      auto items = std::static_pointer_cast<array_type>(list->values());
-      for (int64_t r = 0; r < list->length(); ++r) {
-        if (list->IsNull(r)) continue;
-        const int64_t begin = list->value_offset(r);
-        const int64_t length = list->value_length(r);
+      auto items = std::static_pointer_cast<array_type>(list.values());
+      for (int64_t r = 0; r < list.length(); ++r) {
+        if (list.IsNull(r)) continue;
+        const int64_t begin = list.value_offset(r);
+        const int64_t length = list.value_length(r);
         for (int64_t k = 0; k < length; ++k) {
           if (items->IsNull(begin + k)) {
             (void)builder.AppendNull();
@@ -647,7 +684,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
   for (std::size_t c = 0; c < values_raw->size(); ++c) {
     auto starts = std::dynamic_pointer_cast<arrow::DoubleArray>((*starts_raw)[c]);
-    auto lists = std::dynamic_pointer_cast<arrow::LargeListArray>((*values_raw)[c]);
+    auto lists = AnyListArray::of((*values_raw)[c]);
     if (!starts || !lists) {
       throw ParquetError("unexpected chunk column types for dimension: " + dim.name);
     }
@@ -655,8 +692,8 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
     // runtime check — casting a float32 child to DoubleArray would read eight
     // bytes per four-byte value and yield plausible coordinates assembled from
     // adjacent memory.  Dispatch on the actual type instead.
-    auto items = std::dynamic_pointer_cast<arrow::DoubleArray>(lists->values());
-    auto items32 = std::dynamic_pointer_cast<arrow::FloatArray>(lists->values());
+    auto items = std::dynamic_pointer_cast<arrow::DoubleArray>(lists.values());
+    auto items32 = std::dynamic_pointer_cast<arrow::FloatArray>(lists.values());
     if (!items && !items32) {
       throw ParquetError("chunk_values is neither float32 nor float64: " + dim.name);
     }
@@ -680,7 +717,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
           std::dynamic_pointer_cast<arrow::LargeStringArray>((*encodings_raw)[c]);
     }
 
-    for (int64_t r = 0; r < lists->length(); ++r) {
+    for (int64_t r = 0; r < lists.length(); ++r) {
       std::optional<std::string> enc;
       if (encodings && !encodings->IsNull(r)) enc = encodings->GetString(r);
       if (encodings_large && !encodings_large->IsNull(r)) {
@@ -695,7 +732,7 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
         throw ParquetError("unsupported chunk encoding '" + *enc +
                            "' for dimension: " + dim.name);
       }
-      if (lists->IsNull(r) || starts->IsNull(r)) continue;
+      if (lists.IsNull(r) || starts->IsNull(r)) continue;
 
       // An empty or all-null chunk is written with start == end == 0 (the
       // reference writer does this for empty spectra).  The reference reader
@@ -709,12 +746,11 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
       const std::size_t before = assembled_values.size();
       if (items) {
-        delta_decode_chunk<V>(*items, lists->value_offset(r), lists->value_length(r),
+        delta_decode_chunk<V>(*items, lists.value_offset(r), lists.value_length(r),
                               starts->Value(r), assembled_values, assembled_valid);
       } else {
-        delta_decode_chunk<V>(*items32, lists->value_offset(r),
-                              lists->value_length(r), starts->Value(r),
-                              assembled_values, assembled_valid);
+        delta_decode_chunk<V>(*items32, lists.value_offset(r), lists.value_length(r),
+                              starts->Value(r), assembled_values, assembled_valid);
       }
 
       // chunk_end states the chunk's last coordinate.  Checking the decode
