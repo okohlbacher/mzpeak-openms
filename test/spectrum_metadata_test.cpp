@@ -803,3 +803,34 @@ BOOST_AUTO_TEST_CASE(an_unimplemented_tof_transform_is_refused)
 
   fs::remove_all(scratch);
 }
+
+/******************************************************************************/
+// A plain 32-bit `list` reads identically to a `large_list` (spec R3:
+// list == large_list).
+//
+// The reference writer emits large_list, so casting only to LargeListArray read
+// every list-typed column -- scan_windows, parameters, auxiliary_arrays -- as
+// empty from a conformant third-party archive using 32-bit lists (PyArrow's
+// frequent default).  list32.dir is small.dir with every large_list/large_string
+// rewritten to its 32-bit form; scan_windows must still be present.
+BOOST_AUTO_TEST_CASE(plain_list_columns_read_like_large_list)
+{
+  auto large = MzPeak::open("../test/files/small.dir").spectra();
+  auto small = MzPeak::open("../test/files/list32.dir").spectra();
+  BOOST_TEST_REQUIRE(small.size() == large.size());
+
+  std::size_t large_scanwin = 0, small_scanwin = 0;
+  std::size_t large_prec = 0, small_prec = 0;
+  for (std::size_t i = 0; i < large.size(); ++i) {
+    large_scanwin += large[i].metadata().scan_windows.size();
+    small_scanwin += small[i].metadata().scan_windows.size();
+    large_prec += large[i].metadata().precursors.size();
+    small_prec += small[i].metadata().precursors.size();
+  }
+
+  // The reference fixture genuinely has scan windows; the point is that the
+  // 32-bit copy reads the same count, not zero.
+  BOOST_TEST_REQUIRE(large_scanwin > 0u);
+  BOOST_TEST(small_scanwin == large_scanwin);
+  BOOST_TEST(small_prec == large_prec);
+}

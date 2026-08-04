@@ -8,7 +8,12 @@ directory of this repository.
 
 #include "mzpeak/util/json_writer.h"
 
+#include <algorithm>
 #include <boost/json.hpp>
+#include <cctype>
+#include <cstdio>
+#include <set>
+#include <string_view>
 
 namespace MzPeak::Util {
 
@@ -67,25 +72,108 @@ namespace {
 /// a uri and a version.  Nothing enforces it and the reference fixtures omit
 /// the list entirely, but a consumer that cannot resolve "MS:1000235" has no
 /// way to learn what the term means.
-json::array cv_list_impl()
+/// A controlled vocabulary this writer can pin to a version and a URI.
+struct KnownCv {
+  const char* id;
+  const char* full_name;
+  const char* version;
+  const char* uri;
+};
+
+/// The vocabularies a mass-spectrometry archive plausibly cites.  MS and UO are
+/// always present (this writer's array index and column mappings use them); the
+/// rest cover terms a caller may carry through run metadata.
+const KnownCv kKnownCvs[] = {
+    {"MS", "PSI-MS controlled vocabulary", "4.1.209",
+     "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"},
+    {"UO", "Units of Measurement Ontology", "releases/2023-05-25",
+     "http://purl.obolibrary.org/obo/uo.owl"},
+    {"PATO", "Phenotype And Trait Ontology", "releases/2023-05-18",
+     "http://purl.obolibrary.org/obo/pato.owl"},
+    {"NCIT", "NCI Thesaurus", "23.03e", "http://purl.obolibrary.org/obo/ncit.owl"},
+    {"UNIMOD", "Unimod protein modifications", "2023-05",
+     "http://www.unimod.org/obo/unimod.obo"},
+    {"MOD", "PSI-MOD protein modification ontology", "1.031.4",
+     "http://purl.obolibrary.org/obo/mod.obo"},
+    {"BTO", "BRENDA Tissue Ontology", "2021-10-26",
+     "http://purl.obolibrary.org/obo/bto.owl"},
+    {"CL", "Cell Ontology", "2023-04-20", "http://purl.obolibrary.org/obo/cl.owl"},
+    {"NCBITaxon", "NCBI organismal taxonomy", "2023-06-20",
+     "http://purl.obolibrary.org/obo/ncbitaxon.owl"},
+};
+
+/// Collect the CURIE prefixes ("MS" from "MS:1000235") of every accession-shaped
+/// string reachable from @p value.  A conformant archive must declare every one.
+void collect_cv_prefixes(const json::value& value, std::set<std::string>& out)
 {
+  if (value.is_object()) {
+    for (const auto& [key, v] : value.as_object())
+      collect_cv_prefixes(v, out);
+  } else if (value.is_array()) {
+    for (const auto& v : value.as_array())
+      collect_cv_prefixes(v, out);
+  } else if (value.is_string()) {
+    std::string_view s(value.as_string());
+    // A CURIE is "<prefix>:<local>" where the prefix is a CV id.  Match
+    // conservatively: an all-alphanumeric prefix, a colon, then a non-empty
+    // local part, and no whitespace or second colon.
+    auto colon = s.find(':');
+    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= s.size()) {
+      return;
+    }
+    std::string_view prefix = s.substr(0, colon);
+    std::string_view local = s.substr(colon + 1);
+    auto ok = [](std::string_view p) {
+      return !p.empty() &&
+             std::ranges::all_of(p, [](unsigned char c) { return std::isalnum(c); });
+    };
+    if (ok(prefix) && ok(local)) out.emplace(prefix);
+  }
+}
+
+/// Build `cv_list` from the vocabularies the archive actually uses.
+///
+/// The previous version hardcoded MS and UO regardless of content, so an
+/// archive carrying, say, an NCIT term in its run metadata declared a CV list
+/// that did not mention NCIT -- a conformance failure the spec calls out
+/// (`cv_list` MUST name every prefix used).  MS and UO are still always present
+/// because the array index and column mappings use them; everything else is
+/// derived from what is actually written.
+json::array cv_list_for(const json::object& index_root)
+{
+  std::set<std::string> prefixes{"MS", "UO"};
+  collect_cv_prefixes(index_root, prefixes);
+
   json::array list;
+  for (const auto& prefix : prefixes) {
+    const KnownCv* known = nullptr;
+    for (const auto& cv : kKnownCvs) {
+      if (prefix == cv.id) {
+        known = &cv;
+        break;
+      }
+    }
 
-  json::object ms;
-  ms["id"] = "MS";
-  ms["full_name"] = "PSI-MS controlled vocabulary";
-  ms["version"] = "4.1.209";
-  ms["uri"] =
-      "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo";
-  list.push_back(std::move(ms));
-
-  json::object uo;
-  uo["id"] = "UO";
-  uo["full_name"] = "Units of Measurement Ontology";
-  uo["version"] = "releases/2023-05-25";
-  uo["uri"] = "http://purl.obolibrary.org/obo/uo.owl";
-  list.push_back(std::move(uo));
-
+    json::object entry;
+    entry["id"] = prefix;
+    if (known != nullptr) {
+      entry["full_name"] = known->full_name;
+      entry["version"] = known->version;
+      entry["uri"] = known->uri;
+    } else {
+      // A prefix this writer cannot pin.  Declaring it -- even without an
+      // authoritative version -- keeps every used prefix named, which is what
+      // the spec requires; the placeholder is visible rather than silent.
+      std::fprintf(stderr,
+                   "mzpeak: cv_list: unknown CV prefix '%s'; declaring it with a "
+                   "placeholder version/uri\n",
+                   prefix.c_str());
+      entry["full_name"] = prefix;
+      entry["version"] = "unknown";
+      entry["uri"] = "urn:mzpeak:unknown-cv:" + prefix;
+    }
+    list.push_back(std::move(entry));
+  }
   return list;
 }
 
@@ -130,11 +218,14 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
   root["files"] = std::move(file_array);
 
   metadata["version"] = version;
-  // Declared unconditionally: conformance requires every CURIE prefix used
-  // anywhere in the archive to be resolvable, and this writer emits MS: and
-  // UO: terms in the array index and the column mappings.
-  if (!metadata.contains("cv_list")) metadata["cv_list"] = default_cv_list();
   root["metadata"] = std::move(metadata);
+
+  // Derive cv_list from every CURIE prefix reachable in the finished index --
+  // files, column mappings and run metadata alike -- so the archive names every
+  // CV it uses.  A caller-supplied cv_list is respected and not overwritten.
+  if (!root["metadata"].as_object().contains("cv_list")) {
+    root["metadata"].as_object()["cv_list"] = cv_list_for(root);
+  }
 
   return json::serialize(root);
 }
@@ -226,8 +317,5 @@ std::string point_wavelength_array_index_json(const std::string& intensity_unit)
   root["entries"] = std::move(entries);
   return json::serialize(root);
 }
-
-/******************************************************************************/
-json::array default_cv_list() { return cv_list_impl(); }
 
 } // namespace MzPeak::Util

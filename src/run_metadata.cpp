@@ -434,11 +434,11 @@ json::object RunMetadata::to_json() const
     o["sample_list"] = std::move(a);
   }
 
-  // The schema names these `full_name` and `uri`; this emitted `fullName` and
-  // `URI`, which validates as neither, and declared only MS although UO terms
-  // are used throughout (every unit CURIE is a UO term).
-  if (!o.contains("cv_list")) o["cv_list"] = Util::default_cv_list();
-
+  // cv_list is deliberately NOT injected here.  The index writer derives it
+  // from every CV prefix actually present in the finished index -- including
+  // whatever these run-metadata blocks carry -- so injecting an MS/UO-only list
+  // here would shadow that derivation and hide a caller's other CVs.  A caller
+  // that has already populated `cv_list` in the raw object is respected.
   return o;
 }
 

@@ -197,6 +197,33 @@ struct_from_table(const std::shared_ptr<arrow::Table>& table)
   return *st;
 }
 
+/// A list column's element array and one row's [begin, begin+length) slice,
+/// resolving `list` and `large_list` identically.
+///
+/// The specification requires a reader to treat `list` == `large_list` (32-bit
+/// vs 64-bit offsets are a physical detail).  The reference writer emits
+/// `large_list`, so casting only to LargeListArray reads every plain-`list`
+/// column -- parameters, scan windows, auxiliary arrays -- as empty from a
+/// perfectly conformant third-party archive.
+struct ListSlice {
+  std::shared_ptr<arrow::Array> values;
+  int64_t begin = 0;
+  int64_t length = 0;
+};
+
+std::optional<ListSlice> list_slice(const std::shared_ptr<arrow::Array>& field,
+                                    int64_t row)
+{
+  if (!field || field->IsNull(row)) return std::nullopt;
+  if (auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(field)) {
+    return ListSlice{la->values(), la->value_offset(row), la->value_length(row)};
+  }
+  if (auto l = std::dynamic_pointer_cast<arrow::ListArray>(field)) {
+    return ListSlice{l->values(), l->value_offset(row), l->value_length(row)};
+  }
+  return std::nullopt;
+}
+
 /// Optional integer field of any stored width (uint8/int8/uint64/...),
 /// returned as the caller's integer type T.
 template <typename T>
@@ -434,17 +461,14 @@ std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
 {
   std::vector<CvParam> out;
 
-  auto list_col = resolve_field(parent, list_field_name);
-  if (!list_col || list_col->IsNull(row)) return out;
+  auto slice = list_slice(resolve_field(parent, list_field_name), row);
+  if (!slice) return out;
 
-  auto la = std::dynamic_pointer_cast<arrow::LargeListArray>(list_col);
-  if (!la || la->IsNull(row)) return out;
-
-  auto items = std::dynamic_pointer_cast<arrow::StructArray>(la->values());
+  auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values);
   if (!items) return out;
 
-  int64_t begin = la->value_offset(row);
-  int64_t length = la->value_length(row);
+  const int64_t begin = slice->begin;
+  const int64_t length = slice->length;
   out.reserve(static_cast<std::size_t>(length));
   for (int64_t k = 0; k < length; ++k) {
     out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
@@ -813,16 +837,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           declared_count = *cnt;
         }
 
-        auto aux_field = resolve_field(spectrum, "auxiliary_arrays");
-        if (aux_field && !aux_field->IsNull(r)) {
-          auto aux_list =
-              std::dynamic_pointer_cast<arrow::LargeListArray>(aux_field);
-          if (aux_list && !aux_list->IsNull(r)) {
+        auto aux_slice = list_slice(resolve_field(spectrum, "auxiliary_arrays"), r);
+        if (aux_slice) {
+          {
             auto aux_items =
-                std::dynamic_pointer_cast<arrow::StructArray>(aux_list->values());
+                std::dynamic_pointer_cast<arrow::StructArray>(aux_slice->values);
             if (aux_items) {
-              int64_t begin = aux_list->value_offset(r);
-              int64_t length = aux_list->value_length(r);
+              int64_t begin = aux_slice->begin;
+              int64_t length = aux_slice->length;
               m.auxiliary_arrays.reserve(static_cast<std::size_t>(length));
 
               for (int64_t k = 0; k < length; ++k) {
@@ -866,16 +888,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
                 // Treat data_type as an opaque lowercase Arrow dtype string
                 // (Pitfall 5) — do NOT route through any PSI::DataType enum.
                 // ---------------------------------------------------------
-                auto data_field = resolve_field(aux, "data");
-                if (data_field && !data_field->IsNull(begin + k)) {
-                  auto data_list =
-                      std::dynamic_pointer_cast<arrow::LargeListArray>(data_field);
-                  if (data_list && !data_list->IsNull(begin + k)) {
+                auto data_slice = list_slice(resolve_field(aux, "data"), begin + k);
+                if (data_slice) {
+                  {
                     auto data_values = std::dynamic_pointer_cast<arrow::UInt8Array>(
-                        data_list->values());
+                        data_slice->values);
                     if (data_values) {
-                      int64_t d_begin = data_list->value_offset(begin + k);
-                      int64_t d_length = data_list->value_length(begin + k);
+                      int64_t d_begin = data_slice->begin;
+                      int64_t d_length = data_slice->length;
 
                       if (d_length == 0) {
                         // Legitimately empty decoded array.
@@ -1066,16 +1086,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
-          auto sw_field = resolve_field(scan, "scan_windows");
-          if (sw_field && !sw_field->IsNull(r)) {
-            auto sw_list =
-                std::dynamic_pointer_cast<arrow::LargeListArray>(sw_field);
-            if (sw_list && !sw_list->IsNull(r)) {
+          auto sw_slice = list_slice(resolve_field(scan, "scan_windows"), r);
+          if (sw_slice) {
+            {
               auto sw_items =
-                  std::dynamic_pointer_cast<arrow::StructArray>(sw_list->values());
+                  std::dynamic_pointer_cast<arrow::StructArray>(sw_slice->values);
               if (sw_items) {
-                int64_t begin = sw_list->value_offset(r);
-                int64_t length = sw_list->value_length(r);
+                int64_t begin = sw_slice->begin;
+                int64_t length = sw_slice->length;
                 it->second.scan_windows.reserve(static_cast<std::size_t>(length));
                 const Facet window{sw_items, scan.file};
                 for (int64_t k = 0; k < length; ++k) {
