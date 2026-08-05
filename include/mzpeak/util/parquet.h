@@ -100,6 +100,9 @@ public:
   /**
    * Return a planner for the given query.
    */
+  /// See StatsIndex::sorted_ascending.
+  bool sorted_ascending(int32_t row_group, int32_t leaf_column) const;
+
   Planner planner(const Query&);
 
   /**

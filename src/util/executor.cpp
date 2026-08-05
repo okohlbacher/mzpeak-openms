@@ -48,7 +48,10 @@ struct Executor::Impl {
   /// indicating which rows should be kept.
   ///
   std::vector<bool> filter(const Planner::Plan&,
-                           std::shared_ptr<arrow::RecordBatch>&);
+                           std::shared_ptr<arrow::RecordBatch>&,
+                           bool sorted_column,
+                           std::pair<int64_t, int64_t>& run,
+                           bool& have_run);
 
   /// Capture the requested columns.
   void project(std::shared_ptr<arrow::RecordBatch>&);
@@ -99,6 +102,11 @@ struct EqualityScan {
   Query::value_t wanted;
   std::vector<bool>& want_rows;
   bool& handled;
+  /// The row group DECLARES this column sorted ascending, nulls last.
+  bool sorted;
+  /// When the sorted path is taken, the matching run as [begin, end).
+  std::pair<int64_t, int64_t>& run;
+  bool& have_run;
 
   template <Type T> void operator()() const
   {
@@ -111,9 +119,36 @@ struct EqualityScan {
     const value_type target = std::get<value_type>(wanted);
     auto typed =
         std::static_pointer_cast<typename type_traits<T>::array_type>(array);
+    const int64_t length = typed->length();
 
-    want_rows.assign(static_cast<std::size_t>(typed->length()), true);
-    for (int64_t i = 0; i < typed->length(); ++i) {
+    // Binary-search path.  When the file DECLARES this column sorted ascending
+    // with nulls last AND the batch has no nulls, the matching rows are one
+    // contiguous run, found in O(log n).  This is what keeps a file with NO
+    // page index -- so the planner hands over a whole 1M-row group -- from
+    // costing O(group) per spectrum; the linear scan below is ~630x that on a
+    // real Astral run.
+    //
+    // Guarded two ways, both required.  On the declaration, because searching a
+    // column that is not actually sorted finds one run and silently misses the
+    // rest.  On null_count, because the general path KEEPS null rows and a
+    // sorted column's nulls form a SECOND run at the end -- two disjoint
+    // intervals a single [begin, end) cannot express.  Neither guard holds for
+    // an entity index, which is required and sorted, so the fast path is taken
+    // for exactly the query this reader runs.
+    if constexpr (std::is_arithmetic_v<value_type>) {
+      if (sorted && typed->null_count() == 0) {
+        const value_type* values = typed->raw_values();
+        const value_type* lo = std::lower_bound(values, values + length, target);
+        const value_type* hi = std::upper_bound(lo, values + length, target);
+        run = {lo - values, hi - values};
+        have_run = true;
+        handled = true;
+        return;
+      }
+    }
+
+    want_rows.assign(static_cast<std::size_t>(length), true);
+    for (int64_t i = 0; i < length; ++i) {
       // A null never compares equal, and the general path treats an unreadable
       // value as "no opinion" -- it yields no `false`, so the row stays
       // selected.  Matched here so the two paths agree row for row.
@@ -126,7 +161,10 @@ struct EqualityScan {
 
 /******************************************************************************/
 std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
-                                         std::shared_ptr<arrow::RecordBatch>& batch)
+                                         std::shared_ptr<arrow::RecordBatch>& batch,
+                                         bool sorted_column,
+                                         std::pair<int64_t, int64_t>& run,
+                                         bool& have_run)
 {
   // Each path sizes the mask itself, so a fast path that declines costs no
   // allocation before the general path takes over.
@@ -138,7 +176,9 @@ std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
       std::shared_ptr<arrow::Array> column(array(batch, field));
       bool handled = false;
       lift_type(field.second->type().value(),
-                EqualityScan{column, wanted, want_rows, handled});
+                EqualityScan{column, wanted, want_rows, handled, sorted_column, run,
+                             have_run});
+      if (have_run) return {};
       if (handled) return want_rows;
     }
   }
@@ -236,6 +276,15 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
       wanted_end = std::max(wanted_end, range.offset + range.length);
     }
 
+    // Does THIS row group declare the predicate's column sorted?  Asked once
+    // per group; the answer lets filter() binary-search instead of scanning the
+    // whole group when the file carries no page index to narrow it.
+    bool sorted_column = false;
+    if (auto equality = plan.query.as_equality()) {
+      sorted_column = impl_->source_.sorted_ascending(
+          row_group.first, equality->first.second->absolute_index());
+    }
+
     // Decoded once per row group and retained, so reading a run entity by
     // entity costs one decode per group rather than one per entity.
     auto batches = impl_->source_.row_group(row_group.first);
@@ -259,8 +308,20 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
         auto sliced = batch->Slice(offset, length);
 
-        auto want_rows = impl_->filter(plan, sliced);
-        Algorithm::spans(want_rows, project_wanted, sliced);
+        std::pair<int64_t, int64_t> run{0, 0};
+        bool have_run = false;
+        auto want_rows = impl_->filter(plan, sliced, sorted_column, run, have_run);
+
+        if (have_run) {
+          // The sorted fast path handed back one contiguous run; project it
+          // directly rather than materialising and re-scanning an n-bit mask.
+          if (run.second > run.first) {
+            project_wanted(static_cast<std::size_t>(run.first),
+                           static_cast<std::size_t>(run.second - 1), sliced);
+          }
+        } else {
+          Algorithm::spans(want_rows, project_wanted, sliced);
+        }
       }
 
       row_group_start += batch->num_rows();
