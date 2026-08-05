@@ -175,3 +175,34 @@ BOOST_AUTO_TEST_CASE(concurrent_peak_decode_is_safe_and_happens_once)
   BOOST_TEST(original.mz().size() == 13589u);
   BOOST_TEST(std::abs(original.mz()[8] - 204.7593349) < 1e-6);
 }
+
+/******************************************************************************/
+// A file with NO Parquet page index reads identically to one with it.
+//
+// The reference writer emits no page index (verified on a real Astral run), so
+// the planner cannot narrow within a row group and hands the executor the whole
+// group.  The executor binary-searches the declared-sorted index within that
+// range instead of scanning it linearly -- O(log n), not O(group) per spectrum,
+// which is a ~16x speedup on that layout.  This pins the CORRECTNESS of that
+// path; the speed is covered by the benchmark.  no_page_index.dir is small.dir
+// with the page index stripped and the sorting-columns declaration kept.
+BOOST_AUTO_TEST_CASE(reads_correctly_without_a_page_index)
+{
+  auto with_index = MzPeak::open("../test/files/small.dir").spectra();
+  auto without = MzPeak::open("../test/files/no_page_index.dir").spectra();
+  BOOST_TEST_REQUIRE(without.size() == with_index.size());
+
+  // Every spectrum decodes to the same peaks either way -- the binary-search
+  // path and the page-index path must agree value for value.
+  for (std::size_t i = 0; i < with_index.size(); ++i) {
+    const auto a = with_index[i];
+    const auto b = without[i];
+    BOOST_TEST_REQUIRE(b.mz().size() == a.mz().size());
+    BOOST_TEST_REQUIRE(b.intensity().size() == a.intensity().size());
+    if (!a.mz().empty()) {
+      BOOST_TEST(b.mz().front() == a.mz().front());
+      BOOST_TEST(b.mz().back() == a.mz().back());
+      BOOST_TEST(b.intensity().front() == a.intensity().front());
+    }
+  }
+}

@@ -261,6 +261,12 @@ std::shared_ptr<const Parquet::RowGroupBatches> Parquet::row_group(int32_t index
 }
 
 /******************************************************************************/
+bool Parquet::sorted_ascending(int32_t row_group, int32_t leaf_column) const
+{
+  return impl_->stats_->sorted_ascending(row_group, leaf_column);
+}
+
+/******************************************************************************/
 Planner Parquet::planner(const Query& q)
 {
   return Planner(*impl_->reader_, q, impl_->stats_);

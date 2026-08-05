@@ -80,9 +80,29 @@ struct StatsIndex::Impl {
     return value.second;
   }
 
+  bool sorted_ascending(int32_t row_group, int32_t column)
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::pair<int32_t, int32_t> key{row_group, column};
+    auto it = sorted_.find(key);
+    if (it != sorted_.end()) return it->second;
+
+    bool sorted = false;
+    if (row_group >= 0 && row_group < metadata_->num_row_groups()) {
+      for (const auto& cs : metadata_->RowGroup(row_group)->sorting_columns()) {
+        if (cs.column_idx != column) continue;
+        sorted = !cs.descending && !cs.nulls_first;
+        break;
+      }
+    }
+    sorted_.emplace(key, sorted);
+    return sorted;
+  }
+
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::vector<int64_t> rows_;
   std::map<key_type, value_type> cache_;
+  std::map<std::pair<int32_t, int32_t>, bool> sorted_;
   std::mutex mutex_;
 };
 
@@ -115,6 +135,12 @@ std::shared_ptr<parquet::Statistics> StatsIndex::get(int32_t row_group,
                                                      int32_t column) const
 {
   return impl_->get(row_group, column);
+}
+
+/******************************************************************************/
+bool StatsIndex::sorted_ascending(int32_t row_group, int32_t column) const
+{
+  return impl_->sorted_ascending(row_group, column);
 }
 
 /******************************************************************************/
@@ -541,9 +567,13 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
 /******************************************************************************/
 void Planner::Impl::full_scan(int32_t row_group_index)
 {
-  // FIXME: we should emit some sort of warning.
-  std::println(stderr, "no page index and no stats for rg {}, full scan needed",
-               row_group_index);
+  // A whole-row-group scan.  This is the correct fallback when a group has no
+  // page index to narrow within it -- the reference writer emits none, so real
+  // files take this path -- and the executor binary-searches a declared-sorted
+  // index within the range, so it is no longer O(group) per spectrum.  No
+  // warning: a fresh Planner is built per fetch, so a per-call stderr line here
+  // is one write per spectrum (hundreds of thousands on a real run) for a path
+  // that is neither an error nor slow.
   plan_.ranges.push_back({row_group_index, 0, stats_->row_count(row_group_index)});
 }
 

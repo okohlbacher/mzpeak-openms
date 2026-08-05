@@ -60,6 +60,11 @@ public:
    */
   std::shared_ptr<parquet::Statistics> get(int32_t row_group, int32_t column) const;
 
+  /// Does the row group DECLARE @p column sorted ascending, nulls last?  Only a
+  /// file's own sorting-columns declaration counts -- a binary search over a
+  /// column that is not actually sorted silently misses rows.
+  bool sorted_ascending(int32_t row_group, int32_t column) const;
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
