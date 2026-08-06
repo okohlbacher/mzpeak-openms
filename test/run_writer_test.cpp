@@ -456,8 +456,9 @@ BOOST_AUTO_TEST_CASE(a_column_is_found_through_column_mapping_alone)
   auto original = arrow::io::ReadableFile::Open(table.string()).ValueOrDie();
   auto reader =
       parquet::arrow::OpenFile(original, arrow::default_memory_pool()).ValueOrDie();
-  std::shared_ptr<arrow::Table> loaded;
-  BOOST_TEST_REQUIRE(reader->ReadTable(&loaded).ok());
+  auto loaded_result = reader->ReadTable();
+  BOOST_TEST_REQUIRE(loaded_result.ok());
+  auto loaded = std::move(loaded_result).ValueOrDie();
 
   auto fields = loaded->schema()->fields();
   int renamed = -1;

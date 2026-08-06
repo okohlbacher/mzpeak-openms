@@ -33,12 +33,14 @@ namespace {
 /// idempotent (each call re-reads the Parquet file).
 std::shared_ptr<arrow::Table> read_metadata_table(Parquet& metadata)
 {
-  std::shared_ptr<arrow::Table> table;
-  arrow::Status status = metadata.reader().ReadTable(&table);
-  if (!status.ok()) {
-    throw ParquetError("read metadata table: " + status.ToString());
+  // Result-returning ReadTable(); the out-parameter overload is deprecated in
+  // Arrow 24.
+  arrow::Result<std::shared_ptr<arrow::Table>> result =
+      metadata.reader().ReadTable();
+  if (!result.ok()) {
+    throw ParquetError("read metadata table: " + result.status().ToString());
   }
-  return table;
+  return std::move(result).ValueOrDie();
 }
 
 /// Read the `spectrum` struct column from an already-read table.  Returns null
