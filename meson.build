@@ -184,6 +184,7 @@ test_names = [
     'roundtrip',
     'row_group',
     'run_writer',
+    'sorting_declaration',
     'spectra',
     'spectrum_metadata',
     'util',
