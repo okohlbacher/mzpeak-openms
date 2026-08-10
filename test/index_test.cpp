@@ -14,6 +14,7 @@ directory of this repository.
 #include "mzpeak/exception.h"
 #include "mzpeak/index.h"
 #include "mzpeak/open.h"
+#include "mzpeak/schema/file.h"
 
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(can_parse_json)
@@ -27,11 +28,9 @@ BOOST_AUTO_TEST_CASE(can_parse_json)
 BOOST_AUTO_TEST_CASE(is_associated_with)
 {
   auto index = MzPeak::open("../test/files/small.mzpeak");
+
   const auto& files = index.files();
-
-  const auto& spectra = std::ranges::find(files, "spectra_data.parquet",
-                                          &MzPeak::Schema::File::file_name);
-
+  const auto& spectra = index.find("spectra_data.parquet");
   BOOST_TEST((spectra != files.end()), "missing spectra_data.parquet");
 
   auto matches = [&](const auto& other) -> bool {
@@ -39,10 +38,10 @@ BOOST_AUTO_TEST_CASE(is_associated_with)
   };
 
   for (const auto& other : files | std::views::filter(matches)) {
-    BOOST_TEST_CONTEXT(spectra->file_name << " should not be associated with "
-                                          << other.file_name)
+    BOOST_TEST_CONTEXT(spectra->file_name()
+                       << " should not be associated with " << other.file_name())
     {
-      BOOST_TEST((other.file_name == "spectra_metadata.parquet"));
+      BOOST_TEST((other.file_name() == "spectra_metadata.parquet"));
     }
   }
 }
@@ -63,10 +62,10 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
 
   std::size_t scans = 0, precursors = 0, selected_ions = 0;
   for (const auto& f : index.files()) {
-    if (f.entity_type != MzPeak::Schema::EntityType::Spectrum) continue;
-    if (f.data_kind == MzPeak::Schema::DataKind::Scans) ++scans;
-    if (f.data_kind == MzPeak::Schema::DataKind::Precursors) ++precursors;
-    if (f.data_kind == MzPeak::Schema::DataKind::SelectedIons) ++selected_ions;
+    if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
+    if (f.data_kind() == MzPeak::Schema::DataKind::Scans) ++scans;
+    if (f.data_kind() == MzPeak::Schema::DataKind::Precursors) ++precursors;
+    if (f.data_kind() == MzPeak::Schema::DataKind::SelectedIons) ++selected_ions;
   }
   BOOST_TEST(scans == 1u);
   BOOST_TEST(precursors == 1u);
@@ -76,8 +75,8 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
   // declares its unit as minutes.
   bool checked = false;
   for (const auto& f : index.files()) {
-    if (f.data_kind != MzPeak::Schema::DataKind::Scans) continue;
-    if (f.entity_type != MzPeak::Schema::EntityType::Spectrum) continue;
+    if (f.data_kind() != MzPeak::Schema::DataKind::Scans) continue;
+    if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
     auto path = f.path_for("MS:1000016");
     BOOST_TEST_REQUIRE(path.has_value());
     BOOST_TEST(*path == std::string("scan_start_time"));
@@ -95,24 +94,25 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
 // name instead).
 BOOST_AUTO_TEST_CASE(older_layout_has_no_facets_or_column_mapping)
 {
-  auto index = MzPeak::open("../test/files/small.mzpeak");
+  auto index = MzPeak::open("../test/files/legacy/small.mzpeak");
   for (const auto& f : index.files()) {
-    BOOST_TEST(f.column_mapping.empty());
-    BOOST_TEST((f.data_kind != MzPeak::Schema::DataKind::Scans));
-    BOOST_TEST((f.data_kind != MzPeak::Schema::DataKind::Precursors));
-    BOOST_TEST((f.data_kind != MzPeak::Schema::DataKind::SelectedIons));
+    BOOST_TEST(f.columns().empty());
+    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::Scans));
+    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::Precursors));
+    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::SelectedIons));
   }
 }
 
 /******************************************************************************/
 // The split-metadata layout must produce the SAME metadata as the older nested
-// layout.  test/files/v2/small.mzpeak is the upstream regeneration of
-// test/files/small.mzpeak, so every field below is cross-checked against the
-// old fixture rather than against hardcoded numbers — that catches a rename
+// layout.  test/files/legacy/small.mzpeak is the ORIGINAL nested-layout
+// archive, preserved when upstream regenerated every bundled fixture into the
+// split layout; every field below is cross-checked against it rather than
+// against hardcoded numbers — that catches a rename
 // silently reading back as nullopt, which is how this layout fails.
 BOOST_AUTO_TEST_CASE(split_metadata_layout_matches_the_nested_layout)
 {
-  auto v1 = MzPeak::open("../test/files/small.mzpeak").spectra();
+  auto v1 = MzPeak::open("../test/files/legacy/small.mzpeak").spectra();
   auto v2 = MzPeak::open("../test/files/v2/small.mzpeak").spectra();
   BOOST_TEST_REQUIRE(v1.size() == v2.size());
 
@@ -176,7 +176,7 @@ BOOST_AUTO_TEST_CASE(split_metadata_layout_matches_the_nested_layout)
 // the flat layout does not have.
 BOOST_AUTO_TEST_CASE(split_metadata_layout_decodes_peaks)
 {
-  auto v1 = MzPeak::open("../test/files/small.mzpeak").spectra();
+  auto v1 = MzPeak::open("../test/files/legacy/small.mzpeak").spectra();
   auto v2 = MzPeak::open("../test/files/v2/small.mzpeak").spectra();
 
   for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2)}) {

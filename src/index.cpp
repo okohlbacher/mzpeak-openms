@@ -17,180 +17,38 @@ directory of this repository.
 #include "mzpeak/exception.h"
 #include "mzpeak/io/archive.h"
 #include "mzpeak/metadata/table.h"
+#include "mzpeak/util/manager.h"
 #include "mzpeak/util/metadata_model.h"
 
-/*
- * Boost JSON:
- *   https://www.boost.org/doc/libs/latest/libs/json/doc/html/index.html
- */
 namespace MzPeak {
 
 /******************************************************************************/
-const static char* INDEX_FILE_NAME = "mzpeak_index.json";
-
-/******************************************************************************/
-namespace json = boost::json;
-
-/******************************************************************************/
-struct Index::Impl {
-
-  /// Constructor.
-  Impl(std::unique_ptr<MzPeak::IO::Archive> archive)
-      : archive_(std::move(archive))
-      , files_()
-  {
-    parse_index();
-  }
-
-  /// Parse the JSON that makes up the MzPeak index.
-  void parse_index();
-
-  // The archive we are reading files out of.
-  std::unique_ptr<MzPeak::IO::Archive> archive_;
-
-  // Parsed file entries.
-  std::vector<Schema::File> files_;
-
-  // The mzPeak format version from metadata.version (empty if absent).
-  std::string version_;
-
-  // TOF -> m/z calibration for the ims-compact layout (valid=false if absent).
-  ImsCalibration ims_;
-
-  // Return an iterator to the requested file.
-  std::vector<Schema::File>::const_iterator find_file(const std::string_view& name)
-  {
-    return std::ranges::find(files_, name, &Schema::File::file_name);
-  }
-};
-
-/******************************************************************************/
 Index::Index(std::unique_ptr<MzPeak::IO::Archive> archive)
-    : impl_(std::make_unique<Impl>(std::move(archive)))
+    : manager_(std::make_shared<Util::Manager>(std::move(archive)))
 {
 }
 
 /******************************************************************************/
-Index::~Index() = default;
+const std::vector<Schema::File>& Index::files() const { return manager_->files(); }
 
 /******************************************************************************/
-const std::vector<Schema::File>& Index::files() const { return impl_->files_; }
-
-/******************************************************************************/
-const std::string& Index::version() const { return impl_->version_; }
-
-/******************************************************************************/
-const ImsCalibration& Index::ims_calibration() const { return impl_->ims_; }
-
-/******************************************************************************/
-void Index::Impl::parse_index()
+std::vector<Schema::File>::const_iterator
+Index::find(const std::string_view& name) const
 {
-  auto file = archive_->read_file(INDEX_FILE_NAME);
-  uint8_t buffer[64 * 1024];
-  std::optional<std::size_t> bytes;
-
-  json::stream_parser parser;
-  boost::system::error_code ec;
-
-  do {
-    bytes = file->read(buffer, sizeof(buffer));
-
-    if (bytes.has_value() && *bytes > 0) {
-      parser.write(reinterpret_cast<char const*>(buffer), *bytes, ec);
-    }
-
-  } while (bytes.has_value() && !ec);
-
-  if (!ec) parser.finish(ec);
-  if (ec) throw MzPeak::JsonError(ec.message());
-
-  json::value v = parser.release();
-  json::object o = v.as_object();
-
-  if (const auto it = o.find("files"); it != o.end() && it->value().is_array()) {
-    const json::array files(it->value().as_array());
-    files_.reserve(files.size());
-
-    for (const auto& file_obj : files) {
-      if (file_obj.is_object()) {
-        files_.push_back(Schema::File(file_obj.as_object()));
-      }
-    }
-  }
-
-  // Format version from metadata.version (e.g. "0.9.0").
-  if (const auto it = o.find("metadata"); it != o.end() && it->value().is_object()) {
-    const json::object& meta = it->value().as_object();
-    if (const auto v = meta.find("version");
-        v != meta.end() && v->value().is_string()) {
-      version_ = v->value().as_string().c_str();
-    }
-
-    // ims-compact: {"a": ..., "b": ..., "mz_from_tof": "(a + b*tof)^2"}.
-    // Writers emit this either as a JSON object or as a STRING holding that
-    // object; accept both rather than silently reading no calibration, which
-    // would make every spectrum of such a file come back empty.
-    if (const auto ic = meta.find("ims_calibration"); ic != meta.end()) {
-      json::value parsed;
-      if (ic->value().is_string()) {
-        boost::system::error_code pe;
-        parsed = json::parse(ic->value().as_string(), pe);
-        if (pe) parsed = nullptr;
-      }
-      const json::value& calv = ic->value().is_string() ? parsed : ic->value();
-
-      if (calv.is_object()) {
-        const json::object& cal = calv.as_object();
-        const auto number = [&cal](const char* key, double& dst) {
-          const auto f = cal.find(key);
-          if (f == cal.end() || !f->value().is_number()) return false;
-          dst = f->value().to_number<double>();
-          return true;
-        };
-        // The archive states which transform its coefficients belong to.  We
-        // implement exactly one, so a file naming a different one must be
-        // refused rather than run through this one: the coefficients would be
-        // consumed by the wrong formula and every m/z would be wrong while
-        // remaining entirely plausible.
-        //
-        // Verified against a real Bruker timsTOF archive, whose calibration
-        // reads {"a": 9.9995…, "b": 4.9255e-05, "mz_from_tof": "(a + b*tof)^2",
-        // "tof_encoding": "absolute", "codec": "ims-compact"}.
-        const auto declares = [&cal](const char* key, std::string_view expected) {
-          const auto f = cal.find(key);
-          if (f == cal.end() || !f->value().is_string()) return true; // not stated
-          return std::string_view(f->value().as_string()) == expected;
-        };
-
-        if (!declares("mz_from_tof", "(a + b*tof)^2")) {
-          throw MzPeak::JsonError(
-              "ims_calibration declares an m/z transform this reader does not "
-              "implement; refusing rather than applying the wrong one");
-        }
-        if (!declares("tof_encoding", "absolute")) {
-          throw MzPeak::JsonError(
-              "ims_calibration declares a non-absolute TOF encoding; this "
-              "reader would treat the stored values as absolute");
-        }
-
-        // Both coefficients are required: half a calibration is not one.
-        const bool have_a = number("a", ims_.a);
-        const bool have_b = number("b", ims_.b);
-        ims_.valid = have_a && have_b;
-      }
-    }
-  }
-
-  // Reject a future, potentially incompatible MAJOR version (the spec is a
-  // pre-1.0 living standard; all 0.x are accepted).
-  if (!version_.empty()) {
-    std::string major(version_.substr(0, version_.find('.')));
-    if (major != "0") {
-      throw MzPeak::JsonError("unsupported mzPeak format version '" + version_ +
-                              "' (this reader supports 0.x)");
-    }
-  }
+  return manager_->find_file(name);
 }
+
+/******************************************************************************/
+const std::string& Index::version() const { return manager_->version(); }
+
+/******************************************************************************/
+const ImsCalibration& Index::ims_calibration() const
+{
+  return manager_->ims_calibration();
+}
+
+/******************************************************************************/
+std::shared_ptr<Util::Manager> Index::manager() const { return manager_; }
 
 /******************************************************************************/
 Spectra Index::spectra() const
@@ -200,12 +58,12 @@ Spectra Index::spectra() const
   const Schema::File* data_file = nullptr;
   const Schema::File* meta_file = nullptr;
 
-  for (const auto& file : impl_->files_) {
-    if (file.entity_type != Schema::EntityType::Spectrum) continue;
-    if (file.data_kind == DataArray || file.data_kind == Peaks) {
+  for (const auto& file : manager_->files()) {
+    if (file.entity_type() != Schema::EntityType::Spectrum) continue;
+    if (file.data_kind() == DataArray || file.data_kind() == Peaks) {
       // Prefer DataArray (profile); fall back to Peaks (centroid-only).
-      if (!data_file || file.data_kind == DataArray) data_file = &file;
-    } else if (file.data_kind == Metadata) {
+      if (!data_file || file.data_kind() == DataArray) data_file = &file;
+    } else if (file.data_kind() == Metadata) {
       meta_file = &file;
     }
   }
@@ -213,38 +71,39 @@ Spectra Index::spectra() const
   if (!data_file) return Spectra(); // no spectrum data
 
   const Schema::File* peaks_file = nullptr;
-  for (const auto& file : impl_->files_) {
-    if (file.entity_type == Schema::EntityType::Spectrum &&
-        file.data_kind == Peaks && data_file->data_kind == DataArray) {
+  for (const auto& file : manager_->files()) {
+    if (file.entity_type() == Schema::EntityType::Spectrum &&
+        file.data_kind() == Peaks && data_file->data_kind() == DataArray) {
       peaks_file = &file;
     }
   }
 
   std::unique_ptr<Metadata::Table> meta = nullptr;
   if (meta_file) {
-    meta = std::make_unique<Metadata::Table>(parquet(*meta_file));
+    meta = std::make_unique<Metadata::Table>(manager_->parquet(*meta_file));
 
     // Newer writers put each metadata facet in its own file; attach them so the
     // reader can join them by source_index.  Older writers have none of these.
-    for (const auto& file : impl_->files_) {
-      if (file.entity_type != Schema::EntityType::Spectrum) continue;
-      if (file.data_kind == Scans || file.data_kind == Precursors ||
-          file.data_kind == SelectedIons) {
-        meta->add_facet(file.data_kind, parquet(file));
+    for (const auto& file : manager_->files()) {
+      if (file.entity_type() != Schema::EntityType::Spectrum) continue;
+      if (file.data_kind() == Scans || file.data_kind() == Precursors ||
+          file.data_kind() == SelectedIons) {
+        meta->add_facet(file.data_kind(), manager_->parquet(file));
       }
     }
   }
 
   std::unique_ptr<Data::Signals> data =
-      std::make_unique<Data::Signals>(parquet(*data_file));
+      std::make_unique<Data::Signals>(manager_->parquet(*data_file));
 
   if (peaks_file) {
     std::unique_ptr<Data::Signals> peaks =
-        std::make_unique<Data::Signals>(parquet(*peaks_file));
-    return Spectra(std::move(data), std::move(peaks), std::move(meta), impl_->ims_);
+        std::make_unique<Data::Signals>(manager_->parquet(*peaks_file));
+    return Spectra(std::move(data), std::move(peaks), std::move(meta),
+                   manager_->ims_calibration());
   }
 
-  return Spectra(std::move(data), std::move(meta), impl_->ims_);
+  return Spectra(std::move(data), std::move(meta), manager_->ims_calibration());
 }
 
 /******************************************************************************/
@@ -254,15 +113,15 @@ WavelengthSpectra Index::wavelength_spectra() const
 
   const Schema::File* data = nullptr;
   const Schema::File* metadata = nullptr;
-  for (const auto& file : impl_->files_) {
-    if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
-    if (file.data_kind == DataArray) data = &file;
+  for (const auto& file : manager_->files()) {
+    if (file.entity_type() != Schema::EntityType::WavelengthSpectrum) continue;
+    if (file.data_kind() == DataArray) data = &file;
     // FIRST match wins.  Several members can carry data_kind "metadata" for one
     // entity -- the specification's own chromatogram example labels the
     // precursor facet that way -- and the primary table is written first.
     // Taking the last would hand a facet to the primary reader, which finds no
     // index column and returns an empty map with no error.
-    else if (file.data_kind == Metadata && metadata == nullptr)
+    else if (file.data_kind() == Metadata && metadata == nullptr)
       metadata = &file;
   }
 
@@ -273,7 +132,7 @@ WavelengthSpectra Index::wavelength_spectra() const
   std::optional<std::size_t> count;
   std::map<uint64_t, WavelengthSpectrumMetadata> md;
   if (metadata) {
-    auto md_parquet(parquet(*metadata));
+    auto md_parquet(manager_->parquet(*metadata));
     if (auto fmd = md_parquet->file_metadata()) {
       if (auto kv = fmd->key_value_metadata()) {
         auto result(kv->Get("wavelength_spectrum_count"));
@@ -292,18 +151,18 @@ WavelengthSpectra Index::wavelength_spectra() const
 
     // A split-layout writer puts the scan facet in its own file.
     std::unique_ptr<Util::Parquet> scans;
-    for (const auto& file : impl_->files_) {
-      if (file.entity_type != Schema::EntityType::WavelengthSpectrum) continue;
-      if (file.data_kind != Scans) continue;
-      scans = parquet(file);
+    for (const auto& file : manager_->files()) {
+      if (file.entity_type() != Schema::EntityType::WavelengthSpectrum) continue;
+      if (file.data_kind() != Scans) continue;
+      scans = manager_->parquet(file);
       files.scans = scans.get();
     }
 
     md = Util::read_wavelength_spectrum_metadata(files);
   }
 
-  return WavelengthSpectra(std::make_unique<Data::Signals>(parquet(*data)), count,
-                           std::move(md));
+  return WavelengthSpectra(std::make_unique<Data::Signals>(manager_->parquet(*data)),
+                           count, std::move(md));
 }
 
 /******************************************************************************/
@@ -313,11 +172,11 @@ Chromatograms Index::chromatograms() const
 
   const Schema::File* data = nullptr;
   const Schema::File* metadata = nullptr;
-  for (const auto& file : impl_->files_) {
-    if (file.entity_type != Schema::EntityType::Chromatogram) continue;
-    if (file.data_kind == DataArray) data = &file;
+  for (const auto& file : manager_->files()) {
+    if (file.entity_type() != Schema::EntityType::Chromatogram) continue;
+    if (file.data_kind() == DataArray) data = &file;
     // FIRST match wins; see the wavelength case above.
-    else if (file.data_kind == Metadata && metadata == nullptr)
+    else if (file.data_kind() == Metadata && metadata == nullptr)
       metadata = &file;
   }
 
@@ -326,7 +185,7 @@ Chromatograms Index::chromatograms() const
   std::optional<std::size_t> count;
   std::map<uint64_t, ChromatogramMetadata> md;
   if (metadata) {
-    auto md_parquet(parquet(*metadata));
+    auto md_parquet(manager_->parquet(*metadata));
     if (auto fmd = md_parquet->file_metadata()) {
       if (auto kv = fmd->key_value_metadata()) {
         auto result(kv->Get("chromatogram_count"));
@@ -345,13 +204,13 @@ Chromatograms Index::chromatograms() const
 
     std::unique_ptr<Util::Parquet> precursors;
     std::unique_ptr<Util::Parquet> selected_ions;
-    for (const auto& file : impl_->files_) {
-      if (file.entity_type != Schema::EntityType::Chromatogram) continue;
-      if (file.data_kind == Precursors) {
-        precursors = parquet(file);
+    for (const auto& file : manager_->files()) {
+      if (file.entity_type() != Schema::EntityType::Chromatogram) continue;
+      if (file.data_kind() == Precursors) {
+        precursors = manager_->parquet(file);
         files.precursors = precursors.get();
-      } else if (file.data_kind == SelectedIons) {
-        selected_ions = parquet(file);
+      } else if (file.data_kind() == SelectedIons) {
+        selected_ions = manager_->parquet(file);
         files.selected_ions = selected_ions.get();
       }
     }
@@ -359,15 +218,8 @@ Chromatograms Index::chromatograms() const
     md = Util::read_chromatogram_metadata(files);
   }
 
-  return Chromatograms(std::make_unique<Data::Signals>(parquet(*data)), count,
-                       std::move(md));
-}
-
-/******************************************************************************/
-std::unique_ptr<Util::Parquet> Index::parquet(const Schema::File& file) const
-{
-  std::unique_ptr<IO::File> data(impl_->archive_->read_file(file.file_name));
-  return std::make_unique<Util::Parquet>(std::move(data), file);
+  return Chromatograms(std::make_unique<Data::Signals>(manager_->parquet(*data)),
+                       count, std::move(md));
 }
 
 } // namespace MzPeak

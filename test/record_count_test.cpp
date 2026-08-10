@@ -64,8 +64,11 @@ MzPeak::Data::Signals make_reader(const std::string& file_name,
   IO::Directory dir(".");
   std::unique_ptr<IO::File> data(dir.read_file(file_name));
 
-  Schema::File schema_file(file_name);
-  schema_file.entity_type = Schema::EntityType::Spectrum;
+  // File's fields are set at construction (from the index JSON); build the
+  // equivalent object rather than mutating one.
+  Schema::File schema_file(boost::json::object{{"name", file_name},
+                                               {"data_kind", "data_arrays"},
+                                               {"entity_type", "spectrum"}});
 
   auto parquet(std::make_unique<Util::Parquet>(std::move(data), schema_file));
   return Data::Signals(std::move(parquet));

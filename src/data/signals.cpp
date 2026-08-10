@@ -40,7 +40,7 @@ struct Signals::Impl {
 std::shared_ptr<ArrayIndex> Signals::Impl::parse_array_index() const
 {
   Util::Parquet::file_metadata_t fmd(parquet_->file_metadata());
-  EntityType entity_type = parquet_->index_file().entity_type;
+  EntityType entity_type = parquet_->index_file().entity_type();
 
   // Normalize entity type name: replace spaces with underscores for KV keys
   // (e.g. "wavelength spectrum" → "wavelength_spectrum_count").

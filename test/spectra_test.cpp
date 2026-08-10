@@ -10,6 +10,7 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <atomic>
+#include <ranges>
 #include <thread>
 #include <vector>
 

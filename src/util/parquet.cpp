@@ -71,7 +71,7 @@ struct Parquet::Impl {
     auto status = reader_builder.Open(std::move(raf));
 
     if (!status.ok()) {
-      std::string msg("while opening file: " + file.file_name + ": ");
+      std::string msg("while opening file: " + file_.file_name() + ": ");
       throw ParquetError(msg + status.ToString());
     }
 
@@ -83,7 +83,7 @@ struct Parquet::Impl {
     status = reader_builder.Build(&reader);
 
     if (!status.ok()) {
-      std::string msg("while reading file: " + file.file_name + ": ");
+      std::string msg("while reading file: " + file_.file_name() + ": ");
       throw ParquetError(msg + status.ToString());
     }
 
@@ -96,7 +96,7 @@ struct Parquet::Impl {
 
   void error(const std::string& error)
   {
-    std::string msg("file accessing " + file_.file_name + ": " + error);
+    std::string msg("file accessing " + file_.file_name() + ": " + error);
     throw ParquetError(msg);
   }
 
@@ -133,17 +133,22 @@ void Parquet::Impl::parse_schema()
   auto root = fmd->schema()->group_node();
   int32_t offset = 0;
 
+  std::shared_ptr<Schema::Group> root_group =
+      std::make_shared<Schema::Group>(*root, file_);
+
+  if (!root_group->fields().empty()) {
+    (*groups_)[root_group->name()] = root_group;
+  }
+
   for (int32_t i : std::views::iota(0, root->field_count())) {
     auto node = root->field(i);
 
-    // TODO: Should we emit a warning if there is a top-level
-    // primitive column?
-    if (node->is_group()) {
+    if (node->is_group() && !node->logical_type()->is_list()) {
       std::shared_ptr<parquet::schema::GroupNode> group =
           std::static_pointer_cast<parquet::schema::GroupNode>(node);
 
       std::shared_ptr<Schema::Group> s =
-          std::make_shared<Schema::Group>(*group, i, offset);
+          std::make_shared<Schema::Group>(*group, file_, i, offset);
       (*groups_)[s->name()] = s;
       offset += group->field_count();
     }

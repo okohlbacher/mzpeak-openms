@@ -11,6 +11,7 @@ in the LICENSE file found in the top-level directory of this project.
 
 #include "mzpeak/open.h"
 #include "mzpeak/util/executor.h"
+#include "mzpeak/util/manager.h" // IWYU pragma: keep
 #include "mzpeak/util/parquet.h"
 #include "mzpeak/util/planner.h"
 #include "mzpeak/util/query.h"
@@ -26,7 +27,7 @@ BOOST_AUTO_TEST_CASE(can_find_spectrum)
 
   BOOST_TEST((entry != index.files().end()));
 
-  auto parquet = index.parquet(*entry);
+  auto parquet = index.manager()->parquet(*entry);
 
   auto index_field = parquet->field("point", "spectrum_index");
   BOOST_TEST(index_field.has_value());
@@ -69,12 +70,12 @@ BOOST_AUTO_TEST_CASE(can_read_uint8_t)
 
   BOOST_TEST((entry != index.files().end()));
 
-  auto parquet = index.parquet(*entry);
+  auto parquet = index.manager()->parquet(*entry);
 
-  auto index_field = parquet->field("spectrum", "index");
+  auto index_field = parquet->field("root", "index");
   BOOST_TEST(index_field.has_value());
 
-  auto ms_level = parquet->field("spectrum", "ms_level");
+  auto ms_level = parquet->field("root", "ms_level");
   BOOST_TEST(ms_level.has_value());
 
   auto query = Util::Query::Builder(*index_field).eq<uint64_t>(0ul);

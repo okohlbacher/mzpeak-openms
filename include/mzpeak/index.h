@@ -8,17 +8,30 @@ directory of this repository.
 
 #pragma once
 
+#include <memory>
+#include <vector>
+
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/ims_calibration.h"
-#include "mzpeak/io/archive.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/spectra.h"
-#include "mzpeak/util/parquet.h"
 #include "mzpeak/wavelength_spectra.h"
 
 namespace MzPeak {
 
-// Internal implementation.
+namespace IO {
+class Archive;
+}
+
+namespace Schema {
+class File;
+}
+
+namespace Util {
+class Manager;
+}
+
+class Spectra;
 
 /**
  * Read-only access to the index inside a MzPeak archive.
@@ -28,13 +41,15 @@ public:
   /// Constructor.
   Index(std::unique_ptr<MzPeak::IO::Archive>);
 
-  /// Destructor.
-  ~Index();
-
   /**
    * Return a list of files found in the index.
    */
   const std::vector<Schema::File>& files() const;
+
+  /**
+   * Find a file in the mzPeak archive with the given name.
+   */
+  std::vector<Schema::File>::const_iterator find(const std::string_view&) const;
 
   /**
    * The mzPeak format version from the index `metadata.version`, or an
@@ -64,13 +79,12 @@ public:
   WavelengthSpectra wavelength_spectra() const;
 
   /**
-   * Open a Parquet file directly.
+   * Access the low-level MzPeak Manager object.
    */
-  std::unique_ptr<Util::Parquet> parquet(const Schema::File&) const;
+  std::shared_ptr<Util::Manager> manager() const;
 
 protected:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  std::shared_ptr<Util::Manager> manager_;
 };
 
 } // namespace MzPeak

@@ -121,7 +121,7 @@ Util::Parquet make_parquet(const std::string& file_name,
   std::unique_ptr<File> data(dir.read_file(file_name));
 
   Schema::File sf(file_name);
-  sf.entity_type = Schema::EntityType::Spectrum;
+  sf.entity_type() = Schema::EntityType::Spectrum;
 
   return Util::Parquet(std::move(data), sf);
 }

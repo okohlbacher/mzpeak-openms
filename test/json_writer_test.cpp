@@ -100,13 +100,13 @@ BOOST_AUTO_TEST_CASE(mzpeak_index_round_trips)
 
     // Constructs via the JSON ctor without throwing.
     Schema::File file(fo);
-    BOOST_TEST(!file.file_name.empty());
-    BOOST_TEST((file.entity_type == Schema::EntityType::Spectrum));
+    BOOST_TEST(!file.file_name().empty());
+    BOOST_TEST((file.entity_type() == Schema::EntityType::Spectrum));
   }
 
   // Spot-check the data-kind mapping for the two entries.
   Schema::File data(file_array.at(0).as_object());
   Schema::File peaks(file_array.at(1).as_object());
-  BOOST_TEST((data.data_kind == Schema::DataKind::DataArray));
-  BOOST_TEST((peaks.data_kind == Schema::DataKind::Peaks));
+  BOOST_TEST((data.data_kind() == Schema::DataKind::DataArray));
+  BOOST_TEST((peaks.data_kind() == Schema::DataKind::Peaks));
 }
