@@ -9,6 +9,8 @@ in the LICENSE file found in the top-level directory of this project.
 #define BOOST_TEST_MODULE Executor
 #include <boost/test/included/unit_test.hpp>
 
+#include <arrow/api.h>
+
 #include "mzpeak/open.h"
 #include "mzpeak/util/executor.h"
 #include "mzpeak/util/manager.h" // IWYU pragma: keep
@@ -97,4 +99,47 @@ BOOST_AUTO_TEST_CASE(can_read_uint8_t)
   slice->array<Util::Decoders::Scalar<uint8_t>>(*ms_level, levels);
   BOOST_TEST(levels.size() == 1);
   BOOST_TEST(levels[0] == 1);
+}
+
+/******************************************************************************/
+// EqualityScan's binary-search fast path indexes `typed->raw_values()` directly
+// over [0, typed->length()), and the array it receives is a SLICE of the row
+// group's batch (Executor::execute calls batch->Slice before filter()).  That
+// is only correct because Arrow's NumericArray::raw_values() returns a pointer
+// that ALREADY has the slice offset applied:
+//
+//     values_ = raw_values_ + data_->offset;
+//
+// which is also the pointer Value(i) indexes, so the binary and linear paths
+// agree element for element.
+//
+// Pinned here because it is an assumption about a THIRD-PARTY library that is
+// invisible at our call site, and because two independent adversarial review
+// runs disagreed about it -- one asserting raw_values() IGNORES the offset,
+// which would mean every sliced fast-path read returned peaks from the wrong
+// rows.  It does not, on Arrow 25.  If a future Arrow changes this, the failure
+// surfaces loudly here instead of as silently wrong m/z values.
+BOOST_AUTO_TEST_CASE(arrow_raw_values_is_offset_adjusted_for_a_slice)
+{
+  arrow::DoubleBuilder builder;
+  for (int i = 1; i <= 8; ++i)
+    BOOST_TEST_REQUIRE(builder.Append(double(i)).ok());
+
+  std::shared_ptr<arrow::Array> array;
+  BOOST_TEST_REQUIRE(builder.Finish(&array).ok());
+
+  // Rows 4..7, i.e. the values 5, 6, 7, 8.
+  auto typed = std::static_pointer_cast<arrow::DoubleArray>(array->Slice(4, 4));
+
+  BOOST_TEST_REQUIRE(typed->offset() == 4);
+  BOOST_TEST_REQUIRE(typed->length() == 4);
+
+  // The first element of the SLICE, not of the underlying buffer.
+  BOOST_TEST(typed->raw_values()[0] == 5.0);
+  BOOST_TEST(typed->raw_values()[typed->length() - 1] == 8.0);
+
+  // The two accessors the two scan paths use must agree element for element.
+  for (int64_t i = 0; i < typed->length(); ++i) {
+    BOOST_TEST(typed->raw_values()[i] == typed->Value(i));
+  }
 }
