@@ -182,6 +182,7 @@ test_names = [
     'query',
     'query_api',
     'roundtrip',
+    'row_group',
     'run_writer',
     'spectra',
     'spectrum_metadata',

@@ -178,7 +178,8 @@ bool entity_index_is_ascending(const arrow::Table& table)
 // selects rows via the index column's page index in both).
 void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
                          const std::shared_ptr<arrow::Table>& table,
-                         const std::map<std::string, std::string>& file_kv)
+                         const std::map<std::string, std::string>& file_kv,
+                         std::optional<int64_t> max_row_group = std::nullopt)
 {
   // Which DFS leaf is the entity index?
   //
@@ -227,10 +228,12 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
   // Bound the row-group size: one giant row group defeats page/row-group
   // pruning and is memory-hungry for large files.  Keep it positive even
   // for an empty table (WriteTable rejects a zero chunk size).
+  // Callers may request a smaller cap; a test needs several row groups without
+  // writing millions of rows to get them.
   constexpr int64_t kMaxRowGroup = 1 << 20; // ~1M rows
-  int64_t row_group_size = table->num_rows() > 0
-                               ? std::min<int64_t>(table->num_rows(), kMaxRowGroup)
-                               : kMaxRowGroup;
+  const int64_t cap = max_row_group.value_or(kMaxRowGroup);
+  int64_t row_group_size =
+      table->num_rows() > 0 ? std::min<int64_t>(table->num_rows(), cap) : cap;
   check(writer->WriteTable(*table, row_group_size), "write table");
 
   // Embed file-level key/value metadata after the data, before Close().
@@ -296,7 +299,8 @@ void write_point_spectra_data_to_sink(
     const std::vector<uint64_t>& spectrum_index,
     const std::vector<double>& mz,
     const std::vector<float>& intensity,
-    const std::map<std::string, std::string>& file_kv)
+    const std::map<std::string, std::string>& file_kv,
+    std::optional<int64_t> max_row_group)
 {
   if (spectrum_index.size() != mz.size() || mz.size() != intensity.size()) {
     throw ParquetError("write_point_spectra_data: input vectors must have "
@@ -329,7 +333,7 @@ void write_point_spectra_data_to_sink(
 
   auto table(arrow::Table::Make(schema, {point_array}));
 
-  write_table_to_sink(sink, table, file_kv);
+  write_table_to_sink(sink, table, file_kv, max_row_group);
 }
 
 /******************************************************************************/
@@ -414,7 +418,8 @@ void write_point_spectra_data(const std::string& path,
                               const std::vector<uint64_t>& spectrum_index,
                               const std::vector<double>& mz,
                               const std::vector<float>& intensity,
-                              const std::map<std::string, std::string>& file_kv)
+                              const std::map<std::string, std::string>& file_kv,
+                              std::optional<int64_t> max_row_group)
 {
   // Output sink.
   auto sink_result(arrow::io::FileOutputStream::Open(path));
@@ -424,7 +429,8 @@ void write_point_spectra_data(const std::string& path,
   }
   std::shared_ptr<arrow::io::FileOutputStream> sink(sink_result.ValueOrDie());
 
-  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv);
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv,
+                                   max_row_group);
 }
 
 /******************************************************************************/
@@ -443,7 +449,8 @@ point_spectra_data_bytes(const std::vector<uint64_t>& spectrum_index,
   }
   std::shared_ptr<arrow::io::BufferOutputStream> sink(sink_result.ValueOrDie());
 
-  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv);
+  write_point_spectra_data_to_sink(sink, spectrum_index, mz, intensity, file_kv,
+                                   std::nullopt);
 
   return finish_to_string(sink);
 }

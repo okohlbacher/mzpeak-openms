@@ -46,11 +46,15 @@ namespace MzPeak::Util {
  * @throws ParquetError on any Arrow/Parquet error, or if the input
  *         vectors do not all have the same length.
  */
+/// @param max_row_group  Optional cap on rows per Parquet row group.  Defaults
+///                       to ~1M.  Lowering it is how a test obtains a file with
+///                       several row groups without writing millions of rows.
 void write_point_spectra_data(const std::string& path,
                               const std::vector<uint64_t>& spectrum_index,
                               const std::vector<double>& mz,
                               const std::vector<float>& intensity,
-                              const std::map<std::string, std::string>& file_kv);
+                              const std::map<std::string, std::string>& file_kv,
+                              std::optional<int64_t> max_row_group = std::nullopt);
 
 /**
  * Encode a point-layout spectra data table to an in-memory Parquet buffer

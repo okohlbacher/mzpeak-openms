@@ -33,7 +33,10 @@ fixtures:
 1. **Metadata list columns** — `parameters`, `scan_windows`, `auxiliary_arrays`
    cast only `LargeListArray`. A plain `list` read as empty. Demonstrated: a
    32-bit-list copy of `small.dir` lost all 48 scan windows before the fix, 48
-   after (`test/files/list32.dir`).
+   after (`test/files/list32.dir`).  Note that `list32.dir` was copied from
+   `small.dir` while that was still the legacy nested layout; upstream has since
+   regenerated `small.dir` into the split layout, so the fixture is nested and
+   the comparison crosses layout as well as list width.
 2. **Chunked signal columns** — `chunk_values`/`chunk_secondary`/`chunk_transform`
    cast only `LargeListArray` and threw on a plain `list`. A 32-bit-list copy of
    the chunked fixture now decodes to the identical 243,054 peaks.

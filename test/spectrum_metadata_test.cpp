@@ -811,8 +811,14 @@ BOOST_AUTO_TEST_CASE(an_unimplemented_tof_transform_is_refused)
 // The reference writer emits large_list, so casting only to LargeListArray read
 // every list-typed column -- scan_windows, parameters, auxiliary_arrays -- as
 // empty from a conformant third-party archive using 32-bit lists (PyArrow's
-// frequent default).  list32.dir is small.dir with every large_list/large_string
-// rewritten to its 32-bit form; scan_windows must still be present.
+// frequent default).  list32.dir has every large_list/large_string rewritten to
+// its 32-bit form; scan_windows must still be present.
+// NOTE ON PROVENANCE: this fixture was derived from small.dir when small.dir
+// was still the legacy NESTED layout.  Upstream has since regenerated
+// small.dir into the SPLIT layout, so the comparison below now crosses TWO
+// variables, not one.  The property under test is still exercised, and the
+// nested arm is now covered nowhere else, so the fixture is kept as is --
+// but do not read this as a single-variable experiment.
 BOOST_AUTO_TEST_CASE(plain_list_columns_read_like_large_list)
 {
   auto large = MzPeak::open("../test/files/small.dir").spectra();
@@ -844,6 +850,12 @@ BOOST_AUTO_TEST_CASE(plain_list_columns_read_like_large_list)
 // so the other width emptied the field -- and an empty accession makes the term
 // unmatchable (R5).  uint32_index.dir is has_uv rewritten with a uint32 index
 // and 32-bit strings; its metadata must still read.
+// NOTE ON PROVENANCE: this fixture was derived from small.dir when small.dir
+// was still the legacy NESTED layout.  Upstream has since regenerated
+// small.dir into the SPLIT layout, so the comparison below now crosses TWO
+// variables, not one.  The property under test is still exercised, and the
+// nested arm is now covered nowhere else, so the fixture is kept as is --
+// but do not read this as a single-variable experiment.
 BOOST_AUTO_TEST_CASE(uint32_index_and_narrow_strings_read)
 {
   auto chroms = MzPeak::open("../test/files/uint32_index.dir").chromatograms();

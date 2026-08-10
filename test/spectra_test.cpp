@@ -185,8 +185,14 @@ BOOST_AUTO_TEST_CASE(concurrent_peak_decode_is_safe_and_happens_once)
 // group.  The executor binary-searches the declared-sorted index within that
 // range instead of scanning it linearly -- O(log n), not O(group) per spectrum,
 // which is a ~16x speedup on that layout.  This pins the CORRECTNESS of that
-// path; the speed is covered by the benchmark.  no_page_index.dir is small.dir
-// with the page index stripped and the sorting-columns declaration kept.
+// path; the speed is covered by the benchmark.  no_page_index.dir has the page
+// index stripped and the sorting-columns declaration kept.
+// NOTE ON PROVENANCE: this fixture was derived from small.dir when small.dir
+// was still the legacy NESTED layout.  Upstream has since regenerated
+// small.dir into the SPLIT layout, so the comparison below now crosses TWO
+// variables, not one.  The property under test is still exercised, and the
+// nested arm is now covered nowhere else, so the fixture is kept as is --
+// but do not read this as a single-variable experiment.
 BOOST_AUTO_TEST_CASE(reads_correctly_without_a_page_index)
 {
   auto with_index = MzPeak::open("../test/files/small.dir").spectra();
