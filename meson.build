@@ -1,4 +1,4 @@
-# https://mesonbuild.com/
+#https: // mesonbuild.com/
 project('MZPeak C++ Library', 'cpp',
         version : '1.0.0',
         license : 'BSD3',
@@ -19,7 +19,7 @@ add_project_arguments(compiler.get_supported_arguments([
   '/w14062',
 ]), language: 'cpp')
 
-# Source files included in the library:
+#Source files included in the library:
 lib_sources = [
   'src/data/array_index.cpp',
   'src/data/signals.cpp',
@@ -64,7 +64,7 @@ lib_sources = [
   'src/writer.cpp',
 ]
 
-# Header files to include in packages:
+#Header files to include in packages:
 install_headers([
   'include/mzpeak.h',
   'include/mzpeak/data/array_index.h',
@@ -124,7 +124,7 @@ install_headers([
   'include/mzpeak/writer.h',
 ], subdir : 'mzpeak')
 
-# Library and executable targets:
+#Library and executable targets:
 include = include_directories('include')
 
 arrow_ver_str = '>=24.0.0'
@@ -160,7 +160,7 @@ libmzpeak_a = static_library(
   include_directories : include,
   install : true)
 
-# Testing
+#Testing
 test_names = [
     'array_index',
     'archive_writer',
@@ -189,6 +189,10 @@ test_names = [
     'wavelength_spectra',
     'writer',
     'zip',
+    'index_metadata',
+    'writer_metadata',
+    'eic',
+    'spectra_query',
 ]
 
 foreach test : test_names
@@ -201,11 +205,11 @@ foreach test : test_names
          verbose : false)
 endforeach
 
-# Full end-to-end integration test: drives the whole reader API over every
-# bundled fixture plus a reverse round trip through the writer.  It decodes
-# real profile fixtures in full, so it is slower than the unit tests and is
-# given a generous timeout and its own `e2e` suite (run alone with
-# `meson test --suite e2e`).
+#Full end - to - end integration test : drives the whole reader API over every
+#bundled fixture plus a reverse round trip through the writer.It decodes
+#real profile fixtures in full, so it is slower than the unit tests and is
+#given a generous timeout and its own `e2e` suite(run alone with
+# `meson test -- suite e2e`).
 test('e2e',
      executable('e2e_test',
                 'test/e2e_test.cpp',
@@ -216,7 +220,7 @@ test('e2e',
      timeout : 300,
      verbose : false)
 
-# Examples
+#Examples
 example_names = [
   'read_spectra'
 ]
@@ -232,7 +236,7 @@ foreach example : example_names
     install_dir : 'examples')
 endforeach
 
-# Tools
+#Tools
 tool_names = [
   'mzp-inspect',
   'mzp-bench'

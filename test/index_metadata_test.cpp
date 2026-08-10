@@ -66,8 +66,10 @@ BOOST_AUTO_TEST_CASE(instrument_configuration_accessible)
 
   BOOST_TEST(configs.size() == 2u);
 
+  // The regenerated fixture lists configuration id 1 first, then id 0; the
+  // index preserves the file's order rather than sorting by id.
   const auto& first = configs.front();
-  BOOST_TEST((first.id == std::optional<std::int64_t>(0)));
+  BOOST_TEST((first.id == std::optional<std::int64_t>(1)));
   BOOST_TEST((first.software_reference == std::optional<std::string>("Xcalibur")));
 
   // Top-level params carry the instrument model (MS:1000448 "LTQ FT").
@@ -130,8 +132,12 @@ BOOST_AUTO_TEST_CASE(data_processing_and_sample)
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(version_unchanged)
 {
-  // RDR-24 must not regress the format-version handling: small.mzpeak's index
-  // declares no metadata.version, so version() stays empty (no throw).
+  // RDR-24 must not regress the format-version handling.  Both branches:
+  // small.mzpeak declares metadata.version, the legacy archive declares none
+  // and must still read (empty, no throw) rather than being rejected.
   auto index = MzPeak::open("../test/files/small.mzpeak");
-  BOOST_TEST(index.version().empty());
+  BOOST_TEST(index.version() == "0.9.0");
+
+  auto legacy = MzPeak::open("../test/files/legacy/small.mzpeak");
+  BOOST_TEST(legacy.version().empty());
 }

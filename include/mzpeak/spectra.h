@@ -110,6 +110,10 @@ public:
    * @note Times are SECONDS, matching SpectrumMetadata::retention_time — the
    * file stores minutes, and the reader converts.  Passing minutes here is a
    * 60x error that silently selects the wrong scans.
+   *
+   * @note An inverted range (`rt_low > rt_high`) is NORMALISED rather than
+   * rejected: the bounds are swapped, so the call returns the same window as
+   * the correctly ordered one.
    */
   std::vector<std::size_t> indices_in_time_range(double rt_low,
                                                  double rt_high) const;
@@ -125,6 +129,9 @@ public:
    *
    * This is the only selection helper that decodes peaks, and it decodes only
    * the spectra that survive the RT and ms-level filters.
+   *
+   * @note An inverted range is NORMALISED by swapping rather than rejected —
+   * for m/z exactly as indices_in_time_range() does for time.
    */
   std::vector<EicPoint>
   extract_ion_chromatogram(double mz_low,

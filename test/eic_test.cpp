@@ -17,7 +17,7 @@ directory of this repository.
 // RDR-17: extracted-ion chromatogram.  Ground truth computed independently in
 // python (pyarrow) over test/files/small.mzpeak.
 //
-// The RT window [0.011, 0.11] selects 10 spectra (ascending time): indices
+// The RT window [0.66, 6.6] selects 10 spectra (ascending time): indices
 // {2,3,4,5,6,7,8,9,10,11}.  Indices 7 and 8 are MS1 (profile, spectra_data);
 // the other eight are MS2 (centroid, spectra_peaks).  The m/z window
 // [400, 410] summed over the eight MS2 scans gives (double-accumulated):
@@ -30,6 +30,9 @@ directory of this repository.
 //   9    0.081203333333  2145.2410...
 //   10   0.092903333333  1539.2138...
 //   11   0.104803333333  363.21295...
+// NOTE: retention-time bounds here are SECONDS.  The file stores minutes, and
+// the ground-truth times in the table above are the STORED (minute) values --
+// the 0.66 s / 6.6 s window below is 0.011 min / 0.11 min converted.
 BOOST_AUTO_TEST_CASE(eic_ms2_window_values)
 {
   using namespace MzPeak;
@@ -39,7 +42,7 @@ BOOST_AUTO_TEST_CASE(eic_ms2_window_values)
 
   // Restrict to MS2 so the points come straight from the peaks table (raw,
   // directly-stored m/z and intensity) — matches the python ground truth.
-  auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.011, 0.11, 2);
+  auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.66, 6.6, 2);
 
   const std::vector<std::size_t> expect_idx{2, 3, 4, 5, 6, 9, 10, 11};
   const std::vector<double> expect_int{1686.5167, 1890.8547, 418.7325,  579.9818,
@@ -68,15 +71,15 @@ BOOST_AUTO_TEST_CASE(eic_ms_level_filter)
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = mzpeak.spectra();
 
-  auto all = spectra.extract_ion_chromatogram(400.0, 410.0, 0.011, 0.11);
+  auto all = spectra.extract_ion_chromatogram(400.0, 410.0, 0.66, 6.6);
   BOOST_TEST(all.size() == 10u);
 
-  auto ms1 = spectra.extract_ion_chromatogram(400.0, 410.0, 0.011, 0.11, 1);
+  auto ms1 = spectra.extract_ion_chromatogram(400.0, 410.0, 0.66, 6.6, 1);
   BOOST_TEST(ms1.size() == 2u);
   BOOST_TEST(ms1[0].spectrum_index == 7u);
   BOOST_TEST(ms1[1].spectrum_index == 8u);
 
-  auto ms2 = spectra.extract_ion_chromatogram(400.0, 410.0, 0.011, 0.11, 2);
+  auto ms2 = spectra.extract_ion_chromatogram(400.0, 410.0, 0.66, 6.6, 2);
   BOOST_TEST(ms2.size() == 8u);
 }
 
@@ -92,7 +95,7 @@ BOOST_AUTO_TEST_CASE(eic_emits_dense_zeros)
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = mzpeak.spectra();
 
-  auto eic = spectra.extract_ion_chromatogram(1500.0, 1510.0, 0.011, 0.11, 2);
+  auto eic = spectra.extract_ion_chromatogram(1500.0, 1510.0, 0.66, 6.6, 2);
 
   // One point per selected MS2 scan, even the empty ones.
   BOOST_TEST(eic.size() == 8u);
@@ -156,7 +159,7 @@ BOOST_AUTO_TEST_CASE(batch_out_of_range_yields_empty)
 // maximum m/z value present in any spectrum returns an EIC where every
 // intensity is 0.0.  The dense-trace policy still emits one point per
 // selected scan, so the vector length equals the number of selected scans
-// (8 MS2 scans in the RT window [0.011, 0.11]).
+// (8 MS2 scans in the RT window [0.66, 6.6]).
 BOOST_AUTO_TEST_CASE(eic_empty_for_out_of_range_mz)
 {
   using namespace MzPeak;
@@ -164,7 +167,7 @@ BOOST_AUTO_TEST_CASE(eic_empty_for_out_of_range_mz)
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = mzpeak.spectra();
 
-  auto eic = spectra.extract_ion_chromatogram(99999.0, 100000.0, 0.011, 0.11, 2);
+  auto eic = spectra.extract_ion_chromatogram(99999.0, 100000.0, 0.66, 6.6, 2);
 
   // Dense-trace policy: one point per selected MS2 scan even when the window
   // is entirely empty.
@@ -176,7 +179,7 @@ BOOST_AUTO_TEST_CASE(eic_empty_for_out_of_range_mz)
 
 /******************************************************************************/
 // RDR-17: full m/z window equals no filter.  A window [0, 1e9] covers every
-// peak in every spectrum.  Over the eight MS2 scans in RT [0.011, 0.11] the
+// peak in every spectrum.  Over the eight MS2 scans in RT [0.66, 6.6] the
 // EIC must contain exactly 8 points, all intensities must be non-negative, and
 // the points must be in strictly ascending RT order.
 BOOST_AUTO_TEST_CASE(eic_full_mz_window_equals_no_filter)
@@ -186,7 +189,7 @@ BOOST_AUTO_TEST_CASE(eic_full_mz_window_equals_no_filter)
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = mzpeak.spectra();
 
-  auto eic = spectra.extract_ion_chromatogram(0.0, 1e9, 0.011, 0.11, 2);
+  auto eic = spectra.extract_ion_chromatogram(0.0, 1e9, 0.66, 6.6, 2);
 
   BOOST_TEST(eic.size() == 8u);
   for (const auto& p : eic) {
@@ -209,20 +212,33 @@ BOOST_AUTO_TEST_CASE(eic_empty_for_absent_ms_level)
   auto spectra = mzpeak.spectra();
 
   // small.mzpeak has only MS1 and MS2 scans; MS3 is absent.
-  auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.0, 1.0, 3);
+  auto eic = spectra.extract_ion_chromatogram(400.0, 410.0, 0.0, 60.0, 3);
   BOOST_TEST(eic.empty());
 }
 
 /******************************************************************************/
-// FC-07: extract_ion_chromatogram must throw std::invalid_argument when
-// mz_low > mz_high (inverted range).
-BOOST_AUTO_TEST_CASE(eic_rejects_inverted_mz_range)
+// FC-07: an inverted m/z range is NORMALISED, not rejected.  The bounds are
+// swapped, so (410, 400) returns exactly what (400, 410) returns -- the same
+// contract indices_in_time_range applies to its retention-time bounds.
+//
+// An earlier revision expected std::invalid_argument here.  Swapping is the
+// shipped behaviour and is the more useful one: the alternative that actually
+// bites is returning an EMPTY chromatogram for a transposed window, which a
+// caller reads as "this ion is not present" rather than as a mistake.
+BOOST_AUTO_TEST_CASE(eic_normalises_inverted_mz_range)
 {
   using namespace MzPeak;
 
   auto mzpeak = MzPeak::open("../test/files/small.mzpeak");
   auto spectra = mzpeak.spectra();
 
-  BOOST_CHECK_THROW(spectra.extract_ion_chromatogram(410.0, 400.0, 0.0, 1.0),
-                    std::invalid_argument);
+  auto forward = spectra.extract_ion_chromatogram(400.0, 410.0, 0.66, 6.6, 2);
+  auto inverted = spectra.extract_ion_chromatogram(410.0, 400.0, 0.66, 6.6, 2);
+
+  BOOST_TEST_REQUIRE(!forward.empty());
+  BOOST_TEST_REQUIRE(inverted.size() == forward.size());
+  for (std::size_t i = 0; i < forward.size(); ++i) {
+    BOOST_TEST(inverted[i].spectrum_index == forward[i].spectrum_index);
+    BOOST_TEST(inverted[i].intensity == forward[i].intensity);
+  }
 }

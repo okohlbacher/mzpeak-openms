@@ -22,7 +22,8 @@ namespace json = boost::json;
 void parse_index(std::shared_ptr<MzPeak::IO::Archive>& archive,
                  std::vector<Schema::File>& files,
                  std::string& version,
-                 ImsCalibration& ims)
+                 ImsCalibration& ims,
+                 RunMetadata& metadata)
 {
   auto file = archive->read_file(INDEX_FILE_NAME);
   uint8_t buffer[64 * 1024];
@@ -59,6 +60,9 @@ void parse_index(std::shared_ptr<MzPeak::IO::Archive>& archive,
   // Format version from metadata.version (e.g. "0.9.0").
   if (const auto it = o.find("metadata"); it != o.end() && it->value().is_object()) {
     const json::object& meta = it->value().as_object();
+
+    // The typed run-level blocks (run, file_description, software_list, ...).
+    metadata = RunMetadata(meta);
     if (const auto v = meta.find("version");
         v != meta.end() && v->value().is_string()) {
       version = v->value().as_string().c_str();
@@ -136,8 +140,9 @@ Manager::Manager(std::unique_ptr<MzPeak::IO::Archive> archive)
     , files_()
     , version_()
     , ims_()
+    , metadata_()
 {
-  parse_index(archive_, files_, version_, ims_);
+  parse_index(archive_, files_, version_, ims_, metadata_);
 }
 
 /******************************************************************************/

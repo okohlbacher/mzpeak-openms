@@ -12,6 +12,7 @@ directory of this repository.
 
 #include "mzpeak/ims_calibration.h"
 #include "mzpeak/io/archive.h"
+#include "mzpeak/run_metadata.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/util/parquet.h"
 
@@ -58,6 +59,13 @@ public:
    */
   const ImsCalibration& ims_calibration() const { return ims_; }
 
+  /**
+   * Run-level metadata from the index `metadata{}` block (run, file
+   * description, software, instrument configurations, ...).  Empty when the
+   * index carries none.
+   */
+  const RunMetadata& metadata() const { return metadata_; }
+
 private:
   std::shared_ptr<MzPeak::IO::Archive> archive_;
   std::vector<Schema::File> files_;
@@ -67,6 +75,9 @@ private:
 
   // TOF -> m/z calibration for the ims-compact layout (valid=false if absent).
   ImsCalibration ims_;
+
+  // Typed run-level metadata blocks from metadata{} (empty if absent).
+  RunMetadata metadata_;
 };
 
 } // namespace MzPeak::Util

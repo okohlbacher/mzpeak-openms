@@ -48,6 +48,9 @@ const ImsCalibration& Index::ims_calibration() const
 }
 
 /******************************************************************************/
+const RunMetadata& Index::metadata() const { return manager_->metadata(); }
+
+/******************************************************************************/
 std::shared_ptr<Util::Manager> Index::manager() const { return manager_; }
 
 /******************************************************************************/

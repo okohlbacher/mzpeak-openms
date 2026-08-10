@@ -23,29 +23,28 @@ directory of this repository.
 #define BOOST_TEST_MODULE UnsignedIndex
 #include <boost/test/included/unit_test.hpp>
 
+#include <arrow/api.h>
+#include <arrow/io/api.h>
 #include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <map>
 #include <memory>
-#include <string>
-#include <vector>
-
-#include <arrow/api.h>
-#include <arrow/io/api.h>
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/statistics.h>
+#include <string>
+#include <vector>
 
-#include "mzpeak/directory.h"
-#include "mzpeak/query.h"
-#include "mzpeak/schema/array_index.h"
+#include "mzpeak/data/array_index.h"
+#include "mzpeak/io/directory.h"
 #include "mzpeak/schema/entity_type.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/schema/psi/data_type.h"
 #include "mzpeak/util/parquet.h"
-#include "mzpeak/util/parquet_types.h"
 #include "mzpeak/util/parquet_writer.h"
+#include "mzpeak/util/query.h"
+#include "mzpeak/util/types.h"
 
 using namespace MzPeak;
 using DataType = Schema::PSI::DataType;
@@ -121,7 +120,10 @@ Util::Parquet make_parquet(const std::string& file_name,
   std::unique_ptr<File> data(dir.read_file(file_name));
 
   Schema::File sf(file_name);
-  sf.entity_type() = Schema::EntityType::Spectrum;
+  // File's fields are set at construction; build the equivalent object.
+  sf = Schema::File(boost::json::object{{"name", sf.file_name()},
+                                        {"data_kind", "data_arrays"},
+                                        {"entity_type", "spectrum"}});
 
   return Util::Parquet(std::move(data), sf);
 }

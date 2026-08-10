@@ -13,6 +13,7 @@ directory of this repository.
 
 #include "mzpeak/chromatograms.h"
 #include "mzpeak/ims_calibration.h"
+#include "mzpeak/run_metadata.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/wavelength_spectra.h"
@@ -77,6 +78,12 @@ public:
    * Access the wavelength spectra in the file.
    */
   WavelengthSpectra wavelength_spectra() const;
+
+  /**
+   * Run-level metadata from the index `metadata{}` block.  Empty when the
+   * archive declares none.
+   */
+  const RunMetadata& metadata() const;
 
   /**
    * Access the low-level MzPeak Manager object.
