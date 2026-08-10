@@ -185,6 +185,21 @@ worst available option.
 
 ### Additional defects confirmed in our reader
 
+> **Status note (added after implementation).** This document is the PLAN that
+> preceded the chromatogram/UV work; the list below records what was true when
+> it was written.  Since then:
+>
+> - the **count** defect is FIXED -- `Chromatograms`/`WavelengthSpectra` no
+>   longer take a declared count of zero at face value and fall back to the
+>   data-derived count (`src/chromatograms.cpp`);
+> - the **grouping-key** defect is STILL PRESENT as described:
+>   `ArrayIndex::dimensions()` chunks on `array_name + data_type + array_type`
+>   only (`src/data/array_index.cpp`).  Phase B below proposed adding `unit` to
+>   that key; that is NOT what was done.  Coalesced arrays are instead handled
+>   as complementary columns, with the unit exposed through the
+>   `intensity_unit()` accessors, and the decoder still throws if two
+>   complementary columns are both non-null on one row.
+
 - **The array-index grouping key omits `unit`.** `ArrayIndex::dimensions()`
   chunks on `array_name + data_type + array_type`, so counts (`MS:1000131`) and
   absorbance (`UO:0000269`) collapse into one logical dimension. On this

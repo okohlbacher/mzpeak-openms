@@ -61,8 +61,10 @@ its output.
 
 ### Validation
 
-`scripts/e2e.sh` runs the whole matrix. All of it passes: 25/25 unit suites,
-the e2e integration suite, and the cross-implementation checks against the Rust
+`scripts/e2e.sh` runs the whole matrix. All of it passes: every unit suite
+registered in `meson.build` (34 at the time of writing; `meson test` reports the
+current number, and `test/check_registered.py` fails the build if a test file is
+not registered), the e2e integration suite, and the cross-implementation checks against the Rust
 reference — C++ writes / Rust reads, and Rust writes / C++ reads. Decoded
 values match the reference exactly at stored points and to <=8.7e-07 Da at
 null-reconstructed ones.

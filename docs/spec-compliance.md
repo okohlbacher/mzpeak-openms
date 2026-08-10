@@ -95,11 +95,41 @@ reference corpus or a well-formed archive from the reference writer.
   literal string is collapsed to an enum rather than retained, and a `1.x`
   `metadata.version` is rejected rather than read best-effort. Both are
   future-facing: they bite only when the spec adds a layout or ships `1.0`.
+- **R2, `binary` == `large_binary`** — the reader implements the required
+  `list`/`large_list` and `string`/`large_string` equivalences but NOT
+  `binary`/`large_binary`; no such handling exists in `src/`. This is currently
+  unexercised rather than broken: no bundled fixture and no member of the
+  present Arrow schemas uses a binary column at all (verified by scanning the
+  schema of every fixture Parquet file), because the one place raw bytes appear
+  -- an auxiliary array's `data` -- is a list, not a binary column. It becomes
+  real the moment the schema gains a binary field.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
   vocabulary, which this library does not carry. The writer's own terms are
   correct by construction.
+
+## Re-checked against the specification at `85442bd`
+
+Spot-checks made directly against `spec/docs/conformance.md`, recorded so they
+are not re-derived:
+
+- **"readers MUST NOT depend on member names other than `mzpeak_index.json`"** —
+  holds. Every hard-coded member name in this tree is in `src/writer.cpp`, where
+  a writer must choose names; the reader resolves entities by
+  `entity_type`/`data_kind` from the index. Worth stating because upstream's own
+  `Index::spectra()` and `Spectrum` look up `"spectra_data.parquet"` and
+  `"spectra_metadata.parquet"` literally, which this requirement forbids; that
+  is one reason this tree did not adopt them.
+- **"mzPeak files containing only metadata are still legal archives"** — holds:
+  an archive with the signal member removed from the index reports zero spectra
+  and does not throw.
+- **"any of the Parquet files MAY be empty but present ... readers must
+  gracefully handle"** — holds: with every member rewritten to zero rows the
+  reader returns empty arrays without error.
+- **Time in minutes (`UO:0000031`)** — holds; the seconds conversion is pinned
+  by independent literals in `spectrum_metadata_test`, `query_api_test`,
+  `wavelength_spectra_test` and `chromatograms_test`.
 
 ## How this was verified
 
@@ -108,4 +138,6 @@ Every FIXED row has a regression test that fails on the pre-fix code:
 strings), the NCIT-term run in `run_writer_test` (W3/A3), and the
 non-ascending-index case in `parquet_writer_test` (S2). The full suite is green
 in the release, debugoptimized and thread-sanitizer builds, and the peak-path
-digests are unchanged (`run13k 5604ebcf86dd4567`, `run2k 9fae6e76aea6a57e`).
+digests are unchanged (`run2k 9fae6e76aea6a57e`; the `run13k` fixture has since
+been regenerated and re-baselined to `5e86e69f2c9b3101` -- see
+`docs/read-path-performance.md`).

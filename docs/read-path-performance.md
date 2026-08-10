@@ -128,7 +128,7 @@ row-group decode per spectrum, which is Phase 2.
 
 | gate | result |
 |---|---|
-| unit + e2e suites | 26/26 OK |
+| unit + e2e suites | 26/26 OK (as of this work) |
 | `run2k` checksum | `3fba0c5528aac85a`, 3,254,000 peaks — unchanged |
 | `run2k` XIC [205, 205.01] | 8.964569e+06 — unchanged |
 | peak RSS | 62.3 MB vs 62.2 MB baseline |
@@ -196,6 +196,17 @@ digest untouched.
 
 (The earlier `3fba0c5528aac85a` / `841dd2473d045f35` predate mobility being
 hashed.)
+
+> **The `run13k` digest above is NOT reproducible from a fresh `mzp-bench gen`.**
+> These fixtures live in a scratch directory, and that copy was reaped.
+> Regenerating with `mzp-bench gen <dir> 13000` is deterministic (verified: the
+> same digest twice) but yields `5e86e69f2c9b3101` over 21,151,000 peaks -- a
+> different file from the one measured here, so the original must have been
+> generated with different parameters or before a writer change.  `run2k`
+> regenerates bit-exactly as `9fae6e76aea6a57e`, so the harness and the read
+> path are unchanged; only this fixture's identity is lost.  Use
+> `5e86e69f2c9b3101` as the `run13k` baseline going forward, and treat the
+> timings in this table as belonging to the older fixture.
 
 Peak RSS differs between the two passes -- 58.6 MB scalar against 80.8 MB
 batched on `run13k` -- because `get_spectra_batch` holds 512 decoded spectra at
@@ -373,6 +384,8 @@ revisited with evidence rather than re-argued.
 
 ## Gates
 
-28/28 suites in both build configurations. Digests bit-identical throughout:
-`run13k` `5604ebcf86dd4567` and `run2k` `9fae6e76aea6a57e`, scalar and batched;
-XIC 8.964569e+06.
+28/28 suites in both build configurations, at the time of this work.  Digests
+bit-identical throughout: `run13k` `5604ebcf86dd4567` and `run2k`
+`9fae6e76aea6a57e`, scalar and batched; XIC 8.964569e+06.  (The suite has since
+grown -- see the repository for the current count -- and the `run13k` fixture
+was regenerated; see the note above.)
