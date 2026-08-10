@@ -14,7 +14,7 @@ goal.
 | **T1** | Forward (intra) | C++ write → C++ read | input data | writer+reader agree | **DONE** — `writer_test`, `archive_writer_test` |
 | **T2** | Forward (cross) | C++ write → **Rust** read | Rust reference | C++ writer **conformance** | **PASS** — Rust `MzPeakReader` reads C++ output with values matching (Phase 1b added the metadata table); run via `scripts/e2e_cross_impl.sh` |
 | **T3** | Reverse (intra) | C++ read ref → C++ write → C++ read | first read | reader↔writer idempotence on real data | **DONE** — `roundtrip_test` |
-| **T4** | Reverse (cross) | Rust write (bundled files) → C++ read | pyarrow ground truth | C++ reader **conformance** | partial — done ad hoc via pyarrow; blocked on reader gaps (chunked/peaks/null) |
+| **T4** | Reverse (cross) | Rust write (bundled files) → C++ read | pyarrow ground truth | C++ reader **conformance** | **PASS** — the `e2e` suite drives every bundled fixture across all layouts, with per-decoder unit tests pinning values against pyarrow ground truth (the chunked/peaks/null gaps this row once cited are closed; see the snapshot below) |
 | **T5** | Full pipeline | mzML → Rust mzpeak → C++ read | original mzML | whole stack | **PASS** — the C++ reader reads current Rust `convert` output, i.e. the split-metadata layout |
 
 T1+T3 run in the normal `meson test` suite. T2/T4 need the Rust toolchain and
@@ -49,10 +49,12 @@ passes: Rust reads C++ output with values matching.
 
 The bundled `test/files/*.mzpeak` are all Rust-written, so reading them with the
 C++ reader and comparing to pyarrow ground truth is the reverse cross check.
-Today it passes only for point-layout profile spectra in a non-empty data table;
-chunked/numpress/peaks/wavelength/null-marked data are reader gaps
-(see `reader-completion-gaps.md` / `reader-backlog.md`). As those gaps close
-(RDR-3/4/5/6), extend T4 to the chunked, numpress and has_uv fixtures.
+That was true only while the chunked/numpress/peaks/wavelength/null-marked
+decoders were missing.  Those are implemented, and T4 now covers the chunked,
+numpress and `has_uv` fixtures.  (The `reader-completion-gaps.md` and
+`reader-backlog.md` documents this paragraph used to cite were working notes
+and are not part of this repository; the RDR-nn numbering they defined survives
+only in `docs/roadmap.md` prose.)
 
 ## Running the cross-impl checks
 
@@ -160,7 +162,11 @@ hand-diffing schemas, KV metadata and column types had failed to.
 
 ## Known gaps
 
-- **Imaging point count** — see below; the only open item.
+- **Imaging point count** — RESOLVED, and kept here only because the analysis
+  below is still useful.  It was a harness bug, not a decoder defect: the
+  comparison script counted 170 MGF header lines as data points.  Both sides
+  agree on 2837.  See "Resolved: the imaging point-count difference was a
+  harness bug" in `docs/roadmap.md`.
 
 ### Oracles — which reference binary to use
 

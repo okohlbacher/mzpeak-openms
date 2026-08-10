@@ -1,8 +1,10 @@
 # mzPeak C++ — Consolidated Roadmap (reader + writer)
 
-One ordered, dependency-aware plan unifying the reader gaps
-([reader-backlog.md](reader-backlog.md) RDR-1…25) and the writer phases
-([writer-implementation-research.md](writer-implementation-research.md)).
+One ordered, dependency-aware plan unifying the reader gaps (RDR-1…25) and the
+writer phases.  Those two source documents -- `reader-backlog.md` and
+`writer-implementation-research.md` -- were working notes and are not part of
+this repository, so the RDR-nn numbering used below is defined only by the
+prose here.
 Each phase is a self-contained, testable increment validated by the
 forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
 

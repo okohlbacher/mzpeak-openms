@@ -67,7 +67,10 @@ current number, and `test/check_registered.py` fails the build if a test file is
 not registered), the e2e integration suite, and the cross-implementation checks against the Rust
 reference — C++ writes / Rust reads, and Rust writes / C++ reads. Decoded
 values match the reference exactly at stored points and to <=8.7e-07 Da at
-null-reconstructed ones.
+null-reconstructed ones.  That last figure is a one-off measurement from the
+cross-implementation comparison (`docs/roadmap.md` records 8.5e-07 Da for the
+same run); no test in the suite enforces it as a bound, so treat it as evidence,
+not as a guarantee.
 
 ### What is NOT validated
 
@@ -132,25 +135,21 @@ int main(int argc, char* argv[])
   std::println("There are {} spectra in this file.", spectra.size());
   std::println("Reviewing the first {} spectra.", to_review);
 
-  auto enumerated_spectra =
-      spectra | std::views::take(to_review) | std::views::enumerate;
-
   std::println();
   std::println("| Index | First m/z | Last m/z |");
   std::println("|-------|-----------|----------|");
 
-  for (const auto& [index, spectrum] : enumerated_spectra) {
-    std::print("| {:5d} | ", index);
-
-    if (spectrum.mz().size() > 0) {
-      std::print("{:9.2f} | ", spectrum.mz().front());
-      std::print("{:8.2f} | ", spectrum.mz().back());
+  for (auto spec_index = 0;
+       const auto& spectrum : spectra | std::views::take(to_review)) {
+    const auto& mz = spectrum.mz();
+    std::print("| {:5d} | ", spec_index);
+    if (mz.empty()) {
+      std::print("{:>9} | {:>8} |", "n/a", "n/a");
     } else {
-      std::print("{:>9} | ", "-");
-      std::print("{:>8} | ", "-");
+      std::print("{:9.2f} | {:8.2f} |", mz.front(), mz.back());
     }
-
     std::println();
+    ++spec_index; // std::views::enumerate isn't available on macOS :-(
   }
 
   return 0;
@@ -168,7 +167,7 @@ Reviewing the first 5 spectra.
 |-------|-----------|----------|
 |     0 |    202.61 |  1999.84 |
 |     1 |    200.09 |  1999.82 |
-|     2 |         - |        - |
-|     3 |         - |        - |
-|     4 |         - |        - |
+|     2 |    231.39 |  1560.72 |
+|     3 |    236.05 |  1636.43 |
+|     4 |    203.22 |  1412.57 |
 ```

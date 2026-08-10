@@ -67,9 +67,12 @@ number_of_auxiliary_arrays`.
 
 Reference oddities to not reproduce blindly:
 
-- `chromatogram_data_point_count` is **0** in `has_uv.mzpeak` despite 738 rows.
-  The same key is 0 for wavelength spectra despite 49,920 rows. Whatever we
-  write, we must not depend on this key being meaningful when reading.
+- `chromatogram_data_point_count` was **0** in the pre-`5a690d4` `has_uv.mzpeak`
+  despite 738 rows, and likewise for wavelength spectra despite 49,920 rows.
+  (In the regenerated fixture the count keys are absent entirely.)  Either way
+  the conclusion is the same and is what the reader implements: never depend on
+  a declared count being meaningful -- see the zero/absent fallback in
+  `src/chromatograms.cpp`.
 - The wavelength column `MS_1003812_lambda_max_unit_UO:0000018` uses a **colon**
   where every other column uses `unit_UO_0000018`. Any name parsing has to
   tolerate both.
@@ -134,7 +137,19 @@ chromatogram and UV spectrum, so a change to *when* things decode cannot alter
 
 ### There is no single reference contract — there are three
 
-1. **Legacy nested metadata**, which is what our `has_uv.mzpeak` fixture is:
+> **Fixture staleness note.** Everything below describing what
+> `has_uv.mzpeak` *is* was written against the pre-2026-08 fixture.  Upstream
+> commit `5a690d4` ("test: Sync test files with the Rust implementation")
+> regenerated every bundled archive, so the fixture in the tree today is the
+> SPLIT layout: separate `_scans`/`_precursors`/`_selected_ions` facet files,
+> flat columns, index strings spelled `wavelength_spectrum` and `data_arrays`,
+> and `column_mapping` on every entry.  It also carries no `*_count` keys at
+> all -- they are ABSENT, not zero.  The reader supports both layouts, so the
+> analysis still stands; only the "which layout is the fixture" statements are
+> out of date.
+
+1. **Legacy nested metadata**, which is what our `has_uv.mzpeak` fixture WAS
+   before `5a690d4` (it is now split -- see the note above):
    one file with outer `chromatogram`/`precursor`/`selected_ion` structs, index
    strings spelled `wavelength spectrum` and `data arrays`, and no
    `column_mapping`.
