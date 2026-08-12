@@ -133,9 +133,23 @@ std::size_t Signals::record_count() const
 }
 
 /******************************************************************************/
-std::optional<Schema::Column> Signals::field(const std::string_view& name) const
+std::optional<Schema::Column> Signals::column(const std::string_view& name) const
 {
   return impl_->parquet_->field(impl_->array_index_->prefix(), name);
+}
+
+/******************************************************************************/
+std::optional<Schema::Column> Signals::column(const ArrayIndex::Entry& entry) const
+{
+  return impl_->array_index_->entry_column(*impl_->parquet_->groups(), entry);
+}
+
+/******************************************************************************/
+std::optional<Schema::Column> Signals::column(const ArrayIndex::Dimension& dim,
+                                              Schema::BufferFormat format) const
+{
+  return dim.entry_with(format).and_then(
+      [this](const auto& entry) { return column(entry); });
 }
 
 /******************************************************************************/
@@ -148,10 +162,10 @@ const std::shared_ptr<Schema::GroupMap>& Signals::groups() const
 Util::Query::Builder Signals::index() const
 {
   auto entity_type = impl_->array_index_->entity_type();
-  std::string field_name = Schema::entity_type_to_string(entity_type);
-  std::ranges::replace(field_name, ' ', '_');
-  field_name += "_index";
-  auto index_field = field(field_name);
+  // entity_type_to_string already yields the underscore spelling the
+  // specification canonicalised in mzPeak-specification#18.
+  auto field_name = Schema::entity_type_to_string(entity_type) + "_index";
+  auto index_field = column(field_name);
 
   if (!index_field.has_value()) {
     throw ParquetError("parquet file is missing the index column: " + field_name);
@@ -169,6 +183,8 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
 
   for (const auto& dim : projection) {
     for (const auto& entry : dim.entries) {
+      if (!entry.needed_for_decoding()) continue;
+
       auto field =
           impl_->array_index_->entry_column(*impl_->parquet_->groups(), entry);
       if (!field.has_value()) {

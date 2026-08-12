@@ -6,46 +6,123 @@ directory of this repository.
 
 */
 
+#include <MSNumpress.hpp>
+
+#include "mzpeak/exception.h"
+#include "mzpeak/util/compat.h" // IWYU pragma: keep
+#include "mzpeak/util/decoders.h"
 #include "mzpeak/util/numpress.h"
 
-#include "mzpeak/util/vendor/MSNumpress.hpp"
-
-namespace MzPeak::Util {
-
-namespace {
-
-// The vendored reference API works with `std::vector<unsigned char>` for the
-// encoded buffer.  Our public API uses `std::vector<uint8_t>`; on every
-// supported platform these are the same type, but build a view-compatible
-// vector explicitly to stay strictly correct.
-std::vector<unsigned char> as_uchar(const std::vector<uint8_t>& bytes)
-{
-  return std::vector<unsigned char>(bytes.begin(), bytes.end());
-}
-
-} // namespace
+namespace MzPeak::Util::Numpress {
 
 /******************************************************************************/
-std::vector<double> numpress_decode_linear(const std::vector<uint8_t>& bytes)
+using decoder =
+    std::move_only_function<void(const std::vector<uint8_t>&, std::vector<double>&)>;
+
+/******************************************************************************/
+std::optional<Type> type_from_column_name(const std::string& name)
 {
-  std::vector<unsigned char> data = as_uchar(bytes);
-  std::vector<double> result;
-  ms::numpress::MSNumpress::decodeLinear(data, result);
-  return result;
+  if (name.contains("numpress_linear")) {
+    return Util::Numpress::Linear;
+  } else if (name.contains("numpress_slof")) {
+    return Util::Numpress::SLOF;
+  } else if (name.contains("numpress_pic")) {
+    return Util::Numpress::PIC;
+  } else {
+    return {};
+  }
 }
 
 /******************************************************************************/
-std::vector<float> numpress_decode_slof(const std::vector<uint8_t>& bytes)
+std::size_t decoding_space_needed(std::size_t n, Type t)
 {
-  std::vector<unsigned char> data = as_uchar(bytes);
-  std::vector<double> decoded;
-  ms::numpress::MSNumpress::decodeSlof(data, decoded);
+  switch (t) {
+  case Numpress::Linear:
+    // Need C++26 for saturating_sub :(
+    if (n <= 8) return 0;
+    return (n - 8) * 2;
+  case Numpress::SLOF:
+    // FIXME: Could this be a typo in the numpress lib?
+    // Need C++26 for saturating_sub :(
+    if (n <= 8) return 0;
+    return (n - 8) / 2;
+  case Numpress::PIC:
+    return n * 2;
+  }
 
-  std::vector<float> result;
-  result.reserve(decoded.size());
-  for (double v : decoded)
-    result.push_back(static_cast<float>(v));
-  return result;
+  std::unreachable();
 }
 
-} // namespace MzPeak::Util
+/******************************************************************************/
+std::shared_ptr<std::vector<double>>
+from_arrow(const std::shared_ptr<arrow::Array>& src, decoder f)
+{
+  if (src->type_id() != arrow::Type::UINT8) {
+    std::string msg("numpress decoding requested but source array is not uint8");
+    throw InvalidFormatError(msg);
+  }
+
+  std::vector<uint8_t> bytes;
+  bytes.reserve(src->length());
+
+  Decoders::Scalar<uint8_t> decoder;
+  decoder.decode(src, bytes);
+
+  auto values = std::make_shared<std::vector<double>>();
+  f(bytes, *values);
+
+  return values;
+}
+
+/******************************************************************************/
+void decode_linear(const std::vector<uint8_t>& input, std::vector<double>& output)
+{
+  try {
+    ms::numpress::MSNumpress::decodeLinear(input, output);
+  } catch (const char* msg) {
+    throw InvalidFormatError(msg);
+  }
+}
+
+/******************************************************************************/
+std::shared_ptr<std::vector<double>>
+decode_linear(const std::shared_ptr<arrow::Array>& src)
+{
+  return from_arrow(src, [](auto& i, auto& o) -> void { decode_linear(i, o); });
+}
+
+/******************************************************************************/
+void decode_slof(const std::vector<uint8_t>& input, std::vector<double>& output)
+{
+  try {
+    ms::numpress::MSNumpress::decodeSlof(input, output);
+  } catch (const char* msg) {
+    throw InvalidFormatError(msg);
+  }
+}
+
+/******************************************************************************/
+std::shared_ptr<std::vector<double>>
+decode_slof(const std::shared_ptr<arrow::Array>& src)
+{
+  return from_arrow(src, [](auto& i, auto& o) -> void { decode_slof(i, o); });
+}
+
+/******************************************************************************/
+void decode_pic(const std::vector<uint8_t>& input, std::vector<double>& output)
+{
+  try {
+    ms::numpress::MSNumpress::decodePic(input, output);
+  } catch (const char* msg) {
+    throw InvalidFormatError(msg);
+  }
+}
+
+/******************************************************************************/
+std::shared_ptr<std::vector<double>>
+decode_pic(const std::shared_ptr<arrow::Array>& src)
+{
+  return from_arrow(src, [](auto& i, auto& o) -> void { decode_pic(i, o); });
+}
+
+} // namespace MzPeak::Util::Numpress

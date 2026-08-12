@@ -21,7 +21,7 @@
 #include <cmath>
 #include <climits>
 #include <algorithm>
-#include "mzpeak/util/vendor/MSNumpress.hpp"
+#include "MSNumpress.hpp"
 
 namespace ms {
 namespace numpress {

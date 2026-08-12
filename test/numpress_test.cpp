@@ -9,12 +9,12 @@ directory of this repository.
 #define BOOST_TEST_MODULE Numpress
 #include <boost/test/included/unit_test.hpp>
 
+#include <MSNumpress.hpp>
 #include <cmath>
 #include <cstdint>
 #include <vector>
 
 #include "mzpeak/util/numpress.h"
-#include "mzpeak/util/vendor/MSNumpress.hpp"
 
 /******************************************************************************/
 // Real-data fixtures.
@@ -530,7 +530,8 @@ const std::vector<float> kIntensityExpected = {
 
 BOOST_AUTO_TEST_CASE(decode_linear_real_data)
 {
-  std::vector<double> mz = MzPeak::Util::numpress_decode_linear(kMzBytes);
+  std::vector<double> mz;
+  MzPeak::Util::Numpress::decode_linear(kMzBytes, mz);
 
   BOOST_REQUIRE_EQUAL(mz.size(), kMzExpected.size());
   double max_abs = 0.0;
@@ -552,7 +553,8 @@ BOOST_AUTO_TEST_CASE(decode_linear_real_data)
 
 BOOST_AUTO_TEST_CASE(decode_slof_real_data)
 {
-  std::vector<float> inten = MzPeak::Util::numpress_decode_slof(kIntensityBytes);
+  std::vector<double> inten;
+  MzPeak::Util::Numpress::decode_slof(kIntensityBytes, inten);
 
   BOOST_REQUIRE_EQUAL(inten.size(), kIntensityExpected.size());
   double max_rel = 0.0;
@@ -591,7 +593,8 @@ BOOST_AUTO_TEST_CASE(decode_linear_roundtrip)
   ms::numpress::MSNumpress::encodeLinear(original, encoded, fixed_point);
 
   std::vector<uint8_t> bytes(encoded.begin(), encoded.end());
-  std::vector<double> decoded = MzPeak::Util::numpress_decode_linear(bytes);
+  std::vector<double> decoded;
+  MzPeak::Util::Numpress::decode_linear(bytes, decoded);
 
   BOOST_REQUIRE_EQUAL(decoded.size(), original.size());
   for (std::size_t i = 0; i < original.size(); ++i) {
@@ -607,10 +610,12 @@ BOOST_AUTO_TEST_CASE(decode_linear_roundtrip)
 // returning garbage values.
 BOOST_AUTO_TEST_CASE(decode_linear_empty_throws)
 {
-  BOOST_CHECK_THROW(MzPeak::Util::numpress_decode_linear({}), std::exception);
+  std::vector<double> out;
+  BOOST_CHECK_THROW(MzPeak::Util::Numpress::decode_linear({}, out), std::exception);
 }
 
 BOOST_AUTO_TEST_CASE(decode_slof_empty_throws)
 {
-  BOOST_CHECK_THROW(MzPeak::Util::numpress_decode_slof({}), std::exception);
+  std::vector<double> out;
+  BOOST_CHECK_THROW(MzPeak::Util::Numpress::decode_slof({}, out), std::exception);
 }

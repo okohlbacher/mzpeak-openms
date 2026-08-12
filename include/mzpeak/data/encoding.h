@@ -20,6 +20,8 @@ top-level directory of this repository.
 #include "mzpeak/data/array_index.h"
 #include "mzpeak/data/null_marking.h"
 #include "mzpeak/data/signals.h"
+#include "mzpeak/data/transformer/primary.h"
+#include "mzpeak/data/transformer/secondary.h"
 #include "mzpeak/exception.h"
 #include "mzpeak/schema/buffer_format.h"
 #include "mzpeak/schema/group.h"
@@ -185,7 +187,9 @@ private:
                     std::vector<V>&) const;
 
   template <typename N, typename V>
-  void point(const Schema::Column&, const N& null_decoder, std::vector<V>&) const;
+  void decode_with_nulls(const ArrayIndex::Dimension&,
+                         const N& null_decoder,
+                         std::vector<V>&) const;
 
   template <Util::Type From, typename V>
   void remap(const ArrayIndex::Dimension& dim, std::vector<V>& v) const;
@@ -595,14 +599,16 @@ void Decoder<T>::chunked(const ArrayIndex::Dimension& dim, std::vector<V>& v) co
 
         const std::size_t before = v.size();
 
+        // Upstream's Numpress wrappers decode into a caller-supplied buffer
+        // and return doubles for every algorithm (mzPeak-openms PR #15).
+        std::vector<double> decoded;
         if (linear) {
-          for (double x : Util::numpress_decode_linear(raw)) {
-            v.push_back(static_cast<V>(x));
-          }
+          Util::Numpress::decode_linear(raw, decoded);
         } else {
-          for (float x : Util::numpress_decode_slof(raw)) {
-            v.push_back(static_cast<V>(x));
-          }
+          Util::Numpress::decode_slof(raw, decoded);
+        }
+        for (double x : decoded) {
+          v.push_back(static_cast<V>(x));
         }
 
         // NOT bounded against chunk_end, deliberately.
@@ -837,11 +843,37 @@ void Decoder<T>::concatenated(const Schema::Column& col,
 /******************************************************************************/
 template <typename T>
 template <typename N, typename V>
-void Decoder<T>::point(const Schema::Column& col,
-                       const N& null_decoder,
-                       std::vector<V>& v) const
+void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
+                                   const N& null_decoder,
+                                   std::vector<V>& v) const
 {
-  slice_->array(col, v, Util::Decoders::Scalar<V, std::vector<V>, N>(null_decoder));
+  const auto& primary_entry = dim.values_entry();
+  auto col = signals_->column(primary_entry);
+
+  if (!col.has_value()) {
+    throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
+  }
+
+  auto go = [&](auto&& decoder) -> void { slice_->array(col.value(), v, decoder); };
+
+  if (primary_entry.buffer_format == Schema::BufferFormat::Point) {
+    auto decoder = Util::Decoders::Scalar<V, std::vector<V>, N>(null_decoder);
+    go(decoder);
+  } else {
+    if (dim.is_main_axis()) {
+      using Transformer = Transformer::Primary::Decoder<V>;
+      Transformer transformer(signals_, slice_, dim);
+      auto decoder = Util::Decoders::Flattened<V, std::vector<V>, N, Transformer>(
+          null_decoder, std::move(transformer));
+      go(decoder);
+    } else {
+      using Transformer = Transformer::Secondary::Decoder<V>;
+      Transformer transformer(dim);
+      auto decoder = Util::Decoders::Flattened<V, std::vector<V>, N, Transformer>(
+          null_decoder, std::move(transformer));
+      go(decoder);
+    }
+  }
 }
 
 } // namespace MzPeak::Data::Encoding

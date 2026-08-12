@@ -38,6 +38,7 @@ lib_sources = [
   'src/schema/file.cpp',
   'src/schema/group.cpp',
   'src/schema/psi/array_type.cpp',
+  'src/schema/psi/chunk_encoding.cpp',
   'src/schema/psi/data_type.cpp',
   'src/chromatogram.cpp',
   'src/chromatograms.cpp',
@@ -47,6 +48,7 @@ lib_sources = [
   'src/wavelength_spectrum.cpp',
   'src/wavelength_spectra.cpp',
   'src/util/arrow.cpp',
+  'src/util/decoders.cpp',
   'src/util/executor.cpp',
   'src/util/manager.cpp',
   'src/util/parquet.cpp',
@@ -60,17 +62,18 @@ lib_sources = [
   'src/util/query.cpp',
   'src/util/slice.cpp',
   'src/util/types.cpp',
-  'src/util/vendor/MSNumpress.cpp',
   'src/writer.cpp',
 ]
 
-#Header files to include in packages:
+# Header files to include in packages:
 install_headers([
   'include/mzpeak.h',
   'include/mzpeak/data/array_index.h',
   'include/mzpeak/data/encoding.h',
   'include/mzpeak/data/null_marking.h',
   'include/mzpeak/data/signals.h',
+  'include/mzpeak/data/transformer/primary.h',
+  'include/mzpeak/data/transformer/secondary.h',
   'include/mzpeak/exception.h',
   'include/mzpeak/ims_calibration.h',
   'include/mzpeak/index.h',
@@ -89,6 +92,7 @@ install_headers([
   'include/mzpeak/schema/file.h',
   'include/mzpeak/schema/group.h',
   'include/mzpeak/schema/psi/array_type.h',
+  'include/mzpeak/schema/psi/chunk_encoding.h',
   'include/mzpeak/schema/psi/data_type.h',
   'include/mzpeak/chromatogram.h',
   'include/mzpeak/chromatogram_metadata.h',
@@ -109,22 +113,24 @@ install_headers([
   'include/mzpeak/util/enumerable_proxy.h',
   'include/mzpeak/util/executor.h',
   'include/mzpeak/util/manager.h',
+  'include/mzpeak/util/numpress.h',
   'include/mzpeak/util/parquet.h',
   'include/mzpeak/util/json_writer.h',
   'include/mzpeak/util/metadata_model.h',
   'include/mzpeak/util/null_fill.h',
-  'include/mzpeak/util/numpress.h',
   'include/mzpeak/util/parquet_writer.h',
   'include/mzpeak/util/planner.h',
   'include/mzpeak/util/projection.h',
   'include/mzpeak/util/query.h',
   'include/mzpeak/util/slice.h',
   'include/mzpeak/util/types.h',
-  'include/mzpeak/util/vendor/MSNumpress.hpp',
   'include/mzpeak/writer.h',
 ], subdir : 'mzpeak')
 
-#Library and executable targets:
+# Sub-projects:
+numpress = subproject('msnumpress')
+
+# Library and executable targets:
 include = include_directories('include')
 
 arrow_ver_str = '>=24.0.0'
@@ -146,6 +152,8 @@ deps = [
     dependency('parquet', # Part of Arrow above.
                version : arrow_ver_str,
                required : true),
+
+    numpress.get_variable('msnumpres_cpp_lib_so'),
 ]
 
 libmzpeak_so = library(
@@ -162,6 +170,7 @@ libmzpeak_a = static_library(
 
 #Testing
 test_names = [
+    'algorithm',
     'array_index',
     'archive_writer',
     'arrow',

@@ -23,47 +23,93 @@ BOOST_AUTO_TEST_CASE(can_read_spectra)
 {
   using namespace MzPeak;
 
-  auto mzpeak = MzPeak::open("../test/files/small.dir");
-  auto spectra = mzpeak.spectra();
+  auto go = [](const std::string file_name) {
+    auto mzpeak = MzPeak::open("../test/files/" + file_name);
+    auto spectra = mzpeak.spectra();
 
-  BOOST_TEST((spectra.size() == 48));
+    BOOST_TEST_CONTEXT("while using the " << file_name << "file")
+    {
+      BOOST_TEST((spectra.size() == 48));
 
-  auto spectrum = spectra[0];
-  auto mz = spectrum.mz();
+      auto spectrum = spectra[0];
+      auto mz = spectrum.mz();
 
-  BOOST_TEST(mz.size() == 13589);
-  BOOST_TEST(mz[0] == 202.607, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(mz[mz.size() - 1] == 1999.840, boost::test_tools::tolerance(0.001));
+      auto tolerance = boost::test_tools::tolerance(0.001);
 
-  // Null-marked m/z values.  Nulls come in PAIRS that separate two runs of real
-  // values; each null is reconstructed from the run it adjoins — the first from
-  // the run on its left, the second from the run on its right.
-  //
-  // Ground truth is the Rust reference reader
-  // (hupo-mzpeak examples/read_spectrum small.mzpeak 0), which emits
-  // 202.60831465843808 / 204.75933490116418 / 204.76085793161354 /
-  // 204.77812053474582 at these positions.  Position 8 is NOT 202.6086 — that
-  // is what extrapolating the second null from the first used to produce.
-  BOOST_TEST(mz[7] == 202.6083147, boost::test_tools::tolerance(1e-6));
-  BOOST_TEST(mz[8] == 204.7593349, boost::test_tools::tolerance(1e-6));
-  // Same pattern around the next gap: position 13 = 204.76060409341508,
-  // position 16 = 204.77837441952326.
-  BOOST_TEST(mz[14] == 204.7608579, boost::test_tools::tolerance(1e-6));
-  BOOST_TEST(mz[15] == 204.7781206, boost::test_tools::tolerance(1e-6));
+      if (file_name == "small.numpress.mzpeak") {
+        // Some numpress linear values are less precise than their
+        // matching point or delta values.
+        tolerance = boost::test_tools::tolerance(0.1);
+      } else {
+        // Null-marked m/z values.  Nulls come in PAIRS that separate two runs
+        // of real values; each null is reconstructed from the run it adjoins --
+        // the first from the run on its left, the second from the run on its
+        // right.
+        //
+        // Ground truth is the Rust reference reader
+        // (hupo-mzpeak examples/read_spectrum small.mzpeak 0), which emits
+        // 202.60831465843808 / 204.75933490116418 / 204.76085793161354 /
+        // 204.77812053474582 at these positions.  Position 8 is NOT 202.6086 --
+        // that is what extrapolating the second null from the first used to
+        // produce.
+        //
+        // Held at 1e-6 rather than the loop's 0.001: the point of these four is
+        // the PRECISION of the reconstruction, so they are excluded from the
+        // lossy numpress fixture rather than loosened for it.
+        BOOST_TEST(mz[7] == 202.6083147, boost::test_tools::tolerance(1e-6));
+        BOOST_TEST(mz[8] == 204.7593349, boost::test_tools::tolerance(1e-6));
+        // Same pattern around the next gap: position 13 = 204.76060409341508,
+        // position 16 = 204.77837441952326.
+        BOOST_TEST(mz[14] == 204.7608579, boost::test_tools::tolerance(1e-6));
+        BOOST_TEST(mz[15] == 204.7781206, boost::test_tools::tolerance(1e-6));
+      }
 
-  // The m/z values should be monotonically increasing.
-  for (std::size_t i : std::views::iota(1ul, mz.size())) {
-    BOOST_TEST(mz[i] > mz[i - 1]);
-  }
+      BOOST_TEST(mz.size() == 13589);
+      BOOST_TEST(mz[0] == 202.607, tolerance);
+      BOOST_TEST(mz[mz.size() - 1] == 1999.840, tolerance);
 
-  auto intensity = spectrum.intensity();
-  BOOST_TEST((intensity.size() == mz.size()));
-  BOOST_TEST(intensity[0] == 0.0, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(intensity[1] == 1938.12, boost::test_tools::tolerance(0.001));
-  BOOST_TEST(intensity[intensity.size() - 1] == 0.0,
-             boost::test_tools::tolerance(0.001));
+      // Test some NULL values.
+      //
+      // Nulls come in PAIRS that separate two runs.  The FIRST of a pair
+      // continues the run on its left; the SECOND belongs to the run on its
+      // right and must be reconstructed backwards from it.
+      //
+      // The raw column (pyarrow, small.dir/spectra_data.parquet) is
+      //   row  6  202.60806612940473
+      //   rows 7,8  null, null
+      //   row  9  204.75958873936264
+      // so the two runs are ~2.15 apart.  Position 8 is therefore
+      // 204.75959 - delta = 204.75933, NOT 202.60856: that latter value is what
+      // extrapolating BOTH nulls forward from the left run produces, and it
+      // disagrees with the reference reader (hupo-mzpeak
+      // examples/read_spectrum small.mzpeak 0 emits 204.75933490116418 here).
+      // Same for position 15 against row 16 = 204.77837441952326.
+      BOOST_TEST_REQUIRE(mz[7] == 202.60831, tolerance);
+      BOOST_TEST_REQUIRE(mz[8] == 204.75933, tolerance);
+      BOOST_TEST_REQUIRE(mz[14] == 204.76086, tolerance);
+      BOOST_TEST_REQUIRE(mz[15] == 204.77812, tolerance);
 
-  BOOST_TEST(spectrum.ms_level() == 1u);
+      // The m/z values should be monotonically increasing.
+      for (std::size_t i : std::views::iota(1ul, mz.size())) {
+        BOOST_TEST_REQUIRE(mz[i] > mz[i - 1]);
+      }
+
+      auto intensity = spectrum.intensity();
+      BOOST_TEST_REQUIRE((intensity.size() == mz.size()));
+      BOOST_TEST_REQUIRE(intensity[0] == 0.0, tolerance);
+      BOOST_TEST_REQUIRE(intensity[1] == 1938.12, tolerance);
+      BOOST_TEST_REQUIRE(intensity[7] == 0.0, tolerance);
+      BOOST_TEST_REQUIRE(intensity[8] == 0.0, tolerance);
+      BOOST_TEST_REQUIRE(intensity[9] == 1422.17, tolerance);
+      BOOST_TEST_REQUIRE(intensity[intensity.size() - 1] == 0.0, tolerance);
+
+      BOOST_TEST_REQUIRE(spectrum.ms_level() == 1u);
+    }
+  };
+
+  go("small.mzpeak");
+  go("small.chunked.mzpeak");
+  go("small.numpress.mzpeak");
 }
 
 /******************************************************************************/
