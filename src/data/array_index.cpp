@@ -38,7 +38,15 @@ bool ArrayIndex::Entry::needed_for_decoding() const
   case MzPeak::Schema::BufferFormat::ChunkStart:
     return true;
   case MzPeak::Schema::BufferFormat::ChunkEnd:
-    return false;
+    // Projected, even though no value is read OUT of it: the chunked decoder
+    // validates the decode against chunk_end (start <= end, chunks ascending
+    // and non-overlapping, and the start==end==0 empty-chunk sentinel), and
+    // every one of those checks is guarded by `ends != nullptr`.  Returning
+    // false here left the column unprojected, so `ends` was ALWAYS null and the
+    // entire validation silently never ran -- while the docs claimed it did.
+    // The specification requires chunks to be ascending by chunk_start and
+    // non-overlapping, so this is a conformance check, not an optimisation.
+    return true;
   case MzPeak::Schema::BufferFormat::ChunkValues:
     return true;
   case MzPeak::Schema::BufferFormat::ChunkEncoding:
@@ -61,7 +69,15 @@ bool ArrayIndex::Entry::is_value_entry() const
   case MzPeak::Schema::BufferFormat::ChunkStart:
     return false;
   case MzPeak::Schema::BufferFormat::ChunkEnd:
-    return false;
+    // Projected, even though no value is read OUT of it: the chunked decoder
+    // validates the decode against chunk_end (start <= end, chunks ascending
+    // and non-overlapping, and the start==end==0 empty-chunk sentinel), and
+    // every one of those checks is guarded by `ends != nullptr`.  Returning
+    // false here left the column unprojected, so `ends` was ALWAYS null and the
+    // entire validation silently never ran -- while the docs claimed it did.
+    // The specification requires chunks to be ascending by chunk_start and
+    // non-overlapping, so this is a conformance check, not an optimisation.
+    return true;
   case MzPeak::Schema::BufferFormat::ChunkValues:
     return true;
   case MzPeak::Schema::BufferFormat::ChunkEncoding:
@@ -207,6 +223,19 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
             buffer_format_from_string(eo.at("buffer_format").as_string());
         entry.context = entity_type_from_string(eo.at("context").as_string());
         entry.path = eo.at("path").as_string();
+
+        // Every entry path is "<prefix>.<column>".  Deriving the column name by
+        // cutting the prefix length off the front assumes that holds; when it
+        // does not, substr throws a bare std::out_of_range whose message is
+        // "basic_string" and which is not even an MzPeak exception, so the
+        // caller learns nothing about what is wrong with the file.
+        if (entry.path.size() <= prefix_.size() + 1 ||
+            entry.path.compare(0, prefix_.size(), prefix_) != 0 ||
+            entry.path[prefix_.size()] != '.') {
+          throw JsonError("array index entry path '" + entry.path +
+                          "' does not begin with the declared prefix '" + prefix_ +
+                          ".'");
+        }
         entry.name = entry.path.substr(prefix_.size() + 1);
 
         std::optional<Schema::CV> data_type_cv =

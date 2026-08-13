@@ -40,6 +40,7 @@ directory of this repository.
 #include <thread>
 #include <vector>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
@@ -82,7 +83,7 @@ float expected_intensity(uint64_t s, uint64_t p)
 }
 
 /// Write the synthetic multi-row-group point file and return its path.
-fs::path write_fixture(const Scratch& scratch)
+fs::path write_fixture(const Scratch& scratch, const std::string& prefix = "point")
 {
   std::vector<uint64_t> index;
   std::vector<double> mz;
@@ -100,7 +101,8 @@ fs::path write_fixture(const Scratch& scratch)
   // The array index is what tells the reader which columns carry m/z and
   // intensity; without it the file is unreadable regardless of its contents.
   const std::string array_index =
-      R"({"prefix":"point","entries":[)"
+      R"({"prefix":")" + prefix +
+      R"(","entries":[)"
       R"({"context":"spectrum","path":"point.mz","data_type":"MS:1000523",)"
       R"("array_type":"MS:1000514","array_name":"m/z array","unit":"MS:1000040",)"
       R"("buffer_format":"point","transform":"MS:1003902",)"
@@ -316,4 +318,38 @@ BOOST_AUTO_TEST_CASE(one_shared_reader_across_threads_agrees)
 
   BOOST_TEST(mismatches.load() == 0);
   BOOST_TEST(read_spectra.load() == kThreads * static_cast<int>(kSpectra));
+}
+
+/******************************************************************************/
+// An array index whose `prefix` names a layout this reader does not implement
+// must be REFUSED, not guessed at.
+//
+// The dimension dispatch keys off the entries, not the layout, so without an
+// explicit check an unknown layout carrying plausible-looking entries would
+// fall through to the chunked path and either decode as something else or fail
+// later with a message about columns rather than about the layout.  Upstream's
+// Layout-based dispatch threw here and this tree's entries-based dispatch did
+// not, which an adversarial review caught as a behaviour regression.
+//
+// Written with the point machinery and only the prefix changed, so the file is
+// well formed in every other respect and the layout really is what is under
+// test.
+BOOST_AUTO_TEST_CASE(an_unknown_layout_is_refused)
+{
+  Scratch scratch("mzp-test-unknown-layout");
+  const fs::path dir = write_fixture(scratch, "definitely_not_a_layout");
+
+  // The refusal must be an MzPeak error naming the problem.  Before this was
+  // checked, the mismatch between the declared prefix and the entry paths
+  // reached std::string::substr and surfaced as a bare std::out_of_range whose
+  // message is "basic_string" -- not an MzPeak exception at all, and no help
+  // whatsoever in identifying the offending file.
+  BOOST_CHECK_THROW(
+      {
+        auto index = MzPeak::open(dir);
+        auto spectra = index.spectra();
+        auto spectrum = spectra[0];
+        (void)spectrum.mz();
+      },
+      MzPeak::Exception);
 }

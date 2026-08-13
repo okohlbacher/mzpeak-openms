@@ -153,18 +153,29 @@ deps = [
                version : arrow_ver_str,
                required : true),
 
-    numpress.get_variable('msnumpres_cpp_lib_so'),
 ]
+
+# The shared library links the shared numpress; the static one links the static
+# numpress and pulls its objects IN with link_whole.
+#
+# Numpress used to be vendored as src/util/vendor/MSNumpress.cpp, i.e. compiled
+# straight into libmzpeak.a, so the static library was self-contained.  Moving
+# to the subproject left `decodeLinear`/`decodeSlof` UNDEFINED in libmzpeak.a,
+# so a downstream static link that used to work now fails unless the consumer
+# also links msnumpress.  link_whole restores the old property.
+deps_so = deps + [numpress.get_variable('msnumpres_cpp_lib_so')]
+deps_a = deps + [numpress.get_variable('msnumpres_cpp_lib_a')]
 
 libmzpeak_so = library(
   'mzpeak', lib_sources,
-  dependencies : deps,
+  dependencies : deps_so,
   include_directories : include,
   install : true)
 
 libmzpeak_a = static_library(
   'mzpeak', lib_sources,
-  dependencies : deps,
+  dependencies : deps_a,
+  link_whole : numpress.get_variable('cpp_lib_a'),
   include_directories : include,
   install : true)
 
@@ -211,7 +222,7 @@ foreach test : test_names
          executable('@0@_test'.format(test),
                     'test/@0@_test.cpp'.format(test),
                     include_directories : include,
-                    dependencies : deps,
+                    dependencies : deps_so,
                     link_with : libmzpeak_so),
          verbose : false)
 endforeach
@@ -225,7 +236,7 @@ test('e2e',
      executable('e2e_test',
                 'test/e2e_test.cpp',
                 include_directories : include,
-                dependencies : deps,
+                dependencies : deps_so,
                 link_with : libmzpeak_so),
      suite : 'e2e',
      timeout : 300,
@@ -241,7 +252,7 @@ foreach example : example_names
     example,
     'examples/@0@.cpp'.format(example),
     include_directories : include,
-    dependencies : deps,
+    dependencies : deps_so,
     link_with : libmzpeak_so,
     install : true,
     install_dir : 'examples')
@@ -258,7 +269,7 @@ foreach tool : tool_names
     tool,
     'bin/@0@.cpp'.format(tool),
     include_directories : include,
-    dependencies : deps,
+    dependencies : deps_so,
     link_with : libmzpeak_so,
     install : true)
 endforeach

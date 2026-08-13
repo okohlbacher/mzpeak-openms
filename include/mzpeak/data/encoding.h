@@ -267,6 +267,19 @@ void Decoder<T>::decode(const ArrayIndex::Dimension& dim, std::vector<V>& v) con
 {
   const auto& entries = dim.entries;
 
+  // Refuse an array index whose `prefix` names a layout this reader does not
+  // implement.  The dispatch below keys off the entries alone, so without this
+  // an unrecognised layout carrying plausible-looking chunk entries would fall
+  // through to chunked() and either decode as something else or fail later with
+  // a message about columns rather than about the layout.
+  //
+  // Upstream's Layout-based dispatch threw here; this tree keeps its own
+  // entries-based dispatch (it also handles the coalesced-point case), so the
+  // check is made explicitly rather than falling out of a switch.
+  if (signals_->array_index()->layout() == ArrayIndex::Layout::Unknown) {
+    throw UnknownLayoutError("cannot decode dimension, unknown layout: " + dim.name);
+  }
+
   if (entries.empty()) {
     std::string msg("unable to decode dimension, wrong encoding: ");
     throw ParquetError(msg + dim.name);
