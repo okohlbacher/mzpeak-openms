@@ -14,36 +14,13 @@ directory of this repository.
 #include "mzpeak/exception.h"
 #include "mzpeak/index.h"
 #include "mzpeak/open.h"
-#include "mzpeak/schema/file.h"
 
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(can_parse_json)
 {
   auto index = MzPeak::open("../test/files/small.mzpeak");
   const auto& files = index.files();
-  BOOST_TEST(!files.empty(), "files should not be empty but is");
-}
-
-/******************************************************************************/
-BOOST_AUTO_TEST_CASE(is_associated_with)
-{
-  auto index = MzPeak::open("../test/files/small.mzpeak");
-
-  const auto& files = index.files();
-  const auto& spectra = index.find("spectra_data.parquet");
-  BOOST_TEST((spectra != files.end()), "missing spectra_data.parquet");
-
-  auto matches = [&](const auto& other) -> bool {
-    return other != *spectra && spectra->is_associated_with(other);
-  };
-
-  for (const auto& other : files | std::views::filter(matches)) {
-    BOOST_TEST_CONTEXT(spectra->file_name()
-                       << " should not be associated with " << other.file_name())
-    {
-      BOOST_TEST((other.file_name() == "spectra_metadata.parquet"));
-    }
-  }
+  BOOST_TEST(!files.empty(), "files should not be empty");
 }
 
 /******************************************************************************/
@@ -63,9 +40,10 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
   std::size_t scans = 0, precursors = 0, selected_ions = 0;
   for (const auto& f : index.files()) {
     if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
-    if (f.data_kind() == MzPeak::Schema::DataKind::Scans) ++scans;
-    if (f.data_kind() == MzPeak::Schema::DataKind::Precursors) ++precursors;
-    if (f.data_kind() == MzPeak::Schema::DataKind::SelectedIons) ++selected_ions;
+    if (f.data_kind().type() == MzPeak::Schema::DataKind::Scans) ++scans;
+    if (f.data_kind().type() == MzPeak::Schema::DataKind::Precursors) ++precursors;
+    if (f.data_kind().type() == MzPeak::Schema::DataKind::SelectedIons)
+      ++selected_ions;
   }
   BOOST_TEST(scans == 1u);
   BOOST_TEST(precursors == 1u);
@@ -75,7 +53,7 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
   // declares its unit as minutes.
   bool checked = false;
   for (const auto& f : index.files()) {
-    if (f.data_kind() != MzPeak::Schema::DataKind::Scans) continue;
+    if (f.data_kind().type() != MzPeak::Schema::DataKind::Scans) continue;
     if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
     auto path = f.path_for("MS:1000016");
     BOOST_TEST_REQUIRE(path.has_value());
@@ -97,9 +75,9 @@ BOOST_AUTO_TEST_CASE(older_layout_has_no_facets_or_column_mapping)
   auto index = MzPeak::open("../test/files/legacy/small.mzpeak");
   for (const auto& f : index.files()) {
     BOOST_TEST(f.columns().empty());
-    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::Scans));
-    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::Precursors));
-    BOOST_TEST((f.data_kind() != MzPeak::Schema::DataKind::SelectedIons));
+    BOOST_TEST((f.data_kind().type() != MzPeak::Schema::DataKind::Scans));
+    BOOST_TEST((f.data_kind().type() != MzPeak::Schema::DataKind::Precursors));
+    BOOST_TEST((f.data_kind().type() != MzPeak::Schema::DataKind::SelectedIons));
   }
 }
 

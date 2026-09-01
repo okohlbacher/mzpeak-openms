@@ -63,7 +63,7 @@ try
     // Accept "path" (preferred) with "name" as backward-compatible fallback.
     : file_name_(o.contains("path") ? o.at("path").as_string()
                                     : o.at("name").as_string())
-    , data_kind_(data_kind_from_string(o.at("data_kind").as_string()))
+    , data_kind_(std::string_view(o.at("data_kind").as_string()))
     , entity_type_(entity_type_from_string(o.at("entity_type").as_string()))
     , columns_() {
   auto cs = o.find("column_mapping");
@@ -91,23 +91,6 @@ std::optional<std::string> File::unit_for(const std::string_view& accession) con
     if (c.accession && *c.accession == accession) return c.unit;
   }
   return std::nullopt;
-}
-
-/******************************************************************************/
-bool File::is_associated_with(const File& other) const
-{
-  std::string::size_type underscore(file_name_.find("_"));
-  if (underscore == std::string::npos) return false;
-  if (other.file_name_.size() < underscore) return false;
-
-  if (file_name_.compare(0, underscore, other.file_name_, 0, underscore) != 0) {
-    return false;
-  }
-
-  return (data_kind_ == DataKind::DataArray &&
-          other.data_kind_ == DataKind::Metadata) ||
-         (data_kind_ == DataKind::Metadata &&
-          other.data_kind_ == DataKind::DataArray);
 }
 
 /******************************************************************************/

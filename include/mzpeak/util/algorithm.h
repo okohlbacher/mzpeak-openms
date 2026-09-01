@@ -17,6 +17,7 @@ top-level directory of this repository.
 #include <utility>
 #include <vector>
 
+#include "mzpeak/util/decoders.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util::Algorithm {
@@ -180,7 +181,7 @@ null_delta_decode(typename type_traits<T>::value_type start,
 
   for (int64_t index : std::views::iota(0, length)) {
     if (casted->IsValid(index)) {
-      ValueType delta = casted->Value(index);
+      ValueType delta = Decoders::unsafe_array_value<T>(casted, index);
       last = last.value_or(zero) + delta;
       append(last);
     } else {

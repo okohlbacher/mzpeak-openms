@@ -121,12 +121,12 @@ std::string spectra_index_json(bool with_data,
   std::vector<Util::IndexFileEntry> files;
   if (with_data) {
     files.push_back({"spectra_data.parquet", "spectrum",
-                     Schema::data_kind_to_string(DataKind::DataArray)});
+                     Schema::DataKind(DataKind::DataArray).to_string()});
   }
   files.push_back(
       {"spectra_metadata.parquet",
        "spectrum",
-       Schema::data_kind_to_string(DataKind::Metadata),
+       Schema::DataKind(DataKind::Metadata).to_string(),
        {{"ms level", "ms_level", "MS:1000511", ""},
         {"scan polarity", "scan_polarity", "MS:1000465", ""},
         {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
@@ -137,15 +137,15 @@ std::string spectra_index_json(bool with_data,
   files.push_back(
       {"spectra_metadata_scans.parquet",
        "spectrum",
-       Schema::data_kind_to_string(DataKind::Scans),
+       Schema::DataKind(DataKind::Scans).to_string(),
        {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
   files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
-                   Schema::data_kind_to_string(DataKind::Precursors)});
+                   Schema::DataKind(DataKind::Precursors).to_string()});
   files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
-                   Schema::data_kind_to_string(DataKind::SelectedIons)});
+                   Schema::DataKind(DataKind::SelectedIons).to_string()});
   if (with_peaks) {
     files.push_back({"spectra_peaks.parquet", "spectrum",
-                     Schema::data_kind_to_string(DataKind::Peaks)});
+                     Schema::DataKind(DataKind::Peaks).to_string()});
   }
   if (run_metadata != nullptr) {
     return Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json());
@@ -425,7 +425,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
                              data.spectrum_index, data.mz, data.intensity,
                              point_file_kv(total_spectra, data.mz.size()))});
       files.push_back({"spectra_data.parquet", "spectrum",
-                       Schema::data_kind_to_string(DataKind::DataArray)});
+                       Schema::DataKind(DataKind::DataArray).to_string()});
     }
     if (any_centroid(contents.spectra)) {
       PointColumns peaks(flatten(contents.spectra, /*want_centroid=*/true));
@@ -434,7 +434,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
                              peaks.spectrum_index, peaks.mz, peaks.intensity,
                              point_file_kv(total_spectra, peaks.mz.size()))});
       files.push_back({"spectra_peaks.parquet", "spectrum",
-                       Schema::data_kind_to_string(DataKind::Peaks)});
+                       Schema::DataKind(DataKind::Peaks).to_string()});
     }
 
     auto rows(build_metadata_rows(contents.spectra));
@@ -443,7 +443,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
     files.push_back(
         {"spectra_metadata.parquet",
          "spectrum",
-         Schema::data_kind_to_string(DataKind::Metadata),
+         Schema::DataKind(DataKind::Metadata).to_string(),
          {{"ms level", "ms_level", "MS:1000511", ""},
           {"scan polarity", "scan_polarity", "MS:1000465", ""},
           {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
@@ -458,12 +458,12 @@ std::vector<Member> build_run_members(const RunContents& contents,
     files.push_back(
         {"spectra_metadata_scans.parquet",
          "spectrum",
-         Schema::data_kind_to_string(DataKind::Scans),
+         Schema::DataKind(DataKind::Scans).to_string(),
          {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
     files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
-                     Schema::data_kind_to_string(DataKind::Precursors)});
+                     Schema::DataKind(DataKind::Precursors).to_string()});
     files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
-                     Schema::data_kind_to_string(DataKind::SelectedIons)});
+                     Schema::DataKind(DataKind::SelectedIons).to_string()});
   }
 
   // ---- chromatograms -----------------------------------------------------
@@ -481,7 +481,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
               {"chromatogram_count", std::to_string(contents.chromatograms.size())},
               {"chromatogram_data_point_count", std::to_string(c.time.size())}})});
     files.push_back({"chromatograms_data.parquet", "chromatogram",
-                     Schema::data_kind_to_string(DataKind::DataArray)});
+                     Schema::DataKind(DataKind::DataArray).to_string()});
 
     members.push_back({"chromatograms_metadata.parquet",
                        Util::chromatograms_metadata_bytes(
@@ -491,7 +491,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
     files.push_back(
         {"chromatograms_metadata.parquet",
          "chromatogram",
-         Schema::data_kind_to_string(DataKind::Metadata),
+         Schema::DataKind(DataKind::Metadata).to_string(),
          {{"chromatogram type", "chromatogram_type", "MS:1000626", ""},
           {"scan polarity", "scan_polarity", "MS:1000465", ""},
           {"number of data points", "number_of_data_points", "MS:1003060", ""}}});
@@ -506,9 +506,9 @@ std::vector<Member> build_run_members(const RunContents& contents,
     members.push_back(
         {"chromatograms_metadata_selected_ions.parquet", std::move(facets[1])});
     files.push_back({"chromatograms_metadata_precursors.parquet", "chromatogram",
-                     Schema::data_kind_to_string(DataKind::Precursors)});
+                     Schema::DataKind(DataKind::Precursors).to_string()});
     files.push_back({"chromatograms_metadata_selected_ions.parquet", "chromatogram",
-                     Schema::data_kind_to_string(DataKind::SelectedIons)});
+                     Schema::DataKind(DataKind::SelectedIons).to_string()});
   }
 
   // ---- wavelength spectra ------------------------------------------------
@@ -527,7 +527,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
                             {"wavelength_spectrum_data_point_count",
                              std::to_string(w.wavelength.size())}})});
     files.push_back({"wavelength_spectra_data.parquet", "wavelength_spectrum",
-                     Schema::data_kind_to_string(DataKind::DataArray)});
+                     Schema::DataKind(DataKind::DataArray).to_string()});
 
     members.push_back({"wavelength_spectra_metadata.parquet",
                        Util::wavelength_metadata_bytes(
@@ -536,7 +536,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
     files.push_back(
         {"wavelength_spectra_metadata.parquet",
          "wavelength_spectrum",
-         Schema::data_kind_to_string(DataKind::Metadata),
+         Schema::DataKind(DataKind::Metadata).to_string(),
          {{"number of data points", "number_of_data_points", "MS:1003060", ""},
           {"lowest observed wavelength", "lowest_observed_wavelength", "MS:1000619",
            "UO:0000018"},
@@ -560,7 +560,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
     files.push_back(
         {"wavelength_spectra_metadata_scans.parquet",
          "wavelength_spectrum",
-         Schema::data_kind_to_string(DataKind::Scans),
+         Schema::DataKind(DataKind::Scans).to_string(),
          {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
   }
 

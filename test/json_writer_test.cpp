@@ -107,6 +107,6 @@ BOOST_AUTO_TEST_CASE(mzpeak_index_round_trips)
   // Spot-check the data-kind mapping for the two entries.
   Schema::File data(file_array.at(0).as_object());
   Schema::File peaks(file_array.at(1).as_object());
-  BOOST_TEST((data.data_kind() == Schema::DataKind::DataArray));
-  BOOST_TEST((peaks.data_kind() == Schema::DataKind::Peaks));
+  BOOST_TEST((data.data_kind().type() == Schema::DataKind::DataArray));
+  BOOST_TEST((peaks.data_kind().type() == Schema::DataKind::Peaks));
 }

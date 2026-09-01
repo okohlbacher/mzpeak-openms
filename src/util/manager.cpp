@@ -150,9 +150,19 @@ const std::vector<Schema::File>& Manager::files() const { return files_; }
 
 /******************************************************************************/
 std::vector<Schema::File>::const_iterator
-Manager::find_file(const std::string_view& name) const
+Manager::find_file(std::string_view name) const
 {
   return std::ranges::find(files_, name, &Schema::File::file_name);
+}
+
+/******************************************************************************/
+std::vector<Schema::File>::const_iterator
+Manager::find_file(Schema::EntityType et, Schema::DataKind::Type dkt) const
+{
+  return std::ranges::find_if(files_, [&et, &dkt](const auto& file) -> bool {
+    auto type = file.data_kind().type();
+    return file.entity_type() == et && type.has_value() && type.value() == dkt;
+  });
 }
 
 /******************************************************************************/

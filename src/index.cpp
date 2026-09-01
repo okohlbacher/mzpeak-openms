@@ -32,8 +32,7 @@ Index::Index(std::unique_ptr<MzPeak::IO::Archive> archive)
 const std::vector<Schema::File>& Index::files() const { return manager_->files(); }
 
 /******************************************************************************/
-std::vector<Schema::File>::const_iterator
-Index::find(const std::string_view& name) const
+std::vector<Schema::File>::const_iterator Index::find(std::string_view name) const
 {
   return manager_->find_file(name);
 }
@@ -56,17 +55,17 @@ std::shared_ptr<Util::Manager> Index::manager() const { return manager_; }
 /******************************************************************************/
 Spectra Index::spectra() const
 {
-  using enum Schema::DataKind;
+  using enum Schema::DataKind::Type;
 
   const Schema::File* data_file = nullptr;
   const Schema::File* meta_file = nullptr;
 
   for (const auto& file : manager_->files()) {
     if (file.entity_type() != Schema::EntityType::Spectrum) continue;
-    if (file.data_kind() == DataArray || file.data_kind() == Peaks) {
+    if (file.data_kind().type() == DataArray || file.data_kind().type() == Peaks) {
       // Prefer DataArray (profile); fall back to Peaks (centroid-only).
-      if (!data_file || file.data_kind() == DataArray) data_file = &file;
-    } else if (file.data_kind() == Metadata) {
+      if (!data_file || file.data_kind().type() == DataArray) data_file = &file;
+    } else if (file.data_kind().type() == Metadata) {
       meta_file = &file;
     }
   }
@@ -76,7 +75,8 @@ Spectra Index::spectra() const
   const Schema::File* peaks_file = nullptr;
   for (const auto& file : manager_->files()) {
     if (file.entity_type() == Schema::EntityType::Spectrum &&
-        file.data_kind() == Peaks && data_file->data_kind() == DataArray) {
+        file.data_kind().type() == Peaks &&
+        data_file->data_kind().type() == DataArray) {
       peaks_file = &file;
     }
   }
@@ -89,9 +89,10 @@ Spectra Index::spectra() const
     // reader can join them by source_index.  Older writers have none of these.
     for (const auto& file : manager_->files()) {
       if (file.entity_type() != Schema::EntityType::Spectrum) continue;
-      if (file.data_kind() == Scans || file.data_kind() == Precursors ||
-          file.data_kind() == SelectedIons) {
-        meta->add_facet(file.data_kind(), manager_->parquet(file));
+      if (file.data_kind().type() == Scans ||
+          file.data_kind().type() == Precursors ||
+          file.data_kind().type() == SelectedIons) {
+        meta->add_facet(file.data_kind().type().value(), manager_->parquet(file));
       }
     }
   }
@@ -112,19 +113,19 @@ Spectra Index::spectra() const
 /******************************************************************************/
 WavelengthSpectra Index::wavelength_spectra() const
 {
-  using enum Schema::DataKind;
+  using enum Schema::DataKind::Type;
 
   const Schema::File* data = nullptr;
   const Schema::File* metadata = nullptr;
   for (const auto& file : manager_->files()) {
     if (file.entity_type() != Schema::EntityType::WavelengthSpectrum) continue;
-    if (file.data_kind() == DataArray) data = &file;
+    if (file.data_kind().type() == DataArray) data = &file;
     // FIRST match wins.  Several members can carry data_kind "metadata" for one
     // entity -- the specification's own chromatogram example labels the
     // precursor facet that way -- and the primary table is written first.
     // Taking the last would hand a facet to the primary reader, which finds no
     // index column and returns an empty map with no error.
-    else if (file.data_kind() == Metadata && metadata == nullptr)
+    else if (file.data_kind().type() == Metadata && metadata == nullptr)
       metadata = &file;
   }
 
@@ -156,7 +157,7 @@ WavelengthSpectra Index::wavelength_spectra() const
     std::unique_ptr<Util::Parquet> scans;
     for (const auto& file : manager_->files()) {
       if (file.entity_type() != Schema::EntityType::WavelengthSpectrum) continue;
-      if (file.data_kind() != Scans) continue;
+      if (file.data_kind().type() != Scans) continue;
       scans = manager_->parquet(file);
       files.scans = scans.get();
     }
@@ -171,15 +172,15 @@ WavelengthSpectra Index::wavelength_spectra() const
 /******************************************************************************/
 Chromatograms Index::chromatograms() const
 {
-  using enum Schema::DataKind;
+  using enum Schema::DataKind::Type;
 
   const Schema::File* data = nullptr;
   const Schema::File* metadata = nullptr;
   for (const auto& file : manager_->files()) {
     if (file.entity_type() != Schema::EntityType::Chromatogram) continue;
-    if (file.data_kind() == DataArray) data = &file;
+    if (file.data_kind().type() == DataArray) data = &file;
     // FIRST match wins; see the wavelength case above.
-    else if (file.data_kind() == Metadata && metadata == nullptr)
+    else if (file.data_kind().type() == Metadata && metadata == nullptr)
       metadata = &file;
   }
 
@@ -209,10 +210,10 @@ Chromatograms Index::chromatograms() const
     std::unique_ptr<Util::Parquet> selected_ions;
     for (const auto& file : manager_->files()) {
       if (file.entity_type() != Schema::EntityType::Chromatogram) continue;
-      if (file.data_kind() == Precursors) {
+      if (file.data_kind().type() == Precursors) {
         precursors = manager_->parquet(file);
         files.precursors = precursors.get();
-      } else if (file.data_kind() == SelectedIons) {
+      } else if (file.data_kind().type() == SelectedIons) {
         selected_ions = manager_->parquet(file);
         files.selected_ions = selected_ions.get();
       }

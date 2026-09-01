@@ -104,6 +104,13 @@ BOOST_AUTO_TEST_CASE(can_read_spectra)
       BOOST_TEST_REQUIRE(intensity[intensity.size() - 1] == 0.0, tolerance);
 
       BOOST_TEST_REQUIRE(spectrum.ms_level() == 1u);
+      // Upstream asserted scan_time() == 0.004935 MINUTES; this tree exposes
+      // retention time in SECONDS through the richer metadata API, so the same
+      // value is 0.004935 * 60 = 0.2961 s.  A missing minutes->seconds
+      // conversion shows up here as a factor of 60.
+      BOOST_TEST_REQUIRE(spectrum.retention_time().has_value());
+      BOOST_TEST_REQUIRE(spectrum.retention_time().value() == 0.2961,
+                         boost::test_tools::tolerance(1e-3));
     }
   };
 

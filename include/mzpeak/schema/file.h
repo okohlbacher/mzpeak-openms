@@ -59,11 +59,6 @@ public:
   /// Conversion from JSON.
   explicit File(const json::object&);
 
-  /// Return `true` if this file is associated with the given file.
-  /// For example, if this file is a DataArray and the other file is a
-  /// Metadata file with a similar name.
-  bool is_associated_with(const File&) const;
-
   /// Equality operator.
   bool operator==(const File&) const;
 
@@ -91,7 +86,7 @@ public:
 
 private:
   std::string file_name_;
-  DataKind data_kind_ = DataKind::Other;
+  DataKind data_kind_ = DataKind("other");
   EntityType entity_type_ = EntityType::Other;
   std::vector<Column> columns_;
 };

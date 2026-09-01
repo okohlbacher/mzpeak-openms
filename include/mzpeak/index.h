@@ -9,6 +9,7 @@ directory of this repository.
 #pragma once
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "mzpeak/chromatograms.h"
@@ -50,7 +51,7 @@ public:
   /**
    * Find a file in the mzPeak archive with the given name.
    */
-  std::vector<Schema::File>::const_iterator find(const std::string_view&) const;
+  std::vector<Schema::File>::const_iterator find(std::string_view) const;
 
   /**
    * The mzPeak format version from the index `metadata.version`, or an

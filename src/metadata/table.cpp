@@ -27,18 +27,38 @@ struct Table::Impl {
   std::unique_ptr<Util::Parquet> precursors_;
   std::unique_ptr<Util::Parquet> selected_ions_;
   std::optional<std::size_t> n_entries;
+  std::string index_field_name_;
 };
 
 /******************************************************************************/
 Table::Impl::Impl(std::unique_ptr<Util::Parquet> parquet)
     : parquet_(std::move(parquet))
-    , n_entries()
+    , index_field_name_("index")
 {
   auto file = parquet_->index_file();
 
-  if (file.data_kind() != Schema::DataKind::Metadata) {
+  if (!file.data_kind().is_metadata()) {
     std::string msg("file is not a metadata file: " + file.file_name());
-    throw ParquetError(msg);
+    throw InvalidFormatError(msg);
+  }
+
+  auto type = file.data_kind().type();
+  if (type.has_value()) {
+    using enum Schema::DataKind::Type;
+
+    switch (type.value()) {
+    case DataArray:
+    case Peaks:
+    case Metadata:
+    case Proprietary:
+      break;
+    case Scans:
+    case Precursors:
+    case SelectedIons:
+    case Products:
+      index_field_name_ = "source_index";
+      break;
+    }
   }
 }
 
@@ -55,14 +75,14 @@ Table::Table(std::unique_ptr<Util::Parquet> parquet)
 Table::~Table() = default;
 
 /******************************************************************************/
-std::shared_ptr<Schema::Group> Table::group(const std::string_view& name) const
+std::shared_ptr<Schema::Group> Table::group(std::string_view name) const
 {
   const std::shared_ptr<Schema::GroupMap>& map = impl_->parquet_->groups();
   auto it = map->find(std::string(name));
 
   if (it == map->end()) {
-    // FIXME: Replace with the InvalidFormat exception.
-    throw ParquetError("schema is missing the " + std::string(name) + " group");
+    throw InvalidFormatError("schema is missing the " + std::string(name) +
+                             " group");
   } else {
     return it->second;
   }
@@ -74,8 +94,11 @@ Table::indexed(uint64_t index,
                const std::shared_ptr<Schema::Group>& group,
                const Util::Projection& projection) const
 {
-  auto index_field = group->field("index");
-  if (!index_field.has_value()) return nullptr;
+  auto index_field = group->field(impl_->index_field_name_);
+
+  if (!index_field.has_value()) {
+    throw InvalidFormatError("metadata column missing: " + impl_->index_field_name_);
+  }
 
   auto column = std::make_pair(group, index_field.value());
   Util::Query q = Util::Query::Builder(column).eq(index);
@@ -85,9 +108,9 @@ Table::indexed(uint64_t index,
 }
 
 /******************************************************************************/
-void Table::add_facet(Schema::DataKind kind, std::unique_ptr<Util::Parquet> p)
+void Table::add_facet(Schema::DataKind::Type kind, std::unique_ptr<Util::Parquet> p)
 {
-  using enum Schema::DataKind;
+  using enum Schema::DataKind::Type;
   switch (kind) {
   case Scans:
     impl_->scans_ = std::move(p);

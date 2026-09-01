@@ -37,25 +37,23 @@ BOOST_AUTO_TEST_CASE(can_find_spectrum)
   auto mz_field = parquet->field("point", "mz");
   BOOST_TEST(mz_field.has_value());
 
-  auto query = Util::Query::Builder(*index_field).eq<uint64_t>(1ul);
+  auto query = Util::Query::Builder(index_field.value()).eq<uint64_t>(1ul);
 
   Util::Planner planner = parquet->planner(query);
   auto plan = planner.plan();
   BOOST_TEST(plan.ranges.size() == 1ul);
 
   Util::Projection projection;
-  projection.project(*mz_field);
+  projection.project(mz_field.value());
 
   Util::Executor executor = parquet->executor(projection);
   const auto& slice = executor.execute(plan);
   BOOST_TEST((slice->fields() == projection.get()));
-
-  auto raw = slice->raw(*mz_field);
-  BOOST_TEST((raw != nullptr));
+  BOOST_TEST(slice->has_column(mz_field.value()));
 
   // Decode, dropping null values.
   std::vector<double> mz;
-  slice->array<Util::Decoders::Scalar<double>>(*mz_field, mz);
+  slice->array<Util::Decoders::Scalar<double>>(mz_field.value(), mz);
   BOOST_TEST(mz.size() == 15063);
   BOOST_TEST(mz[0] == 200.09, boost::test_tools::tolerance(0.001));
   BOOST_TEST(mz[mz.size() - 1] == 1999.81, boost::test_tools::tolerance(0.001));
@@ -80,23 +78,22 @@ BOOST_AUTO_TEST_CASE(can_read_uint8_t)
   auto ms_level = parquet->field("root", "ms_level");
   BOOST_TEST(ms_level.has_value());
 
-  auto query = Util::Query::Builder(*index_field).eq<uint64_t>(0ul);
+  auto query = Util::Query::Builder(index_field.value()).eq<uint64_t>(0ul);
   Util::Planner planner = parquet->planner(query);
   auto plan = planner.plan();
   BOOST_TEST(plan.ranges.size() == 1ul);
 
   Util::Projection projection;
-  projection.project(*ms_level);
+  projection.project(ms_level.value());
 
   Util::Executor executor = parquet->executor(projection);
   const auto& slice = executor.execute(plan);
-  BOOST_TEST((slice->fields() == projection.get()));
 
-  auto raw = slice->raw(*ms_level);
-  BOOST_TEST((raw != nullptr));
+  BOOST_TEST((slice->fields() == projection.get()));
+  BOOST_TEST(slice->has_column(ms_level.value()));
 
   std::vector<uint8_t> levels;
-  slice->array<Util::Decoders::Scalar<uint8_t>>(*ms_level, levels);
+  slice->array<Util::Decoders::Scalar<uint8_t>>(ms_level.value(), levels);
   BOOST_TEST(levels.size() == 1);
   BOOST_TEST(levels[0] == 1);
 }

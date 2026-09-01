@@ -34,7 +34,7 @@ struct Executor::Impl {
   }
 
   /// Helper to check a result and throw an error if necessary.
-  template <typename T> T check(const std::string_view& msg, arrow::Result<T> r)
+  template <typename T> T check(std::string_view msg, arrow::Result<T> r)
   {
     if (!r.ok()) {
       std::string error("while executing a query: " + std::string(msg) + ": ");
@@ -85,7 +85,8 @@ Query::Result<Query::value_t> Executor::Impl::ArrayValueHelper::operator()()
   }
 
   auto casted = std::static_pointer_cast<typename type_traits<T>::array_type>(a);
-  return Query::Result<Query::value_t>(casted->Value(row_index_));
+  auto value = Decoders::unsafe_array_value<T>(casted, row_index_);
+  return Query::Result<Query::value_t>(value);
 }
 
 /******************************************************************************/

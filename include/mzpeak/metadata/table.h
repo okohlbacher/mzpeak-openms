@@ -31,16 +31,15 @@ public:
   /// Attach a facet file (scans / precursors / selected ions) that belongs to
   /// this entity's metadata.  Newer writers split the facets into their own
   /// files; older ones nest them as struct columns and never call this.
-  void add_facet(Schema::DataKind, std::unique_ptr<Util::Parquet>);
+  void add_facet(Schema::DataKind::Type, std::unique_ptr<Util::Parquet>);
 
   /// Destructor.
   ~Table();
 
   /**
-   * Return a group with the given name.  If the group does not
-   * exist in the schema return `nullptr`.
+   * Return a group with the given name.
    */
-  std::shared_ptr<Schema::Group> group(const std::string_view&) const;
+  std::shared_ptr<Schema::Group> group(std::string_view) const;
 
   /**
    * Read all rows from the given group where the index column

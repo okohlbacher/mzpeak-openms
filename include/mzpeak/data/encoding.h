@@ -255,7 +255,6 @@ void Decoder<T>::remap(const ArrayIndex::Dimension& dim, std::vector<V>& v) cons
   } else {
     std::vector<F> tmp;
     decode<F>(dim, tmp);
-    v.reserve(tmp.size());
     v.insert(v.end(), tmp.begin(), tmp.end());
   }
 }
@@ -865,6 +864,8 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
 
   if (!col.has_value()) {
     throw ParquetError("unable to decode dimension, not in schema: " + dim.name);
+  } else if (!slice_->has_column(col.value())) {
+    return; // No data to decode so we can exit early.
   }
 
   auto go = [&](auto&& decoder) -> void { slice_->array(col.value(), v, decoder); };
