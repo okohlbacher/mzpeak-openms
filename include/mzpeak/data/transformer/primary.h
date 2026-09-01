@@ -99,6 +99,46 @@ Decoder<T>::Decoder(std::shared_ptr<Signals> signals,
     msg += " have different lengths";
     throw InvalidFormatError(msg);
   }
+
+  // Reject a file whose chunks are not ascending by chunk_start and
+  // non-overlapping, or whose chunk_start exceeds its chunk_end.  The spec
+  // requires this, and nothing else checks it, so a malformed file would
+  // otherwise decode to plausible wrong values.  Done here, alongside the
+  // chunk_start read, because Slice::raw() is a CONSUMING read -- validating in
+  // a separate pass would erase chunk_start before this decode could read it.
+  //
+  // chunk_end is optional (some files omit it); its absence just skips the
+  // check.  Read via the raw arrays so a null chunk_end -- the empty-chunk
+  // marker -- is distinguishable from a genuine 0 rather than misread.
+  std::optional<Schema::Column> end_col =
+      signals->column(dim, Schema::BufferFormat::ChunkEnd);
+  if (end_col.has_value() && slice->has_column(end_col.value())) {
+    std::shared_ptr<Util::Slice::Raw> ends_raw = slice->raw(end_col.value());
+    std::optional<T> previous_end;
+    std::size_t flat = 0;
+    if (ends_raw != nullptr) {
+      for (const auto& chunk : *ends_raw) {
+        auto ends = std::static_pointer_cast<
+            typename Util::type_traits<Util::enum_type_v<T>>::array_type>(chunk);
+        for (int64_t r = 0; r < ends->length(); ++r, ++flat) {
+          if (ends->IsNull(r) || flat >= chunk_start_.size()) continue;
+          const T start = chunk_start_[flat];
+          const T end = ends->Value(r);
+          // start == end == 0 is the empty-chunk sentinel.
+          if (start == T{} && end == T{}) continue;
+          if (!(start <= end)) {
+            throw InvalidFormatError("chunk_start exceeds chunk_end (" + dim.name +
+                                     ")");
+          }
+          if (previous_end.has_value() && start < *previous_end) {
+            throw InvalidFormatError("chunks overlap or are out of order (" +
+                                     dim.name + ")");
+          }
+          previous_end = end;
+        }
+      }
+    }
+  }
 }
 
 /******************************************************************************/
