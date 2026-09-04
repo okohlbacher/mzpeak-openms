@@ -19,6 +19,7 @@ top-level directory of this repository.
 #include "mzpeak/spectrum.h"
 #include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/enumerable_proxy.h"
+#include "mzpeak/util/index_map.h"
 
 // Forward declarations:
 namespace MzPeak::Data {
@@ -80,7 +81,7 @@ public:
   Spectra& operator=(Spectra&&) = delete;
 
   /// The cached per-spectrum descriptive metadata, keyed by spectrum index.
-  using MetadataMap = std::map<uint64_t, SpectrumMetadata>;
+  using MetadataMap = Util::IndexMap<SpectrumMetadata>;
 
   /// Constructor for profile-only or centroid-only data.
   ///

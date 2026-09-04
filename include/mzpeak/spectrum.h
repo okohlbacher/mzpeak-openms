@@ -23,6 +23,7 @@ top-level directory of this repository.
 #include "mzpeak/metadata/spectrum.h"
 #include "mzpeak/metadata/table.h"
 #include "mzpeak/spectrum_metadata.h"
+#include "mzpeak/util/index_map.h"
 #include "mzpeak/util/slice.h"
 
 namespace MzPeak {
@@ -131,7 +132,7 @@ protected:
            std::shared_ptr<Data::Signals>,
            std::vector<Data::ArrayIndex::Dimension>,
            std::shared_ptr<Metadata::Table>,
-           std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map,
+           std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
            ImsCalibration ims = {});
 
 private:
@@ -154,7 +155,7 @@ private:
 
   uint64_t index_;
   std::shared_ptr<Metadata::Table> md_table_;
-  std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map_;
+  std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map_;
 
   // Ingredients retained for the lazy peak read + decode.
   std::shared_ptr<Data::Signals> signals_;

@@ -20,6 +20,7 @@ directory of this repository.
 #include "mzpeak/run_metadata.h"
 #include "mzpeak/schema/file.h"
 #include "mzpeak/spectrum_metadata.h"
+#include "mzpeak/util/index_map.h"
 #include "mzpeak/util/parquet.h"
 
 namespace MzPeak::Util {
@@ -78,7 +79,7 @@ public:
   const RunMetadata& metadata() const { return metadata_; }
 
   /// The per-spectrum descriptive metadata map, keyed by spectrum index.
-  using SpectrumMetadataMap = std::map<uint64_t, SpectrumMetadata>;
+  using SpectrumMetadataMap = IndexMap<SpectrumMetadata>;
 
   /**
    * The cached descriptive metadata for this archive at the given detail,

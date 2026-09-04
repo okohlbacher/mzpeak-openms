@@ -16,6 +16,7 @@ directory of this repository.
 
 #include "mzpeak/chromatogram_metadata.h"
 #include "mzpeak/spectrum_metadata.h"
+#include "mzpeak/util/index_map.h"
 #include "mzpeak/util/parquet.h"
 #include "mzpeak/wavelength_spectrum_metadata.h"
 
@@ -59,7 +60,7 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata);
  * Nullable source values map to absent std::optional fields or empty
  * strings/vectors as documented on SpectrumMetadata.
  */
-std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata);
+IndexMap<SpectrumMetadata> read_spectra_metadata(Parquet& metadata);
 
 /**
  * The Parquet files that together carry one entity's metadata.
@@ -82,7 +83,7 @@ struct SpectraMetadataFiles {
  * Handles both the nested single-table layout and the split-file layout; see
  * @ref SpectraMetadataFiles.
  */
-std::map<uint64_t, SpectrumMetadata>
+IndexMap<SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles&);
 
 /**
@@ -91,7 +92,7 @@ read_spectra_metadata(const SpectraMetadataFiles&);
  * windows and auxiliary arrays and keeps everything a decode or a selection
  * query reads.
  */
-std::map<uint64_t, SpectrumMetadata>
+IndexMap<SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles&, MetadataDetail detail);
 
 /**

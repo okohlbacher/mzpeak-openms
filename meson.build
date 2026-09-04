@@ -123,6 +123,7 @@ install_headers([
   'include/mzpeak/util/parquet_writer.h',
   'include/mzpeak/util/planner.h',
   'include/mzpeak/util/projection.h',
+  'include/mzpeak/util/index_map.h',
   'include/mzpeak/util/query.h',
   'include/mzpeak/util/slice.h',
   'include/mzpeak/util/types.h',

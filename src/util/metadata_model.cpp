@@ -19,6 +19,7 @@ directory of this repository.
 #include <cstring>
 #include <iomanip>
 #include <memory>
+#include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <ranges>
 #include <sstream>
@@ -36,9 +37,14 @@ namespace {
 /// idempotent (each call re-reads the Parquet file).
 /// Read a metadata table, optionally leaving some TOP-LEVEL columns undecoded.
 ///
-/// `ReadTable`'s indices are top-level Arrow fields (verified: a 5-field, 20-
-/// leaf precursor table indexed {0,2} returns source_index and precursor_id),
-/// so a name is enough to drop a whole nested column and everything under it.
+/// `ReadTable`'s indices are Parquet LEAF columns, not top-level fields.  The
+/// two coincide only while every field is a scalar, which is why passing field
+/// positions appeared to work on a precursor table whose first three columns
+/// are scalars and then silently dropped `scan_windows` -- leaf 11 of the scan
+/// table lies inside `parameters`, so the index selected the wrong column and
+/// the wanted one was never requested.  Leaves are therefore mapped back to the
+/// field that owns them via `GetColumnRoot`, and the skip list is matched on
+/// that field's name.
 ///
 /// A SKIP LIST, not a whitelist.  Naming what to keep would silently drop any
 /// column a future writer adds -- and this reader resolves several fields by CV
@@ -57,17 +63,20 @@ read_metadata_table(Parquet& metadata,
   arrow::Result<std::shared_ptr<arrow::Table>> result = [&] {
     if (skip.size() == 0) return metadata.reader().ReadTable();
 
-    std::shared_ptr<arrow::Schema> schema;
-    if (!metadata.reader().GetSchema(&schema).ok() || !schema)
-      return metadata.reader().ReadTable();
+    const parquet::SchemaDescriptor* schema =
+        metadata.reader().parquet_reader()->metadata()->schema();
+    if (!schema) return metadata.reader().ReadTable();
 
+    const int leaves = schema->num_columns();
     std::vector<int> keep;
-    keep.reserve(static_cast<std::size_t>(schema->num_fields()));
-    for (int i = 0; i < schema->num_fields(); ++i) {
-      const std::string& name = schema->field(i)->name();
-      if (std::ranges::find(skip, name) == skip.end()) keep.push_back(i);
+    keep.reserve(static_cast<std::size_t>(leaves));
+    for (int i = 0; i < leaves; ++i) {
+      const parquet::schema::Node* root = schema->GetColumnRoot(i);
+      if (!root) { keep.push_back(i); continue; }
+      if (std::ranges::find(skip, std::string_view(root->name())) == skip.end())
+        keep.push_back(i);
     }
-    if (keep.size() == static_cast<std::size_t>(schema->num_fields()))
+    if (keep.size() == static_cast<std::size_t>(leaves))
       return metadata.reader().ReadTable();
 
     return metadata.reader().ReadTable(keep);
@@ -598,8 +607,8 @@ std::vector<Facet> facets_of(const std::shared_ptr<arrow::Table>& table,
 ///
 /// H1: join by source_index VALUE, NEVER by row position — the facet has its
 /// own row count and ordering, and chunk boundaries differ per column.
-template <typename Entity>
-void attach_precursors(std::map<uint64_t, Entity>& out,
+template <typename Map>
+void attach_precursors(Map& out,
                        const std::vector<Facet>& facets,
                        MetadataDetail detail = MetadataDetail::Full)
 {
@@ -669,8 +678,8 @@ void attach_precursors(std::map<uint64_t, Entity>& out,
 /// precursor has not been seen gets a holder of its own rather than being
 /// attached to an arbitrary precursor — with several precursors per entity,
 /// `precursors.back()` silently mis-assigns the transition.
-template <typename Entity>
-void attach_selected_ions(std::map<uint64_t, Entity>& out,
+template <typename Map>
+void attach_selected_ions(Map& out,
                           const std::vector<Facet>& facets,
                           MetadataDetail detail = MetadataDetail::Full)
 {
@@ -785,7 +794,7 @@ std::map<uint64_t, std::vector<double>> read_mz_delta_models(Parquet& metadata)
 }
 
 /******************************************************************************/
-std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
+IndexMap<SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 {
   SpectraMetadataFiles files;
   files.primary = &metadata;
@@ -793,17 +802,17 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 }
 
 /******************************************************************************/
-std::map<uint64_t, SpectrumMetadata>
+IndexMap<SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles& files)
 {
   return read_spectra_metadata(files, MetadataDetail::Full);
 }
 
 /******************************************************************************/
-std::map<uint64_t, SpectrumMetadata>
+IndexMap<SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
 {
-  std::map<uint64_t, SpectrumMetadata> out;
+  IndexMap<SpectrumMetadata> out;
   if (!files.primary) return out;
 
   // Each facet resolves its columns through its OWN index entry: the mapping
@@ -819,14 +828,39 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // that is 1.9 MB of 4.7 MB decoded, `activation` alone being 1.0 MB of a
   // 1.5 MB precursor table for a CV-parameter list Lean does not keep.
   const bool lean = detail == MetadataDetail::Lean;
+
+  // Columns this reader NEVER extracts, in either mode.  Skipping them changes
+  // nothing observable -- no field of SpectrumMetadata is sourced from any of
+  // them -- and `filter_string` alone is 0.43 MB of a 1.51 MB scan table.
+  //
+  // Safe against the accession fallback because that fallback resolves a
+  // REQUESTED name (e.g. "MS_1000016_scan_start_time_unit_UO_0000031") through
+  // the file's column mapping, and this reader requests only source_index,
+  // scan start time, ion mobility value/type, parameters and scan_windows from
+  // this facet -- none of which any archive maps onto the six below.  Verified
+  // by dumping every extracted field of five archives before and after: no
+  // difference.
+  //
+  // They are named here rather than wired into SpectrumMetadata because
+  // deciding to EXPOSE a field is a separate call from deciding to stop paying
+  // for one nobody reads.  Adding any of them means deleting it from this list.
+  static constexpr std::initializer_list<std::string_view> unread_scan_columns = {
+      "scan_index", "preset_scan_configuration", "filter_string",
+      "ion_injection_time", "instrument_configuration_id", "spectrum_reference"};
+
   auto table = lean ? read_metadata_table(*files.primary,
                                           {"parameters", "auxiliary_arrays"})
                     : read_metadata_table(*files.primary);
   auto scans_table =
-      files.scans ? (lean ? read_metadata_table(*files.scans,
-                                                {"parameters", "scan_windows"})
-                          : read_metadata_table(*files.scans))
-                  : nullptr;
+      files.scans
+          ? (lean ? read_metadata_table(*files.scans,
+                                        {"scan_index", "preset_scan_configuration",
+                                         "filter_string", "ion_injection_time",
+                                         "instrument_configuration_id",
+                                         "spectrum_reference", "parameters",
+                                         "scan_windows"})
+                  : read_metadata_table(*files.scans, unread_scan_columns))
+          : nullptr;
   auto precursors_table =
       files.precursors
           ? (lean ? read_metadata_table(*files.precursors, {"activation"})
@@ -867,6 +901,17 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
       spectrum_facets.push_back(Facet{st, primary_file});
   } else {
     return out; // not a spectrum metadata table
+  }
+
+  // One allocation for the whole map instead of a doubling sequence: the
+  // entries are 432 bytes each, so growing into 7,534 of them copies ~3 MB
+  // through a peak nearly twice the final size for no reason -- the row count
+  // is known before the first row is read.
+  {
+    std::size_t rows = 0;
+    for (const auto& spectrum : spectrum_facets)
+      rows += static_cast<std::size_t>(spectrum->length());
+    out.reserve(rows);
   }
 
   for (const auto& spectrum : spectrum_facets) {
@@ -1111,9 +1156,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
         }
       }
 
-      out[m.index] = std::move(m);
+      // append + one sort, rather than an insert per row: the rows arrive in
+      // file order (ascending in practice, but the sort does not rely on it)
+      // and nothing looks anything up until PASS 2.
+      const uint64_t key = m.index;
+      out.append(key, std::move(m));
     }
   }
+  out.sort();
 
   // -------------------------------------------------------------------
   // PASS 2 and 3: precursor, then selected_ion.  Both are shared with the

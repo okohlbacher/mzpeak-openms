@@ -30,7 +30,7 @@ Spectrum::Spectrum(
     std::shared_ptr<Data::Signals> data,
     std::vector<Data::ArrayIndex::Dimension> dims,
     std::shared_ptr<Metadata::Table> metadata,
-    std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map,
+    std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
     ImsCalibration ims)
     : index_(index)
     , md_table_(std::move(metadata))

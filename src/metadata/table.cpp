@@ -127,7 +127,7 @@ void Table::add_facet(Schema::DataKind::Type kind, std::unique_ptr<Util::Parquet
 }
 
 /******************************************************************************/
-std::map<uint64_t, SpectrumMetadata>
+Util::IndexMap<SpectrumMetadata>
 Table::read_spectrum_metadata(MetadataDetail detail) const
 {
   Util::SpectraMetadataFiles files;

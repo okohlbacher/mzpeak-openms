@@ -15,6 +15,7 @@ directory of this repository.
 #include "mzpeak/schema/data_kind.h"
 #include "mzpeak/schema/group.h"
 #include "mzpeak/spectrum_metadata.h"
+#include "mzpeak/util/index_map.h"
 #include "mzpeak/util/parquet.h"
 #include "mzpeak/util/projection.h"
 
@@ -61,7 +62,7 @@ public:
    * the first peak is read.  Pass `MetadataDetail::Lean` when the CV-parameter
    * lists, scan windows and auxiliary arrays are not wanted.
    */
-  std::map<uint64_t, SpectrumMetadata>
+  Util::IndexMap<SpectrumMetadata>
   read_spectrum_metadata(MetadataDetail = MetadataDetail::Full) const;
 
 private:
