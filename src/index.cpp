@@ -53,7 +53,7 @@ const RunMetadata& Index::metadata() const { return manager_->metadata(); }
 std::shared_ptr<Util::Manager> Index::manager() const { return manager_; }
 
 /******************************************************************************/
-Spectra Index::spectra() const
+Spectra Index::spectra(MetadataDetail detail) const
 {
   using enum Schema::DataKind::Type;
 
@@ -97,6 +97,18 @@ Spectra Index::spectra() const
     }
   }
 
+  // Read the descriptive metadata through the archive's cache, so a second
+  // Spectra over this Index -- the per-thread reader the library's own thread
+  // safety rules require -- shares the map instead of re-reading it.  The
+  // Table is still handed to the Spectra: Spectrum keeps it for the queries
+  // that go past the cached map.
+  std::shared_ptr<const Spectra::MetadataMap> md;
+  if (meta) {
+    Metadata::Table* table = meta.get();
+    md = manager_->spectrum_metadata(
+        detail, [table, detail] { return table->read_spectrum_metadata(detail); });
+  }
+
   std::unique_ptr<Data::Signals> data =
       std::make_unique<Data::Signals>(manager_->parquet(*data_file));
 
@@ -104,10 +116,11 @@ Spectra Index::spectra() const
     std::unique_ptr<Data::Signals> peaks =
         std::make_unique<Data::Signals>(manager_->parquet(*peaks_file));
     return Spectra(std::move(data), std::move(peaks), std::move(meta),
-                   manager_->ims_calibration());
+                   manager_->ims_calibration(), std::move(md));
   }
 
-  return Spectra(std::move(data), std::move(meta), manager_->ims_calibration());
+  return Spectra(std::move(data), std::move(meta), manager_->ims_calibration(),
+                 std::move(md));
 }
 
 /******************************************************************************/

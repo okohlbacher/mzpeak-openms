@@ -86,6 +86,15 @@ std::map<uint64_t, SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles&);
 
 /**
+ * As above, but materialising only what @p detail asks for.  See
+ * @ref MzPeak::MetadataDetail: `Lean` omits the CV-parameter lists, scan
+ * windows and auxiliary arrays and keeps everything a decode or a selection
+ * query reads.
+ */
+std::map<uint64_t, SpectrumMetadata>
+read_spectra_metadata(const SpectraMetadataFiles&, MetadataDetail detail);
+
+/**
  * The Parquet files carrying one chromatogram set's metadata.  As with
  * @ref SpectraMetadataFiles, the facets are either struct columns of @ref
  * primary or files of their own.  Non-owning.

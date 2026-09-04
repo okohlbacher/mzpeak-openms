@@ -127,14 +127,15 @@ void Table::add_facet(Schema::DataKind::Type kind, std::unique_ptr<Util::Parquet
 }
 
 /******************************************************************************/
-std::map<uint64_t, SpectrumMetadata> Table::read_spectrum_metadata() const
+std::map<uint64_t, SpectrumMetadata>
+Table::read_spectrum_metadata(MetadataDetail detail) const
 {
   Util::SpectraMetadataFiles files;
   files.primary = impl_->parquet_.get();
   files.scans = impl_->scans_.get();
   files.precursors = impl_->precursors_.get();
   files.selected_ions = impl_->selected_ions_.get();
-  return Util::read_spectra_metadata(files);
+  return Util::read_spectra_metadata(files, detail);
 }
 
 } // namespace MzPeak::Metadata

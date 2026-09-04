@@ -25,7 +25,8 @@ namespace MzPeak {
 /******************************************************************************/
 Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Metadata::Table> meta,
-                 ImsCalibration ims)
+                 ImsCalibration ims,
+                 std::shared_ptr<const MetadataMap> md)
     : EnumerableProxy(
           0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
     , data_(std::move(data))
@@ -34,14 +35,15 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
     , ims_(ims)
 {
   resize(data_->record_count());
-  load_metadata_();
+  load_metadata_(std::move(md));
 }
 
 /******************************************************************************/
 Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Data::Signals> peaks,
                  std::unique_ptr<Metadata::Table> meta,
-                 ImsCalibration ims)
+                 ImsCalibration ims,
+                 std::shared_ptr<const MetadataMap> md)
     : EnumerableProxy(
           0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
     , data_(std::move(data))
@@ -57,32 +59,47 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
   std::size_t count = data_->record_count();
   if (peaks_) count = std::max(count, peaks_->record_count());
   resize(count);
-  load_metadata_();
+  load_metadata_(std::move(md));
 }
 
 /******************************************************************************/
-void Spectra::load_metadata_()
+void Spectra::load_metadata_(std::shared_ptr<const MetadataMap> md)
 {
-  // Built here rather than lazily on first fetch(): the descriptive metadata is
-  // small (~1 MB for 32k spectra), almost every access path needs it, and a
-  // lazily-published cache was a data race between concurrent fetch() calls.
-  // Peak decode stays lazy — that is the expensive part.
-  if (!meta_) return;
-  md_map_ = std::make_shared<const std::map<uint64_t, SpectrumMetadata>>(
-      meta_->read_spectrum_metadata());
-
-  // Native id -> index, for by_id().  First id wins: ids SHOULD be unique, but
-  // nothing enforces it, and silently remapping an id to a later spectrum would
-  // be worse than ignoring the duplicate.
-  for (const auto& [index, md] : *md_map_) {
-    if (md.id.empty()) continue;
-    id_to_index_.emplace(md.id, static_cast<std::size_t>(index));
+  // Adopting a map the caller already has is the whole point of the parameter:
+  // it is the difference between one copy of the metadata per ARCHIVE and one
+  // per Spectra, and a multi-threaded reader needs one Spectra per thread.
+  if (md) {
+    md_map_ = std::move(md);
+    return;
   }
+
+  // Built here rather than lazily on first fetch(): almost every access path
+  // needs it, and a lazily-published cache was a data race between concurrent
+  // fetch() calls.  Peak decode stays lazy — that is the expensive part.
+  if (!meta_) return;
+  md_map_ =
+      std::make_shared<const MetadataMap>(meta_->read_spectrum_metadata());
+}
+
+/******************************************************************************/
+void Spectra::build_id_index_() const
+{
+  // First id wins: ids SHOULD be unique, but nothing enforces it, and silently
+  // remapping an id to a later spectrum would be worse than ignoring the
+  // duplicate.
+  std::call_once(id_index_once_, [this] {
+    if (!md_map_) return;
+    for (const auto& [index, md] : *md_map_) {
+      if (md.id.empty()) continue;
+      id_to_index_.emplace(md.id, static_cast<std::size_t>(index));
+    }
+  });
 }
 
 /******************************************************************************/
 std::optional<std::size_t> Spectra::index_for_id(const std::string& id) const
 {
+  build_id_index_();
   auto it = id_to_index_.find(id);
   if (it == id_to_index_.end()) return std::nullopt;
   return it->second;

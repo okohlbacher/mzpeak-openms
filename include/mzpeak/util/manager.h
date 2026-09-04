@@ -8,7 +8,10 @@ directory of this repository.
 
 #pragma once
 
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <vector>
 
@@ -16,6 +19,7 @@ directory of this repository.
 #include "mzpeak/io/archive.h"
 #include "mzpeak/run_metadata.h"
 #include "mzpeak/schema/file.h"
+#include "mzpeak/spectrum_metadata.h"
 #include "mzpeak/util/parquet.h"
 
 namespace MzPeak::Util {
@@ -73,6 +77,30 @@ public:
    */
   const RunMetadata& metadata() const { return metadata_; }
 
+  /// The per-spectrum descriptive metadata map, keyed by spectrum index.
+  using SpectrumMetadataMap = std::map<uint64_t, SpectrumMetadata>;
+
+  /**
+   * The cached descriptive metadata for this archive at the given detail,
+   * building it with @p build on first request.
+   *
+   * WHY IT LIVES HERE.  The map is the single largest fixed cost of opening a
+   * run (26.7 MB on a 7,534-spectrum Thermo file) and it is immutable once
+   * built, so every reader over one archive should share one copy.  Before
+   * this, each `Index::spectra()` built its own -- and since the only safe way
+   * to read one archive from N threads is one `Spectra` per thread, that was N
+   * copies of the same table.  A shared `Index` now pays for it once.
+   *
+   * Thread-safe: concurrent callers serialise on the build and the later ones
+   * find it cached.  The returned map is const and shared, so readers on
+   * different threads may hold it simultaneously.
+   *
+   * @param build  called at most once per detail level, under the lock.
+   */
+  std::shared_ptr<const SpectrumMetadataMap>
+  spectrum_metadata(MetadataDetail detail,
+                    const std::function<SpectrumMetadataMap()>& build) const;
+
 private:
   std::shared_ptr<MzPeak::IO::Archive> archive_;
   std::vector<Schema::File> files_;
@@ -85,6 +113,13 @@ private:
 
   // Typed run-level metadata blocks from metadata{} (empty if absent).
   RunMetadata metadata_;
+
+  // Built on demand, at most once per detail level, and shared from there on.
+  // Mutable because caching is not an observable state change: every accessor
+  // that reaches it is logically const.
+  mutable std::map<MetadataDetail, std::shared_ptr<const SpectrumMetadataMap>>
+      spectrum_metadata_;
+  mutable std::mutex spectrum_metadata_mutex_;
 };
 
 } // namespace MzPeak::Util

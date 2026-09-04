@@ -166,6 +166,26 @@ Manager::find_file(Schema::EntityType et, Schema::DataKind::Type dkt) const
 }
 
 /******************************************************************************/
+std::shared_ptr<const Manager::SpectrumMetadataMap>
+Manager::spectrum_metadata(MetadataDetail detail,
+                           const std::function<SpectrumMetadataMap()>& build) const
+{
+  // The lock is held across the BUILD, not just the lookup.  Two threads
+  // opening spectra at the same moment would otherwise both read the whole
+  // metadata table -- the exact duplication this cache exists to remove -- and
+  // the loser's copy would then be thrown away.  Waiting is cheaper than
+  // building, and the second thread finds it cached.
+  std::lock_guard<std::mutex> guard(spectrum_metadata_mutex_);
+
+  auto it = spectrum_metadata_.find(detail);
+  if (it != spectrum_metadata_.end()) return it->second;
+
+  auto map = std::make_shared<const SpectrumMetadataMap>(build());
+  spectrum_metadata_.emplace(detail, map);
+  return map;
+}
+
+/******************************************************************************/
 std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
 {
   std::unique_ptr<IO::File> data(archive_->read_file(file.file_name()));

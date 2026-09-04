@@ -52,13 +52,17 @@ public:
                                        const Util::Projection&) const;
 
   /**
-   * Read the full per-spectrum descriptive metadata map (RT, precursors,
-   * selected ions, scan windows, ion mobility) keyed by spectrum.index.
+   * Read the per-spectrum descriptive metadata map (RT, precursors, selected
+   * ions, scan windows, ion mobility) keyed by spectrum.index.
    *
    * Reads the whole metadata Parquet table once — the caller is expected to
-   * cache the result (the table is small, ~1 MB for 32k spectra).
+   * cache the result.  It is NOT small: measured on a 7,534-spectrum Thermo
+   * run it costs 26.7 MB, about 3.5 KB per spectrum, and it is built before
+   * the first peak is read.  Pass `MetadataDetail::Lean` when the CV-parameter
+   * lists, scan windows and auxiliary arrays are not wanted.
    */
-  std::map<uint64_t, SpectrumMetadata> read_spectrum_metadata() const;
+  std::map<uint64_t, SpectrumMetadata>
+  read_spectrum_metadata(MetadataDetail = MetadataDetail::Full) const;
 
 private:
   struct Impl;

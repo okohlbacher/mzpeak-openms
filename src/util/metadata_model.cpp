@@ -8,6 +8,7 @@ directory of this repository.
 
 #include "mzpeak/util/metadata_model.h"
 
+#include <algorithm>
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
@@ -19,7 +20,9 @@ directory of this repository.
 #include <iomanip>
 #include <memory>
 #include <parquet/arrow/reader.h>
+#include <ranges>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 #include "mzpeak/exception.h"
@@ -31,12 +34,45 @@ namespace {
 /// Read the full metadata table from @p metadata.  Throws ParquetError on
 /// failure.  The caller is responsible for caching: this function is NOT
 /// idempotent (each call re-reads the Parquet file).
-std::shared_ptr<arrow::Table> read_metadata_table(Parquet& metadata)
+/// Read a metadata table, optionally leaving some TOP-LEVEL columns undecoded.
+///
+/// `ReadTable`'s indices are top-level Arrow fields (verified: a 5-field, 20-
+/// leaf precursor table indexed {0,2} returns source_index and precursor_id),
+/// so a name is enough to drop a whole nested column and everything under it.
+///
+/// A SKIP LIST, not a whitelist.  Naming what to keep would silently drop any
+/// column a future writer adds -- and this reader resolves several fields by CV
+/// accession rather than by name, so the keep set is not even statically known.
+/// Naming what to drop can only ever discard what the caller already said it
+/// did not want.
+///
+/// The older NESTED layout puts every field inside one `spectrum` struct
+/// column, where none of these names appear at the top level.  Nothing matches,
+/// nothing is skipped, and the read is exactly as it was -- Lean degrades to
+/// Full on those files rather than misreading them.
+std::shared_ptr<arrow::Table>
+read_metadata_table(Parquet& metadata,
+                    std::initializer_list<std::string_view> skip = {})
 {
-  // Result-returning ReadTable(); the out-parameter overload is deprecated in
-  // Arrow 24.
-  arrow::Result<std::shared_ptr<arrow::Table>> result =
-      metadata.reader().ReadTable();
+  arrow::Result<std::shared_ptr<arrow::Table>> result = [&] {
+    if (skip.size() == 0) return metadata.reader().ReadTable();
+
+    std::shared_ptr<arrow::Schema> schema;
+    if (!metadata.reader().GetSchema(&schema).ok() || !schema)
+      return metadata.reader().ReadTable();
+
+    std::vector<int> keep;
+    keep.reserve(static_cast<std::size_t>(schema->num_fields()));
+    for (int i = 0; i < schema->num_fields(); ++i) {
+      const std::string& name = schema->field(i)->name();
+      if (std::ranges::find(skip, name) == skip.end()) keep.push_back(i);
+    }
+    if (keep.size() == static_cast<std::size_t>(schema->num_fields()))
+      return metadata.reader().ReadTable();
+
+    return metadata.reader().ReadTable(keep);
+  }();
+
   if (!result.ok()) {
     throw ParquetError("read metadata table: " + result.status().ToString());
   }
@@ -564,7 +600,8 @@ std::vector<Facet> facets_of(const std::shared_ptr<arrow::Table>& table,
 /// own row count and ordering, and chunk boundaries differ per column.
 template <typename Entity>
 void attach_precursors(std::map<uint64_t, Entity>& out,
-                       const std::vector<Facet>& facets)
+                       const std::vector<Facet>& facets,
+                       MetadataDetail detail = MetadataDetail::Full)
 {
   for (const auto& prec : facets) {
     for (int64_t r = 0; r < prec->length(); ++r) {
@@ -601,13 +638,17 @@ void attach_precursors(std::map<uint64_t, Entity>& out,
               opt_float(iw, "MS_1000828_isolation_window_lower_offset", r);
           pi.isolation_window.upper_offset =
               opt_float(iw, "MS_1000829_isolation_window_upper_offset", r);
-          pi.isolation_window.parameters =
-              read_cv_params_from_list(iw, "parameters", r);
+          if (detail == MetadataDetail::Full) {
+            pi.isolation_window.parameters =
+                read_cv_params_from_list(iw, "parameters", r);
+          }
         }
       }
 
-      // Activation: nested struct carrying a parameters list.
-      auto act_field = resolve_field(prec, "activation");
+      // Activation: nested struct carrying a parameters list.  Nothing but
+      // the list is in there, so Lean skips resolving the struct at all.
+      auto act_field = detail == MetadataDetail::Full ? resolve_field(prec, "activation")
+                                                      : nullptr;
       if (act_field && !act_field->IsNull(r)) {
         auto act_struct = std::dynamic_pointer_cast<arrow::StructArray>(act_field);
         if (act_struct) {
@@ -630,7 +671,8 @@ void attach_precursors(std::map<uint64_t, Entity>& out,
 /// `precursors.back()` silently mis-assigns the transition.
 template <typename Entity>
 void attach_selected_ions(std::map<uint64_t, Entity>& out,
-                          const std::vector<Facet>& facets)
+                          const std::vector<Facet>& facets,
+                          MetadataDetail detail = MetadataDetail::Full)
 {
   for (const auto& si : facets) {
     for (int64_t r = 0; r < si->length(); ++r) {
@@ -666,7 +708,8 @@ void attach_selected_ions(std::map<uint64_t, Entity>& out,
       // separates one isolation window from the next.
       ion.ion_mobility_lower_limit = opt_double(si, "ion_mobility_lower_limit", r);
       ion.ion_mobility_upper_limit = opt_double(si, "ion_mobility_upper_limit", r);
-      ion.parameters = read_cv_params_from_list(si, "parameters", r);
+      if (detail == MetadataDetail::Full)
+        ion.parameters = read_cv_params_from_list(si, "parameters", r);
 
       auto& precs = it->second.precursors;
       PrecursorInfo* target = nullptr;
@@ -753,6 +796,13 @@ std::map<uint64_t, SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 std::map<uint64_t, SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles& files)
 {
+  return read_spectra_metadata(files, MetadataDetail::Full);
+}
+
+/******************************************************************************/
+std::map<uint64_t, SpectrumMetadata>
+read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
+{
   std::map<uint64_t, SpectrumMetadata> out;
   if (!files.primary) return out;
 
@@ -764,12 +814,29 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // all come from it.  A split-layout file additionally reads one small table
   // per facet, each joined by `source_index` VALUE (never by row position — the
   // facet files have their own row counts and orderings).
-  auto table = read_metadata_table(*files.primary);
-  auto scans_table = files.scans ? read_metadata_table(*files.scans) : nullptr;
+  // Lean does not merely discard these after decoding them -- it never asks
+  // Parquet for the columns, so the decode itself is skipped.  On this corpus
+  // that is 1.9 MB of 4.7 MB decoded, `activation` alone being 1.0 MB of a
+  // 1.5 MB precursor table for a CV-parameter list Lean does not keep.
+  const bool lean = detail == MetadataDetail::Lean;
+  auto table = lean ? read_metadata_table(*files.primary,
+                                          {"parameters", "auxiliary_arrays"})
+                    : read_metadata_table(*files.primary);
+  auto scans_table =
+      files.scans ? (lean ? read_metadata_table(*files.scans,
+                                                {"parameters", "scan_windows"})
+                          : read_metadata_table(*files.scans))
+                  : nullptr;
   auto precursors_table =
-      files.precursors ? read_metadata_table(*files.precursors) : nullptr;
+      files.precursors
+          ? (lean ? read_metadata_table(*files.precursors, {"activation"})
+                  : read_metadata_table(*files.precursors))
+          : nullptr;
   auto selected_ions_table =
-      files.selected_ions ? read_metadata_table(*files.selected_ions) : nullptr;
+      files.selected_ions ? (lean ? read_metadata_table(*files.selected_ions,
+                                                        {"parameters"})
+                                  : read_metadata_table(*files.selected_ions))
+                          : nullptr;
 
   // -------------------------------------------------------------------
   // PASS 1: spectrum column — build `out` keyed by spectrum.index VALUE.
@@ -846,7 +913,8 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
       m.data_processing_ref = get_string(spectrum, "data_processing_ref", r);
 
       // RDR-10b CvParam list.
-      m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
+      if (detail == MetadataDetail::Full)
+        m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
       // Delta model for null-marking reconstruction (large_list<double>).
       if (auto dm = resolve_field(spectrum, "mz_delta_model")) {
@@ -874,7 +942,11 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
       // auxiliary_arrays list, so the item body never executes — but the field
       // access + empty-list path IS exercised and validated structurally.
       // -------------------------------------------------------------------
-      {
+      // Lean skips the whole block, and with it the count-consistency check
+      // below: that check is a CONFORMANCE assertion about the file, not
+      // something any decode depends on, so a caller that opted out of
+      // auxiliary arrays is not owed it.  Full still performs it.
+      if (detail == MetadataDetail::Full) {
         // Read number_of_auxiliary_arrays (uint32) for the count-consistency
         // assert (T-03-02 mitigation).  Absent/null counts as 0.
         uint64_t declared_count = 0;
@@ -1049,9 +1121,11 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
   // Order matters: ions attach to the precursors pass 2 created.
   // -------------------------------------------------------------------
   attach_precursors(out,
-                    facets_for("precursor", precursors_table, files.precursors));
+                    facets_for("precursor", precursors_table, files.precursors),
+                    detail);
   attach_selected_ions(
-      out, facets_for("selected_ion", selected_ions_table, files.selected_ions));
+      out, facets_for("selected_ion", selected_ions_table, files.selected_ions),
+      detail);
 
   // -------------------------------------------------------------------
   // PASS 4: scan column — scan_parameters + scan_windows (accepted add-on).
@@ -1103,8 +1177,10 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           if (representative) {
             earliest_scan[*src_idx] = sst;
 
-            it->second.scan_parameters =
-                read_cv_params_from_list(scan, "parameters", r);
+            if (detail == MetadataDetail::Full) {
+              it->second.scan_parameters =
+                  read_cv_params_from_list(scan, "parameters", r);
+            }
 
             // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
             // unit-annotated field (UO_0000031 = minutes — normative MUST, see
@@ -1132,7 +1208,9 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
-          auto sw_slice = list_slice(resolve_field(scan, "scan_windows"), r);
+          auto sw_slice = detail == MetadataDetail::Full
+                              ? list_slice(resolve_field(scan, "scan_windows"), r)
+                              : std::nullopt;
           if (sw_slice) {
             {
               auto sw_items =

@@ -18,6 +18,31 @@ directory of this repository.
 namespace MzPeak {
 
 /**
+ * How much of the per-spectrum metadata to materialise.
+ *
+ * The reader caches the WHOLE descriptive metadata table before the first peak
+ * is read, so this is a memory decision taken once per run, not a per-access
+ * one.  Measured on a 7,534-spectrum Thermo run: 26.7 MB, ~3.5 KB per spectrum,
+ * of which the CV-parameter lists are most of the ALLOCATION count -- five
+ * separate small vectors per MS2 spectrum (scan, activation, isolation window,
+ * selected ion, spectrum), each one a malloc whose rounding costs more than the
+ * bytes it holds.
+ *
+ * `Lean` drops exactly those, plus scan windows and auxiliary arrays.  Every
+ * field a peak decode or a spectrum-selection query reads -- id, ms_level,
+ * retention time, polarity, representation, point counts, base peak, TIC,
+ * precursors with their isolation windows and selected ions, and the m/z delta
+ * model -- is present in both modes.  Nothing the reader itself depends on is
+ * behind this flag.
+ */
+enum class MetadataDetail {
+  /// Everything the format carries.
+  Full,
+  /// No CV-parameter lists, scan windows or auxiliary arrays.
+  Lean,
+};
+
+/**
  * Isolation window for a precursor, stored as the target m/z and half-width
  * offsets that the file carries.  The conversion from offsets to absolute
  * lower/upper bounds is Phase 2's responsibility (CONTEXT.md); this struct

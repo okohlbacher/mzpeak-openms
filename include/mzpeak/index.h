@@ -61,8 +61,14 @@ public:
 
   /**
    * Access the spectra in the file.
+   *
+   * @param detail  how much per-spectrum metadata to materialise.  The map is
+   *   built once per archive and per detail level and SHARED by every `Spectra`
+   *   this `Index` hands out, so calling this once per thread over one shared
+   *   `Index` costs the metadata once, not once per thread.  See
+   *   @ref MzPeak::MetadataDetail for what `Lean` leaves out.
    */
-  Spectra spectra() const;
+  Spectra spectra(MetadataDetail detail = MetadataDetail::Full) const;
 
   /**
    * TOF -> m/z calibration declared by this archive, for the Bruker TDF

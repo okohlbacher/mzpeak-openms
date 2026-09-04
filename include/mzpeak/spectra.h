@@ -11,6 +11,7 @@ top-level directory of this repository.
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -78,17 +79,30 @@ public:
   Spectra(Spectra&&) = delete;
   Spectra& operator=(Spectra&&) = delete;
 
+  /// The cached per-spectrum descriptive metadata, keyed by spectrum index.
+  using MetadataMap = std::map<uint64_t, SpectrumMetadata>;
+
   /// Constructor for profile-only or centroid-only data.
+  ///
+  /// @param md  a metadata map already built for this archive, to be SHARED
+  ///   rather than re-read.  It is the largest fixed cost of opening a run
+  ///   (26.7 MB on a 7,534-spectrum Thermo file), it is immutable once built,
+  ///   and the only safe way to read one archive from N threads is one
+  ///   `Spectra` per thread -- so without sharing, N threads mean N copies of
+  ///   one table.  Null means "read it from @p meta", which is what a caller
+  ///   with a single reader wants.
   explicit Spectra(std::unique_ptr<Data::Signals>,
                    std::unique_ptr<Metadata::Table>,
-                   ImsCalibration ims = {});
+                   ImsCalibration ims = {},
+                   std::shared_ptr<const MetadataMap> md = nullptr);
 
   /// Constructor for mixed profile+centroid data (data = profile file, peaks =
-  /// centroid file).
+  /// centroid file).  @p md as above.
   explicit Spectra(std::unique_ptr<Data::Signals> data,
                    std::unique_ptr<Data::Signals> peaks,
                    std::unique_ptr<Metadata::Table>,
-                   ImsCalibration ims = {});
+                   ImsCalibration ims = {},
+                   std::shared_ptr<const MetadataMap> md = nullptr);
 
   /**
    * Resolve a native spectrum id (e.g. "controllerType=0 controllerNumber=1
@@ -160,15 +174,25 @@ private:
   // Cached per-spectrum descriptive metadata (RT, precursors, ion mobility, …),
   // read once at construction and shared into every Spectrum.  Stays null when
   // there is no metadata table.
-  std::shared_ptr<const std::map<uint64_t, SpectrumMetadata>> md_map_;
+  std::shared_ptr<const MetadataMap> md_map_;
 
-  // Native id -> index, built alongside md_map_ so by_id() needs no file read.
-  // Ids are not guaranteed unique; the FIRST spectrum carrying an id wins.
-  std::map<std::string, std::size_t> id_to_index_;
+  // Native id -> index, for by_id().  Ids are not guaranteed unique; the FIRST
+  // spectrum carrying an id wins.
+  //
+  // Built on first use, not with md_map_: it duplicates every native id string
+  // (~48 bytes each plus a tree node), and iteration, RT selection and EIC
+  // extraction -- what a reader that streams a run actually does -- never touch
+  // it.  `call_once` keeps that lazy publication safe, which is why the map
+  // itself is still eager (a lazily-published md_map_ WAS a data race).
+  mutable std::map<std::string, std::size_t> id_to_index_;
+  mutable std::once_flag id_index_once_;
 
-  // Populate md_map_ and id_to_index_ from meta_.  Called from the constructors
-  // so that fetch() never publishes them lazily (that was a data race).
-  void load_metadata_();
+  // Populate md_map_ from meta_, or adopt the shared map the caller passed.
+  // Called from the constructors so that fetch() never publishes it lazily.
+  void load_metadata_(std::shared_ptr<const MetadataMap> md);
+
+  // Build id_to_index_ once, on first by_id()/index_for_id().
+  void build_id_index_() const;
 
   // Function to fetch a specific spectrum.  Const because it mutates no Spectra
   // state — the metadata cache is built in the constructor — which lets the
