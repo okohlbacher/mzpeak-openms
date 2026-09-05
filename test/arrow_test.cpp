@@ -30,7 +30,7 @@ BOOST_AUTO_TEST_CASE(can_open_parque)
   }
 
   auto reader = std::move(arrow_reader.ValueOrDie());
-  arrow::Result result = reader->ReadTable();
+  arrow::Result result = MzPeak::Util::read_table(*reader);
 
   BOOST_TEST(result.ok(), result.status().ToString());
 }

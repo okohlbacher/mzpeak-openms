@@ -22,6 +22,7 @@ directory of this repository.
 #include <set>
 
 #include "mzpeak/chromatograms.h"
+#include "mzpeak/util/arrow.h"
 #include "mzpeak/open.h"
 #include "mzpeak/run_metadata.h"
 #include "mzpeak/spectra.h"
@@ -456,7 +457,7 @@ BOOST_AUTO_TEST_CASE(a_column_is_found_through_column_mapping_alone)
   auto original = arrow::io::ReadableFile::Open(table.string()).ValueOrDie();
   auto reader =
       parquet::arrow::OpenFile(original, arrow::default_memory_pool()).ValueOrDie();
-  auto loaded_result = reader->ReadTable();
+  auto loaded_result = MzPeak::Util::read_table(*reader);
   BOOST_TEST_REQUIRE(loaded_result.ok());
   auto loaded = std::move(loaded_result).ValueOrDie();
 

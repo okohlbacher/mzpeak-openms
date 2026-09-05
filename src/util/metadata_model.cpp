@@ -28,6 +28,7 @@ directory of this repository.
 #include <unordered_map>
 
 #include "mzpeak/exception.h"
+#include "mzpeak/util/arrow.h"
 
 namespace MzPeak::Util {
 
@@ -61,11 +62,11 @@ std::shared_ptr<arrow::Table>
 read_metadata_table(Parquet& metadata, std::span<const std::string_view> skip = {})
 {
   arrow::Result<std::shared_ptr<arrow::Table>> result = [&] {
-    if (skip.empty()) return metadata.reader().ReadTable();
+    if (skip.empty()) return read_table(metadata.reader());
 
     const parquet::SchemaDescriptor* schema =
         metadata.reader().parquet_reader()->metadata()->schema();
-    if (!schema) return metadata.reader().ReadTable();
+    if (!schema) return read_table(metadata.reader());
 
     const int leaves = schema->num_columns();
     std::vector<int> keep;
@@ -77,9 +78,9 @@ read_metadata_table(Parquet& metadata, std::span<const std::string_view> skip = 
         keep.push_back(i);
     }
     if (keep.size() == static_cast<std::size_t>(leaves))
-      return metadata.reader().ReadTable();
+      return read_table(metadata.reader());
 
-    return metadata.reader().ReadTable(keep);
+    return read_table(metadata.reader(), &keep);
   }();
 
   if (!result.ok()) {

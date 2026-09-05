@@ -136,7 +136,7 @@ numpress = subproject('msnumpress')
 # Library and executable targets:
 include = include_directories('include')
 
-arrow_ver_str = '>=24.0.0'
+arrow_ver_str = '>=21.0.0'
 
 deps = [
     dependency('arrow',
@@ -149,7 +149,7 @@ deps = [
                required : true),
 
     dependency('libzip',
-               version :'>=1.11.4',
+               version :'>=1.11.2',
                required : true),
 
     dependency('parquet', # Part of Arrow above.

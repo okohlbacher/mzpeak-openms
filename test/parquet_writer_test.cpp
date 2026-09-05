@@ -26,6 +26,7 @@ directory of this repository.
 #include <vector>
 
 #include "mzpeak/util/parquet_writer.h"
+#include "mzpeak/util/arrow.h"
 
 namespace {
 
@@ -71,7 +72,7 @@ BOOST_AUTO_TEST_CASE(round_trips_point_spectra_data)
       std::move(reader_result).ValueOrDie());
 
   // Row count.
-  auto table_result(reader->ReadTable());
+  auto table_result(MzPeak::Util::read_table(*reader));
   BOOST_TEST(table_result.ok());
   std::shared_ptr<arrow::Table> table(table_result.ValueOrDie());
   BOOST_TEST(table->num_rows() == 5);
