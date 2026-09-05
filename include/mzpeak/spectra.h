@@ -198,7 +198,11 @@ private:
   // Function to fetch a specific spectrum.  Const because it mutates no Spectra
   // state — the metadata cache is built in the constructor — which lets the
   // selection helpers above be const without casting.
-  Spectrum fetch(uint64_t) const;
+  Spectrum fetch_(uint64_t) const;
+
+  /// EnumerableProxy's fetch is a non-const pure virtual; ours is const so the
+  /// const public API (by_id, range queries) still works.  Forward.
+  Spectrum fetch(uint64_t n) override { return fetch_(n); }
 };
 
 } // namespace MzPeak

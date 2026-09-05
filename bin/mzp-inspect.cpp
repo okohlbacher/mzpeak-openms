@@ -23,7 +23,7 @@ namespace po = boost::program_options;
 std::unique_ptr<MzPeak::Util::Parquet> open_parquet_file(MzPeak::Index& index,
                                                          const std::string& file)
 {
-  auto it = index.find(file);
+  auto it = index.manager()->find_file(file);
 
   if (it == index.files().end()) {
     std::println(stderr, "file \"{}\" is not in the mzPeak file index", file);
@@ -41,7 +41,7 @@ int print_array_index(MzPeak::Index& index, const std::string& file)
 
   auto fmd = parquet->file_metadata();
   auto et = parquet->index_file().entity_type();
-  auto key = MzPeak::Schema::entity_type_to_string(et) + "_array_index";
+  auto key = et.array_index_name();
   auto json = parquet->kv_string(fmd, key);
 
   if (!json.has_value()) {
@@ -147,9 +147,9 @@ int print_fmd_kv(MzPeak::Index& index,
 }
 
 /******************************************************************************/
-int dump_spectra(MzPeak::Index& index)
+int dump_spectra(MzPeak::Index& index, MzPeak::Index::SpectraSource source)
 {
-  auto spectra = index.spectra();
+  auto spectra = index.spectra(MzPeak::MetadataDetail::Full, source);
 
   for (std::size_t spectrum_index : std::views::iota(0ul, spectra.size())) {
     const auto& spectrum = spectra[spectrum_index];
@@ -188,6 +188,7 @@ int main(int argc, char* argv[])
                        "Used with --fmdkv to print the value of the given key");
 
     desc.add_options()("spectra", "Print all m/z and intensity values");
+    desc.add_options()("peaks", "Like --spectra but read from spectra_peaks.parquet");
 
     po::positional_options_description pops;
     pops.add("file", 1);
@@ -225,7 +226,9 @@ int main(int argc, char* argv[])
 
       return print_fmd_kv(index, vmap["fmdkv"].as<std::string>(), key);
     } else if (vmap.count("spectra")) {
-      dump_spectra(index);
+      dump_spectra(index, MzPeak::Index::SpectraSource::Data);
+    } else if (vmap.count("peaks")) {
+      dump_spectra(index, MzPeak::Index::SpectraSource::Peaks);
     } else {
       std::println("WARN: no command given");
       return 1;

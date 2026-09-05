@@ -54,10 +54,32 @@ public:
   std::vector<Schema::File>::const_iterator find(std::string_view) const;
 
   /**
+   * Find a file by its `EntityType` and `DataKind` (upstream's API).
+   */
+  std::vector<Schema::File>::const_iterator find_file(Schema::EntityType::Type,
+                                                      Schema::DataKind::Type) const;
+
+  /**
    * The mzPeak format version from the index `metadata.version`, or an
    * empty string if the index does not declare one.
    */
   const std::string& version() const;
+
+  /**
+   * Indicates which source to fetch spectra data from (upstream's API).
+   */
+  enum class SpectraSource {
+    /// Use `spectra_data.parquet`, which may hold profile or centroid data.
+    Data,
+
+    /// Use the optional `spectra_peaks.parquet`.
+    Peaks,
+  };
+
+  /**
+   * Returns `true` if the given source file exists.
+   */
+  bool has_spectra(SpectraSource) const;
 
   /**
    * Access the spectra in the file.
@@ -67,8 +89,14 @@ public:
    *   this `Index` hands out, so calling this once per thread over one shared
    *   `Index` costs the metadata once, not once per thread.  See
    *   @ref MzPeak::MetadataDetail for what `Lean` leaves out.
+   * @param source  which table is primary.  With the default `Data` this reader
+   *   also attaches the peaks file when present and picks the right table PER
+   *   SPECTRUM from its declared representation, so callers rarely need
+   *   `Peaks` explicitly.  Throws if `Peaks` is requested and no peaks file
+   *   exists -- check `has_spectra` first.
    */
-  Spectra spectra(MetadataDetail detail = MetadataDetail::Full) const;
+  Spectra spectra(MetadataDetail detail = MetadataDetail::Full,
+                  SpectraSource source = SpectraSource::Data) const;
 
   /**
    * TOF -> m/z calibration declared by this archive, for the Bruker TDF

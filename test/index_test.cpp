@@ -39,7 +39,7 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
 
   std::size_t scans = 0, precursors = 0, selected_ions = 0;
   for (const auto& f : index.files()) {
-    if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
+    if (f.entity_type().type() != MzPeak::Schema::EntityType::Spectrum) continue;
     if (f.data_kind().type() == MzPeak::Schema::DataKind::Scans) ++scans;
     if (f.data_kind().type() == MzPeak::Schema::DataKind::Precursors) ++precursors;
     if (f.data_kind().type() == MzPeak::Schema::DataKind::SelectedIons)
@@ -54,7 +54,7 @@ BOOST_AUTO_TEST_CASE(parses_split_metadata_facets_and_column_mapping)
   bool checked = false;
   for (const auto& f : index.files()) {
     if (f.data_kind().type() != MzPeak::Schema::DataKind::Scans) continue;
-    if (f.entity_type() != MzPeak::Schema::EntityType::Spectrum) continue;
+    if (f.entity_type().type() != MzPeak::Schema::EntityType::Spectrum) continue;
     auto path = f.path_for("MS:1000016");
     BOOST_TEST_REQUIRE(path.has_value());
     BOOST_TEST(*path == std::string("scan_start_time"));

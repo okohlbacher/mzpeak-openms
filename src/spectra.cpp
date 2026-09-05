@@ -27,8 +27,7 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Metadata::Table> meta,
                  ImsCalibration ims,
                  std::shared_ptr<const MetadataMap> md)
-    : EnumerableProxy(
-          0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
+    : EnumerableProxy(0)
     , data_(std::move(data))
     , peaks_()
     , meta_(std::move(meta))
@@ -44,8 +43,7 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Metadata::Table> meta,
                  ImsCalibration ims,
                  std::shared_ptr<const MetadataMap> md)
-    : EnumerableProxy(
-          0, std::bind(std::mem_fn(&Spectra::fetch), this, std::placeholders::_1))
+    : EnumerableProxy(0)
     , data_(std::move(data))
     , peaks_(std::move(peaks))
     , meta_(std::move(meta))
@@ -110,7 +108,7 @@ Spectrum Spectra::by_id(const std::string& id) const
 {
   auto index = index_for_id(id);
   if (!index) throw ParquetError("no spectrum with id '" + id + "'");
-  return fetch(static_cast<uint64_t>(*index));
+  return fetch_(static_cast<uint64_t>(*index));
 }
 
 /******************************************************************************/
@@ -165,7 +163,7 @@ Spectra::extract_ion_chromatogram(double mz_low,
       }
     }
 
-    Spectrum spectrum = fetch(static_cast<uint64_t>(index));
+    Spectrum spectrum = fetch_(static_cast<uint64_t>(index));
     const auto& mz = spectrum.mz();
     const auto& intensity = spectrum.intensity();
 
@@ -207,14 +205,14 @@ Spectra::get_spectra_batch(const std::vector<std::size_t>& indices) const
   for (std::size_t slot : order) {
     const std::size_t index = indices[slot];
     if (index >= size()) continue; // out of range -> default Spectrum
-    result[slot] = fetch(static_cast<uint64_t>(index));
+    result[slot] = fetch_(static_cast<uint64_t>(index));
   }
 
   return result;
 }
 
 /******************************************************************************/
-Spectrum Spectra::fetch(uint64_t index) const
+Spectrum Spectra::fetch_(uint64_t index) const
 {
   // Choose the table this spectrum lives in.  Read from the cached metadata map
   // rather than re-querying the metadata file per spectrum: the old projection

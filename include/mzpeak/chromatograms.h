@@ -67,7 +67,11 @@ private:
 
   // Const because it mutates no Chromatograms state, which lets by_id be
   // const without casting the constness away.
-  Chromatogram fetch(uint64_t) const;
+  Chromatogram fetch_(uint64_t) const;
+
+  /// EnumerableProxy's fetch is a non-const pure virtual; ours is const so the
+  /// const public API (by_id, range queries) still works.  Forward.
+  Chromatogram fetch(uint64_t n) override { return fetch_(n); }
 };
 
 } // namespace MzPeak
