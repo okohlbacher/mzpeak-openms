@@ -17,34 +17,14 @@ top-level directory of this repository.
 
 namespace MzPeak::Util {
 
-/**
- * Classic trampoline to turn recursive algorithms into iteration.
- */
-template <typename T> struct Trampoline {
-  using thunk_t = std::move_only_function<Trampoline<T>()>;
-
-  Trampoline(T&& v)
-      : value_(std::move(v))
-  {
-  }
-
-  Trampoline(thunk_t&& t)
-      : value_(std::move(t))
-  {
-  }
-
-  std::variant<T, thunk_t> value_;
-};
-
-/******************************************************************************/
-template <typename T> inline T trampoline(Trampoline<T> t)
-{
-  while (!std::holds_alternative<T>(t.value_)) {
-    t = std::invoke(std::get<typename Trampoline<T>::thunk_t>(t.value_));
-  }
-
-  return std::get<T>(t.value_);
-}
+// There used to be a Trampoline<T> here, "to turn recursive algorithms into
+// iteration". It never did: no caller ever built a thunk, every Trampoline was
+// constructed from an already-computed Result, and eval/eval_node recursed
+// directly through it. Its one observable effect was a compile error on
+// Apple's clang 15-17, whose libc++ lacks std::move_only_function and falls
+// back to Boost.Compat's, which checks invocability of the thunk's
+// `Trampoline<T>()` signature while Trampoline<T> is still being defined.
+// Query trees are a few levels deep; plain recursion is the honest shape.
 
 /******************************************************************************/
 std::pair<Query::value_t, Query::value_t> decode_range_type(const Query::range_t& rt)
@@ -79,10 +59,10 @@ template <typename Fn, typename V> struct EvalHelper {
   using result_t = Query::Result<bool>;
 
   // Eval a query using the given function for fetching values.
-  Trampoline<Query::Result<bool>> eval(const Query& query, Fn fn) const;
+  Query::Result<bool> eval(const Query& query, Fn fn) const;
 
   // Eval a query node.
-  Trampoline<Query::Result<bool>> eval_node(const Query::Node& node, Fn fn) const;
+  Query::Result<bool> eval_node(const Query::Node& node, Fn fn) const;
 
   // Dispatch on the type of the predicate's value.
   template <Util::Type T>
@@ -137,14 +117,14 @@ Query Query::join(const Query& other, Node::Connective oper) const
 Query::Result<bool> Query::eval(eval_callback_t fn) const
 {
   EvalHelper<eval_callback_t, value_t> eh;
-  return trampoline(eh.eval(*this, fn));
+  return eh.eval(*this, fn);
 }
 
 /******************************************************************************/
 Query::Result<bool> Query::eval(eval_range_callback_t fn) const
 {
   EvalHelper<eval_range_callback_t, range_t> eh;
-  return trampoline(eh.eval(*this, fn));
+  return eh.eval(*this, fn);
 }
 
 /******************************************************************************/
@@ -230,8 +210,7 @@ Query::Result<bool> EvalHelper<Fn, V>::eval_predicate(const Query::Predicate& p,
 
 /******************************************************************************/
 template <typename Fn, typename V>
-Trampoline<Query::Result<bool>> EvalHelper<Fn, V>::eval(const Query& query,
-                                                        Fn fn) const
+Query::Result<bool> EvalHelper<Fn, V>::eval(const Query& query, Fn fn) const
 {
   result_t result = std::visit(
       [&](auto& tree) -> result_t {
@@ -248,7 +227,7 @@ Trampoline<Query::Result<bool>> EvalHelper<Fn, V>::eval(const Query& query,
             return eval_predicate<T>(tree, fn);
           });
         } else if constexpr (std::is_same_v<T, Query::Node>) {
-          return trampoline(eval_node(tree, fn));
+          return eval_node(tree, fn);
         } else {
           static_assert(false_type<T>, "unhanded variant");
         }
@@ -264,25 +243,24 @@ Trampoline<Query::Result<bool>> EvalHelper<Fn, V>::eval(const Query& query,
 
 /******************************************************************************/
 template <typename Fn, typename V>
-Trampoline<Query::Result<bool>> EvalHelper<Fn, V>::eval_node(const Query::Node& node,
-                                                             Fn fn) const
+Query::Result<bool> EvalHelper<Fn, V>::eval_node(const Query::Node& node, Fn fn) const
 {
   result_t result = true;
 
   if (node.lhs_.has_value()) {
-    result = trampoline(eval(std::any_cast<Query>(node.lhs_), fn));
+    result = eval(std::any_cast<Query>(node.lhs_), fn);
   }
 
   if (node.rhs_.has_value()) {
     switch (node.connective_) {
     case Query::Node::Connective::AND:
       if (result.is(true)) {
-        return Trampoline(trampoline(eval(std::any_cast<Query>(node.rhs_), fn)));
+        return eval(std::any_cast<Query>(node.rhs_), fn);
       }
       break;
     case Query::Node::Connective::OR:
       if (result.is(false)) {
-        return Trampoline(trampoline(eval(std::any_cast<Query>(node.rhs_), fn)));
+        return eval(std::any_cast<Query>(node.rhs_), fn);
       }
       break;
     }

@@ -1,0 +1,7 @@
+# The command-line tools use <print> (std::println), which needs libc++ 18 or
+# newer; the library and its tests do not. A consumer that only wants the
+# library -- FASTag's CI, on GitHub's macOS runners with Apple clang 15-17 --
+# turns them off rather than acquiring a newer toolchain for two executables
+# it never runs.
+option('tools', type : 'boolean', value : true,
+       description : 'Build the mzp-inspect and mzp-bench executables')

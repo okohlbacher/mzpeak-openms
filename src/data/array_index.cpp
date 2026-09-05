@@ -361,9 +361,17 @@ std::optional<std::size_t> ArrayIndex::num_entities() const { return num_entitie
 /******************************************************************************/
 std::vector<ArrayIndex::Dimension> ArrayIndex::dimensions() const
 {
-  std::vector<std::vector<Entry>> groups =
-      entries_ | std::views::chunk_by(EntryChunkFn()) |
-      std::ranges::to<std::vector<std::vector<Entry>>>();
+  // Adjacent entries with the same key form one dimension. Written out rather
+  // than as views::chunk_by | ranges::to: those are C++23 LIBRARY features
+  // that Apple's clang 15/16 libc++ (the GitHub macOS runners) and MSVC do not
+  // all have, and this is the only thing that needed them.
+  std::vector<std::vector<Entry>> groups;
+  const EntryChunkFn same_group;
+  for (const Entry& entry : entries_) {
+    if (groups.empty() || !same_group(groups.back().back(), entry))
+      groups.emplace_back();
+    groups.back().push_back(entry);
+  }
 
   std::vector<Dimension> result;
   result.reserve(groups.size());

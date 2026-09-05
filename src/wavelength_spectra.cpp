@@ -69,11 +69,13 @@ WavelengthSpectrum WavelengthSpectra::by_id(const std::string& id) const
 WavelengthSpectrum WavelengthSpectra::fetch_(uint64_t index) const
 {
   using enum Schema::PSI::ArrayType;
-  std::vector<Data::ArrayIndex::Dimension> dims =
-      data_->array_index()->dimensions() | std::views::filter([](auto& d) {
+  // A plain copy_if rather than views::filter | ranges::to: ranges::to is a
+  // C++23 LIBRARY feature Apple's clang 15 libc++ lacks.
+  std::vector<Data::ArrayIndex::Dimension> dims;
+  std::ranges::copy_if(data_->array_index()->dimensions(), std::back_inserter(dims),
+                       [](auto& d) {
         return d.array_type == ElectromagneticRadiation || d.array_type == Intensity;
-      }) |
-      std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
+                       });
 
   std::unique_ptr<Util::Slice> slice = data_->select(dims, data_->index().eq(index));
   return WavelengthSpectrum(index, data_, dims, std::move(slice), md_map_);

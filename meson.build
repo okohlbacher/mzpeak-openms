@@ -261,18 +261,20 @@ foreach example : example_names
     install_dir : 'examples')
 endforeach
 
-#Tools
-tool_names = [
-  'mzp-inspect',
-  'mzp-bench'
-]
+#Tools -- optional, see meson_options.txt.
+if get_option('tools')
+  tool_names = [
+    'mzp-inspect',
+    'mzp-bench'
+  ]
 
-foreach tool : tool_names
-  executable(
-    tool,
-    'bin/@0@.cpp'.format(tool),
-    include_directories : include,
-    dependencies : deps_so,
-    link_with : libmzpeak_so,
-    install : true)
-endforeach
+  foreach tool : tool_names
+    executable(
+      tool,
+      'bin/@0@.cpp'.format(tool),
+      include_directories : include,
+      dependencies : deps_so,
+      link_with : libmzpeak_so,
+      install : true)
+  endforeach
+endif

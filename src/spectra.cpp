@@ -9,6 +9,7 @@ top-level directory of this repository.
 #include "mzpeak/spectra.h"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 
 #include "mzpeak/data/signals.h"
@@ -245,8 +246,11 @@ Spectrum Spectra::fetch_(uint64_t index) const
     }
   }
 
-  std::vector<Data::ArrayIndex::Dimension> dims =
-      signals->array_index()->dimensions() | std::views::filter([](auto& d) {
+  // A plain copy_if rather than views::filter | ranges::to: ranges::to is a
+  // C++23 LIBRARY feature Apple's clang 15 libc++ lacks.
+  std::vector<Data::ArrayIndex::Dimension> dims;
+  std::ranges::copy_if(signals->array_index()->dimensions(), std::back_inserter(dims),
+                       [](auto& d) {
         // Mobility must be selected here too, or the column is never
         // projected and ion_mobility_array() comes back empty however well the
         // decoder handles it.
@@ -257,8 +261,7 @@ Spectrum Spectra::fetch_(uint64_t index) const
                // ims-compact keeps m/z in a non-standard `tof` column; without
                // selecting it here the spectrum has no coordinate at all.
                d.name.find("tof") != std::string::npos;
-      }) |
-      std::ranges::to<std::vector<Data::ArrayIndex::Dimension>>();
+                       });
 
   return Spectrum(index, signals, std::move(dims), meta_, md_map_, ims_);
 }
