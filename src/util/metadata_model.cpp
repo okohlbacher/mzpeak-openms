@@ -22,6 +22,7 @@ directory of this repository.
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
 #include <ranges>
+#include <span>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -57,11 +58,10 @@ namespace {
 /// nothing is skipped, and the read is exactly as it was -- Lean degrades to
 /// Full on those files rather than misreading them.
 std::shared_ptr<arrow::Table>
-read_metadata_table(Parquet& metadata,
-                    std::initializer_list<std::string_view> skip = {})
+read_metadata_table(Parquet& metadata, std::span<const std::string_view> skip = {})
 {
   arrow::Result<std::shared_ptr<arrow::Table>> result = [&] {
-    if (skip.size() == 0) return metadata.reader().ReadTable();
+    if (skip.empty()) return metadata.reader().ReadTable();
 
     const parquet::SchemaDescriptor* schema =
         metadata.reader().parquet_reader()->metadata()->schema();
@@ -86,6 +86,14 @@ read_metadata_table(Parquet& metadata,
     throw ParquetError("read metadata table: " + result.status().ToString());
   }
   return std::move(result).ValueOrDie();
+}
+
+/// Braced-list convenience: `{"a", "b"}` does not deduce to a span.
+std::shared_ptr<arrow::Table>
+read_metadata_table(Parquet& metadata, std::initializer_list<std::string_view> skip)
+{
+  return read_metadata_table(metadata,
+                             std::span<const std::string_view>(skip.begin(), skip.size()));
 }
 
 /// Read the `spectrum` struct column from an already-read table.  Returns null
@@ -844,23 +852,18 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // They are named here rather than wired into SpectrumMetadata because
   // deciding to EXPOSE a field is a separate call from deciding to stop paying
   // for one nobody reads.  Adding any of them means deleting it from this list.
-  static constexpr std::initializer_list<std::string_view> unread_scan_columns = {
+  std::vector<std::string_view> skip_scan = {
       "scan_index", "preset_scan_configuration", "filter_string",
       "ion_injection_time", "instrument_configuration_id", "spectrum_reference"};
+  // Named once: adding one of the above to SpectrumMetadata means deleting it
+  // from this list, and Lean's extras are appended rather than re-typed.
+  if (lean) skip_scan.insert(skip_scan.end(), {"parameters", "scan_windows"});
 
   auto table = lean ? read_metadata_table(*files.primary,
                                           {"parameters", "auxiliary_arrays"})
                     : read_metadata_table(*files.primary);
   auto scans_table =
-      files.scans
-          ? (lean ? read_metadata_table(*files.scans,
-                                        {"scan_index", "preset_scan_configuration",
-                                         "filter_string", "ion_injection_time",
-                                         "instrument_configuration_id",
-                                         "spectrum_reference", "parameters",
-                                         "scan_windows"})
-                  : read_metadata_table(*files.scans, unread_scan_columns))
-          : nullptr;
+      files.scans ? read_metadata_table(*files.scans, skip_scan) : nullptr;
   auto precursors_table =
       files.precursors
           ? (lean ? read_metadata_table(*files.precursors, {"activation"})
