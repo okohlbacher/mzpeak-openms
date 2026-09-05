@@ -245,24 +245,24 @@ test('e2e',
      timeout : 300,
      verbose : false)
 
-#Examples
-example_names = [
-  'read_spectra'
-]
-
-foreach example : example_names
-  executable(
-    example,
-    'examples/@0@.cpp'.format(example),
-    include_directories : include,
-    dependencies : deps_so,
-    link_with : libmzpeak_so,
-    install : true,
-    install_dir : 'examples')
-endforeach
-
-#Tools -- optional, see meson_options.txt.
+#Examples and tools -- optional together, see meson_options.txt: both use
+#<print>, and a consumer that only wants the library builds neither.
 if get_option('tools')
+  example_names = [
+    'read_spectra'
+  ]
+
+  foreach example : example_names
+    executable(
+      example,
+      'examples/@0@.cpp'.format(example),
+      include_directories : include,
+      dependencies : deps_so,
+      link_with : libmzpeak_so,
+      install : true,
+      install_dir : 'examples')
+  endforeach
+
   tool_names = [
     'mzp-inspect',
     'mzp-bench'
