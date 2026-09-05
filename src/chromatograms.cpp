@@ -22,9 +22,7 @@ namespace MzPeak {
 
 /******************************************************************************/
 Chromatograms::Chromatograms()
-    : EnumerableProxy(
-          0,
-          std::bind(std::mem_fn(&Chromatograms::fetch), this, std::placeholders::_1))
+    : EnumerableProxy(0)
 {
 }
 
@@ -32,9 +30,7 @@ Chromatograms::Chromatograms()
 Chromatograms::Chromatograms(std::unique_ptr<Data::Signals> data,
                              std::optional<std::size_t> count,
                              std::map<uint64_t, ChromatogramMetadata> metadata)
-    : EnumerableProxy(
-          0,
-          std::bind(std::mem_fn(&Chromatograms::fetch), this, std::placeholders::_1))
+    : EnumerableProxy(0)
     , data_(std::move(data))
 {
   // A declared count of zero is not evidence of an empty run.  The reference
@@ -66,11 +62,11 @@ Chromatogram Chromatograms::by_id(const std::string& id) const
 {
   auto index = index_for_id(id);
   if (!index) throw ParquetError("no chromatogram with id '" + id + "'");
-  return fetch(static_cast<uint64_t>(*index));
+  return fetch_(static_cast<uint64_t>(*index));
 }
 
 /******************************************************************************/
-Chromatogram Chromatograms::fetch(uint64_t index) const
+Chromatogram Chromatograms::fetch_(uint64_t index) const
 {
   using enum Schema::PSI::ArrayType;
   std::vector<Data::ArrayIndex::Dimension> dims =

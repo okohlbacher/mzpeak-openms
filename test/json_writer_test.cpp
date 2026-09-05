@@ -101,7 +101,7 @@ BOOST_AUTO_TEST_CASE(mzpeak_index_round_trips)
     // Constructs via the JSON ctor without throwing.
     Schema::File file(fo);
     BOOST_TEST(!file.file_name().empty());
-    BOOST_TEST((file.entity_type() == Schema::EntityType::Spectrum));
+    BOOST_TEST((file.entity_type().type() == Schema::EntityType::Spectrum));
   }
 
   // Spot-check the data-kind mapping for the two entries.

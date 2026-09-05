@@ -22,10 +22,7 @@ namespace MzPeak {
 
 /******************************************************************************/
 WavelengthSpectra::WavelengthSpectra()
-    : EnumerableProxy(0,
-                      std::bind(std::mem_fn(&WavelengthSpectra::fetch),
-                                this,
-                                std::placeholders::_1))
+    : EnumerableProxy(0)
 {
 }
 
@@ -34,10 +31,7 @@ WavelengthSpectra::WavelengthSpectra(
     std::unique_ptr<Data::Signals> data,
     std::optional<std::size_t> count,
     std::map<uint64_t, WavelengthSpectrumMetadata> metadata)
-    : EnumerableProxy(0,
-                      std::bind(std::mem_fn(&WavelengthSpectra::fetch),
-                                this,
-                                std::placeholders::_1))
+    : EnumerableProxy(0)
     , data_(std::move(data))
 {
   // See Chromatograms: a declared count of zero is not evidence of an empty
@@ -68,11 +62,11 @@ WavelengthSpectrum WavelengthSpectra::by_id(const std::string& id) const
 {
   auto index = index_for_id(id);
   if (!index) throw ParquetError("no wavelength spectrum with id '" + id + "'");
-  return fetch(static_cast<uint64_t>(*index));
+  return fetch_(static_cast<uint64_t>(*index));
 }
 
 /******************************************************************************/
-WavelengthSpectrum WavelengthSpectra::fetch(uint64_t index) const
+WavelengthSpectrum WavelengthSpectra::fetch_(uint64_t index) const
 {
   using enum Schema::PSI::ArrayType;
   std::vector<Data::ArrayIndex::Dimension> dims =

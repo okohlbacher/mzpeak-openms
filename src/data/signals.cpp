@@ -42,17 +42,12 @@ std::shared_ptr<ArrayIndex> Signals::Impl::parse_array_index() const
   Util::Parquet::file_metadata_t fmd(parquet_->file_metadata());
   EntityType entity_type = parquet_->index_file().entity_type();
 
-  // Normalize entity type name: replace spaces with underscores for KV keys
-  // (e.g. "wavelength spectrum" → "wavelength_spectrum_count").
-  std::string et_key = Schema::entity_type_to_string(entity_type);
-  std::ranges::replace(et_key, ' ', '_');
-
-  std::string num_key(et_key + "_count");
+  std::string num_key(entity_type.metadata_count_key());
   std::optional<std::size_t> num_entities(parquet_->kv_size_t(fmd, num_key));
 
-  std::string index_key(et_key + "_array_index");
+  std::string index_key(entity_type.array_index_name());
   auto index_str(parquet_->kv_string(fmd, index_key));
-  if (!index_str.has_value()) throw ParquetError("missing array_index");
+  if (!index_str.has_value()) throw InvalidFormatError("missing array_index");
 
   namespace json = boost::json;
   boost::system::error_code ec;
@@ -93,7 +88,8 @@ std::size_t Signals::record_count() const
   // The index is 0-based and contiguous so COUNT = max_index + 1.
   const std::string prefix = impl_->array_index_->prefix();
   const std::string index_col = [&]() -> std::string {
-    switch (impl_->array_index_->entity_type()) {
+    switch (impl_->array_index_->entity_type().type().value_or(
+        Schema::EntityType::Spectrum)) {
     case Schema::EntityType::Chromatogram:
       return "chromatogram_index";
     case Schema::EntityType::WavelengthSpectrum:
@@ -162,13 +158,12 @@ const std::shared_ptr<Schema::GroupMap>& Signals::groups() const
 Util::Query::Builder Signals::index() const
 {
   auto entity_type = impl_->array_index_->entity_type();
-  // entity_type_to_string already yields the underscore spelling the
-  // specification canonicalised in mzPeak-specification#18.
-  auto field_name = Schema::entity_type_to_string(entity_type) + "_index";
+  auto field_name = entity_type.index_column_name();
   auto index_field = column(field_name);
 
   if (!index_field.has_value()) {
-    throw ParquetError("parquet file is missing the index column: " + field_name);
+    throw InvalidFormatError("parquet file is missing the index column: " +
+                             field_name);
   }
 
   return Util::Query::Builder(index_field.value());
@@ -188,7 +183,7 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
       auto field =
           impl_->array_index_->entry_column(*impl_->parquet_->groups(), entry);
       if (!field.has_value()) {
-        throw ParquetError("array entry not present in schema: " + entry.name);
+        throw InvalidFormatError("array entry not present in schema: " + entry.name);
       } else {
         columns.project(field.value());
       }

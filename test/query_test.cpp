@@ -138,8 +138,9 @@ BOOST_AUTO_TEST_CASE(less_equal_predicate_matches_correctly)
   using namespace MzPeak;
 
   auto index = MzPeak::open("../test/files/small.mzpeak");
-  auto entry = std::ranges::find(index.files(), Schema::EntityType::Spectrum,
-                                 &Schema::File::entity_type);
+  auto entry = std::ranges::find_if(index.files(), [](const auto& f) {
+    return f.entity_type().type() == Schema::EntityType::Spectrum;
+  });
 
   BOOST_TEST((entry != index.files().end()));
 
@@ -197,8 +198,9 @@ BOOST_AUTO_TEST_CASE(negation_applies_to_compound_queries)
   using namespace MzPeak;
 
   auto index = MzPeak::open("../test/files/small.mzpeak");
-  auto entry = std::ranges::find(index.files(), Schema::EntityType::Spectrum,
-                                 &Schema::File::entity_type);
+  auto entry = std::ranges::find_if(index.files(), [](const auto& f) {
+    return f.entity_type().type() == Schema::EntityType::Spectrum;
+  });
 
   BOOST_TEST((entry != index.files().end()));
 

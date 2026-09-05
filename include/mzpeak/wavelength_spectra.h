@@ -59,7 +59,11 @@ private:
   std::map<std::string, std::size_t> id_to_index_;
 
   // Const for the same reason as Chromatograms::fetch.
-  WavelengthSpectrum fetch(uint64_t) const;
+  WavelengthSpectrum fetch_(uint64_t) const;
+
+  /// EnumerableProxy's fetch is a non-const pure virtual; ours is const so the
+  /// const public API (by_id, range queries) still works.  Forward.
+  WavelengthSpectrum fetch(uint64_t n) override { return fetch_(n); }
 };
 
 } // namespace MzPeak

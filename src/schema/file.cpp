@@ -64,7 +64,7 @@ try
     : file_name_(o.contains("path") ? o.at("path").as_string()
                                     : o.at("name").as_string())
     , data_kind_(std::string_view(o.at("data_kind").as_string()))
-    , entity_type_(entity_type_from_string(o.at("entity_type").as_string()))
+    , entity_type_(std::string_view(o.at("entity_type").as_string()))
     , columns_() {
   auto cs = o.find("column_mapping");
 

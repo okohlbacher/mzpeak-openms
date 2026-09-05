@@ -18,6 +18,49 @@ directory of this repository.
 namespace MzPeak::Data {
 
 /******************************************************************************/
+// How to compare entries.  Must match EntryChunkFn below.
+//
+// TODO: Unify these two types.
+struct EntryCmpFn {
+  bool operator()(const ArrayIndex::Entry& a, const ArrayIndex::Entry& b) const
+  {
+    // Lexicographic, NOT the &&-chained form.  `a.x < b.x && a.y < b.y && ...`
+    // is not a strict weak ordering -- two entries that differ in opposite
+    // directions compare false BOTH ways, so the sort treats them as
+    // equivalent and equivalence stops being transitive.  std::ranges::sort
+    // requires a strict weak order, so that form is undefined behaviour, and
+    // this sort decides which entry a dimension sees first (i.e. which one
+    // counts as primary when coalescing).
+    if (a.array_name != b.array_name) return a.array_name < b.array_name;
+    if (a.array_type != b.array_type) return a.array_type < b.array_type;
+    if (a.data_type != b.data_type) return a.data_type < b.data_type;
+    // Primary entries first.
+    return a.buffer_priority > b.buffer_priority;
+  }
+};
+
+// How to chunk entries.  Must match EntryCmpFn above.
+//
+// NOTE: buffer_priority is deliberately NOT part of this key, although the sort
+// comparator orders on it.  Upstream groups on it so that a primary and a
+// non-primary entry for the same array become separate dimensions and the
+// primary one can be preferred -- correct when the two are REDUNDANT copies of
+// the same data.  But they can also be COMPLEMENTARY: has_uv.mzpeak stores one
+// chromatogram's intensities in detector counts and another's in absorbance, in
+// two columns, each null where the other has values.  Splitting those into two
+// dimensions and keeping only the primary silently drops every row carried by
+// the other.  Grouping them together lets the coalesced-point path merge them,
+// and that path still throws if two columns claim the same row (i.e. if they
+// really are redundant and there is no basis for preferring one).
+struct EntryChunkFn {
+  bool operator()(const ArrayIndex::Entry& a, const ArrayIndex::Entry& b) const
+  {
+    return a.array_name == b.array_name && a.array_type == b.array_type &&
+           a.data_type == b.data_type;
+  }
+};
+
+/******************************************************************************/
 ArrayIndex::Layout group_name_to_layout(const std::string& name)
 {
   if (name == "point") {
@@ -221,7 +264,7 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
         entry.array_name = eo.at("array_name").as_string();
         entry.buffer_format =
             buffer_format_from_string(eo.at("buffer_format").as_string());
-        entry.context = entity_type_from_string(eo.at("context").as_string());
+        entry.context = EntityType(eo.at("context").as_string());
         entry.path = eo.at("path").as_string();
 
         // Every entry path is "<prefix>.<column>".  Deriving the column name by
@@ -288,7 +331,7 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
     }
   }
 
-  std::ranges::sort(entries_, {}, &Entry::array_name);
+  std::ranges::sort(entries_, EntryCmpFn());
 }
 
 /******************************************************************************/
@@ -319,10 +362,7 @@ std::optional<std::size_t> ArrayIndex::num_entities() const { return num_entitie
 std::vector<ArrayIndex::Dimension> ArrayIndex::dimensions() const
 {
   std::vector<std::vector<Entry>> groups =
-      entries_ | std::views::chunk_by([](auto& a, auto& b) {
-        return a.array_name == b.array_name && a.data_type == b.data_type &&
-               a.array_type == b.array_type;
-      }) |
+      entries_ | std::views::chunk_by(EntryChunkFn()) |
       std::ranges::to<std::vector<std::vector<Entry>>>();
 
   std::vector<Dimension> result;
@@ -332,8 +372,8 @@ std::vector<ArrayIndex::Dimension> ArrayIndex::dimensions() const
     if (group.empty()) continue;
     auto& head = group[0];
 
-    result.push_back({head.name, head.data_type, head.array_type, head.transform,
-                      std::move(group)});
+    result.push_back({head.name, head.data_type, head.array_type,
+                      head.buffer_priority, head.transform, std::move(group)});
   }
 
   return result;
