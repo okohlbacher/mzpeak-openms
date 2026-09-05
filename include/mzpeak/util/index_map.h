@@ -48,8 +48,6 @@ public:
   iterator end() { return data_.end(); }
   const_iterator begin() const { return data_.begin(); }
   const_iterator end() const { return data_.end(); }
-  std::size_t size() const { return data_.size(); }
-  bool empty() const { return data_.empty(); }
   void reserve(std::size_t n) { data_.reserve(n); }
 
   /// Append in file order; sort() must follow before any find().
