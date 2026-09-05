@@ -15,6 +15,8 @@ directory of this repository.
 #include <string>
 #include <vector>
 
+#include "mzpeak/writer.h"
+
 namespace MzPeak::Util {
 
 /**
@@ -101,6 +103,8 @@ struct SpectrumMetaRow {
   /// MS_1000525 spectrum representation CURIE: "MS:1000128" (profile) or
   /// "MS:1000127" (centroid).  Lets a reader pick the data vs peaks table.
   std::string representation;
+  /// Precursors, written to the precursor and selected-ion facets.
+  std::vector<PrecursorData> precursors;
 };
 
 /**
@@ -132,10 +136,12 @@ std::string spectra_metadata_bytes(const std::vector<SpectrumMetaRow>& rows);
  * Write the per-facet spectrum metadata files (scans / precursors /
  * selected ions) that accompany spectra_metadata.parquet in the split layout.
  *
- * The reference reader requires all three members to be present even when a
- * writer has nothing to put in them, so the precursor and selected-ion tables
- * are emitted with their schema and zero rows.  The scan table carries one row
- * per spectrum so retention time is reachable from the scan facet as well.
+ * The scan table carries one row per spectrum so retention time is reachable
+ * from the scan facet as well.  The precursor table carries one row per
+ * (spectrum, precursor) and the selected-ion table one per (spectrum,
+ * precursor, ion), joined by `source_index` and `precursor_index` the way the
+ * reader expects.  The reference reader requires all three members to be
+ * present, so an MS1-only run still gets the two facets with zero rows.
  */
 void write_spectra_metadata_facets(const std::string& dir,
                                    const std::vector<SpectrumMetaRow>& rows);

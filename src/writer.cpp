@@ -110,6 +110,39 @@ bool any_profile(const std::vector<SpectrumData>& spectra)
 }
 
 /******************************************************************************/
+// The three spectrum metadata facets and the column_mapping each declares.
+// One definition: both index writers below emit exactly these, and the reader
+// resolves MS:1000827 and friends through these mappings when the column name
+// alone does not tell it.
+std::vector<Util::IndexFileEntry> spectra_facet_entries()
+{
+  using Schema::DataKind;
+  return {
+      {"spectra_metadata_scans.parquet",
+       "spectrum",
+       DataKind(DataKind::Scans).to_string(),
+       {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}},
+      {"spectra_metadata_precursors.parquet",
+       "spectrum",
+       DataKind(DataKind::Precursors).to_string(),
+       {{"isolation window target m/z", "isolation_window.isolation_window_target",
+         "MS:1000827", "MS:1000040"},
+        {"isolation window lower offset",
+         "isolation_window.isolation_window_lower_offset", "MS:1000828",
+         "MS:1000040"},
+        {"isolation window upper offset",
+         "isolation_window.isolation_window_upper_offset", "MS:1000829",
+         "MS:1000040"}}},
+      {"spectra_metadata_selected_ions.parquet",
+       "spectrum",
+       DataKind(DataKind::SelectedIons).to_string(),
+       {{"selected ion m/z", "selected_ion_mz", "MS:1000744", "MS:1000040"},
+        {"charge state", "charge_state", "MS:1000041", ""},
+        {"intensity", "peak_intensity", "MS:1000042", "MS:1000131"}}},
+  };
+}
+
+/******************************************************************************/
 // mzpeak_index.json describing the data + metadata tables (+ peaks if present).
 // WRT-2: when `run_metadata` is non-null, its serialized run-level blocks are
 // merged into the emitted `metadata{}` alongside `version`.
@@ -132,17 +165,7 @@ std::string spectra_index_json(bool with_data,
         {"spectrum representation", "spectrum_representation", "MS:1000525", ""},
         {"number of data points", "number_of_data_points", "MS:1003060", ""},
         {"number of peaks", "number_of_peaks", "MS:1003059", ""}}});
-  // The reference reader requires all three facet members to be present, even
-  // when this writer has nothing to put in the precursor/selected-ion ones.
-  files.push_back(
-      {"spectra_metadata_scans.parquet",
-       "spectrum",
-       Schema::DataKind(DataKind::Scans).to_string(),
-       {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
-  files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
-                   Schema::DataKind(DataKind::Precursors).to_string()});
-  files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
-                   Schema::DataKind(DataKind::SelectedIons).to_string()});
+  for (auto& facet : spectra_facet_entries()) files.push_back(std::move(facet));
   if (with_peaks) {
     files.push_back({"spectra_peaks.parquet", "spectrum",
                      Schema::DataKind(DataKind::Peaks).to_string()});
@@ -170,7 +193,8 @@ build_metadata_rows(const std::vector<SpectrumData>& spectra)
                     /*polarity=*/s.polarity,
                     /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
                     /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
-                    /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128"});
+                    /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128",
+                    /*precursors=*/s.precursors});
   }
   return rows;
 }
@@ -455,15 +479,7 @@ std::vector<Member> build_run_members(const RunContents& contents,
     members.push_back({"spectra_metadata_precursors.parquet", std::move(facets[1])});
     members.push_back(
         {"spectra_metadata_selected_ions.parquet", std::move(facets[2])});
-    files.push_back(
-        {"spectra_metadata_scans.parquet",
-         "spectrum",
-         Schema::DataKind(DataKind::Scans).to_string(),
-         {{"scan start time", "scan_start_time", "MS:1000016", "UO:0000031"}}});
-    files.push_back({"spectra_metadata_precursors.parquet", "spectrum",
-                     Schema::DataKind(DataKind::Precursors).to_string()});
-    files.push_back({"spectra_metadata_selected_ions.parquet", "spectrum",
-                     Schema::DataKind(DataKind::SelectedIons).to_string()});
+    for (auto& facet : spectra_facet_entries()) files.push_back(std::move(facet));
   }
 
   // ---- chromatograms -----------------------------------------------------

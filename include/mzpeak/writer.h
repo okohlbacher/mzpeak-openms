@@ -19,11 +19,37 @@ directory of this repository.
 namespace MzPeak {
 
 /**
- * The m/z and intensity arrays of a single spectrum to be written.
+ * One selected ion of a precursor.  Every field is optional because every one
+ * is nullable in the format; a DIA window commonly has a target and no ion.
+ */
+struct SelectedIonData {
+  std::optional<double> mz;
+  std::optional<int> charge;
+  std::optional<float> intensity;
+};
+
+/**
+ * One precursor of an MS2+ spectrum: its isolation window and the ions
+ * selected from it.  A DIA frame carries several of these per spectrum.
  *
- * NOTE: This is a minimal initial writer model.  It carries only the
- * two primary arrays; richer metadata and additional arrays will be
- * added as the writer matures.
+ * The window bounds are float because that is what the format stores
+ * (MS:1000827-9 are float32 columns in every archive this library has seen);
+ * a double here would promise precision the file cannot keep.
+ *
+ * Activation parameters and a precursor id are not carried yet -- nothing
+ * this writer serves needs them, and an empty list is honest where an
+ * invented one is not.
+ */
+struct PrecursorData {
+  std::optional<float> isolation_target_mz;
+  std::optional<float> isolation_lower_offset;
+  std::optional<float> isolation_upper_offset;
+  std::vector<SelectedIonData> selected_ions;
+};
+
+/**
+ * The m/z and intensity arrays of a single spectrum to be written, with the
+ * per-spectrum metadata the reader hands back.
  */
 struct SpectrumData {
   std::vector<double> mz;
@@ -44,6 +70,11 @@ struct SpectrumData {
 
   /// Optional spectrum ID string; auto-generated ("index=N") when absent.
   std::optional<std::string> id;
+
+  /// Precursors, in order; empty for MS1.  Written to the precursor and
+  /// selected-ion facets, keyed by this spectrum's index and the precursor's
+  /// position here, which is how the reader joins them back.
+  std::vector<PrecursorData> precursors;
 };
 
 /**

@@ -78,7 +78,172 @@ std::vector<MzPeak::SpectrumData> read_all_sorted(const std::string& path)
   return out;
 }
 
+// Everything the writer accepts for one spectrum, lifted from what the reader
+// returns for it.  What this does NOT carry is the point of the reverse test
+// below: if a field is dropped here it is dropped in the file too.
+MzPeak::SpectrumData to_spectrum_data(const MzPeak::Spectrum& s)
+{
+  MzPeak::SpectrumData sd;
+  sd.mz = s.mz();
+  sd.intensity = s.intensity();
+  sd.centroid = s.metadata().representation == "MS:1000127";
+  sd.ms_level = s.ms_level();
+  sd.retention_time = s.retention_time();
+  sd.polarity = s.metadata().polarity;
+  sd.id = s.metadata().id;
+  for (const auto& p : s.precursors()) {
+    MzPeak::PrecursorData pd;
+    pd.isolation_target_mz = p.isolation_window.target_mz;
+    pd.isolation_lower_offset = p.isolation_window.lower_offset;
+    pd.isolation_upper_offset = p.isolation_window.upper_offset;
+    for (const auto& ion : p.selected_ions)
+      pd.selected_ions.push_back({ion.selected_ion_mz, ion.charge_state, ion.intensity});
+    sd.precursors.push_back(std::move(pd));
+  }
+  return sd;
+}
+
 } // namespace
+
+/******************************************************************************/
+// Precursors round-trip through BOTH entry points: the isolation window, each
+// selected ion's m/z, charge and intensity, a window-only precursor (DIA), two
+// ions under one precursor, and none at all for MS1.
+BOOST_AUTO_TEST_CASE(precursors_round_trip)
+{
+  using namespace MzPeak;
+
+  SpectrumData ms1;
+  ms1.mz = {100.0, 200.0};
+  ms1.intensity = {1.0f, 2.0f};
+  ms1.centroid = true;
+  ms1.ms_level = 1;
+
+  SpectrumData ms2;
+  ms2.mz = {150.0, 250.0};
+  ms2.intensity = {3.0f, 4.0f};
+  ms2.centroid = true;
+  ms2.ms_level = 2;
+  PrecursorData p;
+  p.isolation_target_mz = 500.25f;
+  p.isolation_lower_offset = 1.0f;
+  p.isolation_upper_offset = 1.5f;
+  p.selected_ions.push_back({500.2501, 2, 1234.5f});
+  ms2.precursors.push_back(p);
+
+  SpectrumData dia;
+  dia.mz = {300.0};
+  dia.intensity = {5.0f};
+  dia.centroid = true;
+  dia.ms_level = 2;
+  PrecursorData two_ions;
+  two_ions.isolation_target_mz = 600.0f;
+  two_ions.selected_ions.push_back({599.9, 1, std::nullopt});
+  two_ions.selected_ions.push_back({600.1, 3, 7.0f});
+  PrecursorData window_only;
+  window_only.isolation_target_mz = 700.0f;
+  window_only.isolation_lower_offset = 12.5f;
+  window_only.isolation_upper_offset = 12.5f;
+  dia.precursors = {two_ions, window_only};
+
+  const std::vector<SpectrumData> in{ms1, ms2, dia};
+
+  auto verify = [](const std::string& path) {
+    Index index = MzPeak::open(path);
+    Spectra spectra = index.spectra();
+    BOOST_TEST_REQUIRE(spectra.size() == 3u);
+
+    auto s0 = spectra[0];
+    BOOST_TEST(s0.precursors().empty());
+
+    auto s1 = spectra[1];
+    BOOST_TEST_REQUIRE(s1.precursors().size() == 1u);
+    const auto& q = s1.precursors()[0];
+    BOOST_TEST_REQUIRE(q.isolation_window.target_mz.has_value());
+    BOOST_TEST(*q.isolation_window.target_mz == 500.25f);
+    BOOST_TEST(*q.isolation_window.lower_offset == 1.0f);
+    BOOST_TEST(*q.isolation_window.upper_offset == 1.5f);
+    BOOST_TEST_REQUIRE(q.selected_ions.size() == 1u);
+    BOOST_TEST(*q.selected_ions[0].selected_ion_mz == 500.2501,
+               boost::test_tools::tolerance(1e-9));
+    BOOST_TEST(*q.selected_ions[0].charge_state == 2);
+    BOOST_TEST(*q.selected_ions[0].intensity == 1234.5f);
+
+    auto s2 = spectra[2];
+    BOOST_TEST_REQUIRE(s2.precursors().size() == 2u);
+    const auto& a = s2.precursors()[0];
+    BOOST_TEST_REQUIRE(a.selected_ions.size() == 2u);
+    BOOST_TEST(*a.selected_ions[0].selected_ion_mz == 599.9,
+               boost::test_tools::tolerance(1e-9));
+    BOOST_TEST(*a.selected_ions[0].charge_state == 1);
+    BOOST_TEST(!a.selected_ions[0].intensity.has_value());
+    BOOST_TEST(*a.selected_ions[1].charge_state == 3);
+    const auto& b = s2.precursors()[1];
+    BOOST_TEST(b.selected_ions.empty());
+    BOOST_TEST(*b.isolation_window.target_mz == 700.0f);
+    BOOST_TEST(*b.isolation_window.lower_offset == 12.5f);
+  };
+
+  TempDir dir;
+  write_spectra_directory(dir.path, in);
+  verify(dir.path.string());
+
+  TempDir zip;
+  RunContents run;
+  run.spectra = in;
+  const fs::path archive = zip.path.string() + ".mzpeak";
+  write_run_archive(archive, run);
+  verify(archive.string());
+  std::error_code ec;
+  fs::remove(archive, ec);
+}
+
+/******************************************************************************/
+// Reverse round trip on a real DDA archive: every precursor and selected ion
+// the reader finds must come back identical after write -> read.  The fixture
+// is asserted to actually contain selected ions, so this cannot pass vacuously.
+BOOST_AUTO_TEST_CASE(reader_writer_reader_preserves_precursors)
+{
+  using namespace MzPeak;
+  const std::string source("../test/files/v2/small.mzpeak");
+
+  std::vector<SpectrumData> ref;
+  {
+    Index index = MzPeak::open(source);
+    Spectra spectra = index.spectra();
+    for (std::size_t i = 0; i < spectra.size(); ++i) ref.push_back(to_spectrum_data(spectra[i]));
+  }
+  std::size_t ions = 0;
+  for (const auto& s : ref)
+    for (const auto& p : s.precursors) ions += p.selected_ions.size();
+  BOOST_TEST_REQUIRE(ions > 0u);
+
+  TempDir dir;
+  RunContents run;
+  run.spectra = ref;
+  write_run_directory(dir.path, run);
+
+  Index index = MzPeak::open(dir.path.string());
+  Spectra out = index.spectra();
+  BOOST_TEST_REQUIRE(out.size() == ref.size());
+  for (std::size_t i = 0; i < ref.size(); ++i) {
+    auto s = out[i];
+    const auto& got = s.precursors();
+    BOOST_TEST_REQUIRE(got.size() == ref[i].precursors.size());
+    for (std::size_t k = 0; k < got.size(); ++k) {
+      const auto& want = ref[i].precursors[k];
+      BOOST_TEST((got[k].isolation_window.target_mz == want.isolation_target_mz));
+      BOOST_TEST((got[k].isolation_window.lower_offset == want.isolation_lower_offset));
+      BOOST_TEST((got[k].isolation_window.upper_offset == want.isolation_upper_offset));
+      BOOST_TEST_REQUIRE(got[k].selected_ions.size() == want.selected_ions.size());
+      for (std::size_t j = 0; j < want.selected_ions.size(); ++j) {
+        BOOST_TEST((got[k].selected_ions[j].selected_ion_mz == want.selected_ions[j].mz));
+        BOOST_TEST((got[k].selected_ions[j].charge_state == want.selected_ions[j].charge));
+        BOOST_TEST((got[k].selected_ions[j].intensity == want.selected_ions[j].intensity));
+      }
+    }
+  }
+}
 
 /******************************************************************************/
 // ms_level round-trips through write → read.

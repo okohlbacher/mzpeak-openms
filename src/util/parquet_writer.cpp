@@ -512,33 +512,82 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
                build_optional_array<arrow::FloatBuilder>(scan_start_time)});
 }
 
-/// Precursor / selected-ion facets: schema only.  This writer does not carry
-/// precursor information yet, but the members must exist for the reference
-/// reader to open the archive at all.
-std::shared_ptr<arrow::Table> empty_precursors_table()
+/// Precursor facet: one row per (spectrum, precursor).  Column names are the
+/// ones the reference writer uses -- the reader resolves
+/// MS_1000827_isolation_window_target_mz to `isolation_window_target` through
+/// its alias table and, failing that, through the index's column_mapping, so
+/// both spellings the ecosystem produces land on these columns.
+///
+/// Emitted with zero rows for an MS1-only run: the reference reader opens the
+/// member unconditionally and fails on an absent one.
+std::shared_ptr<arrow::Table>
+precursors_table(const std::vector<SpectrumMetaRow>& rows)
 {
+  std::vector<uint64_t> source_index, precursor_index;
+  std::vector<std::optional<float>> target, lower, upper;
+  for (const auto& r : rows) {
+    for (std::size_t k = 0; k < r.precursors.size(); ++k) {
+      const PrecursorData& p = r.precursors[k];
+      source_index.push_back(r.index);
+      precursor_index.push_back(static_cast<uint64_t>(k));
+      target.push_back(p.isolation_target_mz);
+      lower.push_back(p.isolation_lower_offset);
+      upper.push_back(p.isolation_upper_offset);
+    }
+  }
+
+  auto window(arrow::StructArray::Make(
+      {build_optional_array<arrow::FloatBuilder>(target),
+       build_optional_array<arrow::FloatBuilder>(lower),
+       build_optional_array<arrow::FloatBuilder>(upper)},
+      {"isolation_window_target", "isolation_window_lower_offset",
+       "isolation_window_upper_offset"}));
+  check(window.status(), "build isolation_window struct");
+
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("precursor_index", arrow::uint64(), true),
+      arrow::field("isolation_window", (*window)->type(), true),
   }));
-  std::vector<uint64_t> none;
-  return arrow::Table::Make(schema, {build_array<arrow::UInt64Builder>(none),
-                                     build_array<arrow::UInt64Builder>(none)});
+  return arrow::Table::Make(schema, {build_array<arrow::UInt64Builder>(source_index),
+                                     build_array<arrow::UInt64Builder>(precursor_index),
+                                     *window});
 }
 
-std::shared_ptr<arrow::Table> empty_selected_ions_table()
+/// Selected-ion facet: one row per (spectrum, precursor, ion), attached to its
+/// precursor by (source_index, precursor_index) -- the join the reader makes.
+std::shared_ptr<arrow::Table>
+selected_ions_table(const std::vector<SpectrumMetaRow>& rows)
 {
+  std::vector<uint64_t> source_index, precursor_index;
+  std::vector<std::optional<double>> mz;
+  std::vector<std::optional<int32_t>> charge;
+  std::vector<std::optional<float>> intensity;
+  for (const auto& r : rows) {
+    for (std::size_t k = 0; k < r.precursors.size(); ++k) {
+      for (const SelectedIonData& ion : r.precursors[k].selected_ions) {
+        source_index.push_back(r.index);
+        precursor_index.push_back(static_cast<uint64_t>(k));
+        mz.push_back(ion.mz);
+        charge.push_back(ion.charge ? std::optional<int32_t>(*ion.charge)
+                                    : std::nullopt);
+        intensity.push_back(ion.intensity);
+      }
+    }
+  }
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("precursor_index", arrow::uint64(), true),
       arrow::field("selected_ion_mz", arrow::float64(), true),
+      arrow::field("charge_state", arrow::int32(), true),
+      arrow::field("peak_intensity", arrow::float32(), true),
   }));
-  std::vector<uint64_t> none;
-  std::vector<std::optional<double>> nonef;
-  return arrow::Table::Make(schema,
-                            {build_array<arrow::UInt64Builder>(none),
-                             build_array<arrow::UInt64Builder>(none),
-                             build_optional_array<arrow::DoubleBuilder>(nonef)});
+  return arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(source_index),
+               build_array<arrow::UInt64Builder>(precursor_index),
+               build_optional_array<arrow::DoubleBuilder>(mz),
+               build_optional_array<arrow::Int32Builder>(charge),
+               build_optional_array<arrow::FloatBuilder>(intensity)});
 }
 
 std::string table_bytes(const std::shared_ptr<arrow::Table>& table,
@@ -578,9 +627,9 @@ void write_spectra_metadata_facets(const std::string& dir,
   write_table_to_path(dir + "/spectra_metadata_scans.parquet", scans_table(rows),
                       kv);
   write_table_to_path(dir + "/spectra_metadata_precursors.parquet",
-                      empty_precursors_table(), kv);
+                      precursors_table(rows), kv);
   write_table_to_path(dir + "/spectra_metadata_selected_ions.parquet",
-                      empty_selected_ions_table(), kv);
+                      selected_ions_table(rows), kv);
 }
 
 /******************************************************************************/
@@ -590,8 +639,8 @@ spectra_metadata_facet_bytes(const std::vector<SpectrumMetaRow>& rows)
   std::map<std::string, std::string> kv{
       {"spectrum_count", std::to_string(rows.size())}};
   return {table_bytes(scans_table(rows), kv),
-          table_bytes(empty_precursors_table(), kv),
-          table_bytes(empty_selected_ions_table(), kv)};
+          table_bytes(precursors_table(rows), kv),
+          table_bytes(selected_ions_table(rows), kv)};
 }
 
 /******************************************************************************/
@@ -843,8 +892,9 @@ void write_chromatograms_metadata(const std::string& path,
 std::array<std::string, 2>
 chromatogram_facet_bytes(const std::map<std::string, std::string>& file_kv)
 {
-  return {table_bytes(empty_precursors_table(), file_kv),
-          table_bytes(empty_selected_ions_table(), file_kv)};
+  // ChromatogramData carries no precursor, so both facets have zero rows.
+  return {table_bytes(precursors_table({}), file_kv),
+          table_bytes(selected_ions_table({}), file_kv)};
 }
 
 /******************************************************************************/
