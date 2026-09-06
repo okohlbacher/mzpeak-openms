@@ -26,7 +26,12 @@ add_project_arguments(compiler.get_supported_arguments([
 is_windows = host_machine.system() == 'windows'
 if is_windows
   # <windows.h> reaches in through Arrow; keep its min/max macros out.
-  add_project_arguments('-DNOMINMAX', '-DWIN32_LEAN_AND_MEAN', language : 'cpp')
+  # Boost.JSON is a DLL on Windows (conda-forge ships no static one): without
+  # DYN_LINK its headers do not declare the static data members dllimport,
+  # and object::empty_, array::empty_ and default_resource::instance_ stay
+  # unresolved. Functions link through the import library either way.
+  add_project_arguments('-DNOMINMAX', '-DWIN32_LEAN_AND_MEAN',
+                        '-DBOOST_JSON_DYN_LINK=1', language : 'cpp')
 endif
 
 #Source files included in the library:
