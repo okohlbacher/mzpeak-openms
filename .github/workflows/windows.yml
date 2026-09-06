@@ -53,7 +53,11 @@ jobs:
           CC: cl
           CXX: cl
         run: |
-          which cl link meson ninja pkg-config
+          # Git's bash.exe launcher puts its own /usr/bin (GNU link.exe) in
+          # front of everything; cl is not there, so `which cl` still lands in
+          # the MSVC directory. Put that directory first for link and lib too.
+          export PATH="$(dirname "$(which cl)"):$PATH"
+          which cl link lib meson ninja pkg-config
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
           export BOOST_ROOT="$PREFIX"
           meson setup build --buildtype=release -Dtools=false
@@ -61,7 +65,9 @@ jobs:
       - name: Build
         shell: bash
         # -k 0: keep going, so one run reports every failing TU rather than the first.
-        run: ninja -C build -k 0
+        run: |
+          export PATH="$(dirname "$(which cl)"):$PATH"
+          ninja -C build -k 0
 
       - name: Test
         shell: bash
