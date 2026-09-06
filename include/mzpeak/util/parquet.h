@@ -17,6 +17,7 @@ directory of this repository.
 #include "mzpeak/schema/group.h"
 #include "mzpeak/util/executor.h"
 #include "mzpeak/util/query.h"
+#include "mzpeak/util/row_group_cache.h"
 
 namespace MzPeak::Util {
 
@@ -28,7 +29,12 @@ public:
   using file_metadata_t = std::shared_ptr<parquet::FileMetaData>;
 
   /// Constructor.
-  Parquet(std::unique_ptr<MzPeak::IO::File>, Schema::File);
+  /// @param cache  shared with every other Parquet over the same archive, so a
+  ///   row group is decoded once for all of them; without it this object keeps
+  ///   a private two-group cache.
+  Parquet(std::unique_ptr<MzPeak::IO::File>,
+          Schema::File,
+          std::shared_ptr<RowGroupCache> cache = nullptr);
 
   /// Destructor.
   ~Parquet();
@@ -93,7 +99,7 @@ public:
    * decoder, and so keeps a group resident for as long as the caller holds it.
    * That is bounded by how many entities the caller holds, not by the run.
    */
-  using RowGroupBatches = std::vector<std::shared_ptr<arrow::RecordBatch>>;
+  using RowGroupBatches = Util::RowGroupBatches;
   std::shared_ptr<const RowGroupBatches> row_group(int32_t);
 
   /**

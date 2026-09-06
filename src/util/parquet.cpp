@@ -59,11 +59,14 @@ std::optional<std::size_t> get_kv_uint(const Parquet::file_metadata_t& fmd,
 
 /******************************************************************************/
 struct Parquet::Impl {
-  Impl(std::unique_ptr<IO::File> data, Schema::File file)
+  Impl(std::unique_ptr<IO::File> data,
+       Schema::File file,
+       std::shared_ptr<RowGroupCache> shared_cache)
       : file_(std::move(file))
       , arrow_(std::make_unique<Arrow>(std::move(data)))
       , reader_(nullptr)
       , groups_(std::make_shared<Schema::GroupMap>())
+      , shared_cache_(std::move(shared_cache))
   {
     auto raf = arrow_->reader();
 
@@ -103,24 +106,36 @@ struct Parquet::Impl {
   /// Load the schema.
   void parse_schema();
 
-  /// Decode a row group in full and return its batches, caching the result.
+  /// Decode a row group in full and return its batches, caching the result:
+  /// in the archive-wide shared cache when this object was given one, else
+  /// in the private two-group cache below.
   std::shared_ptr<const Parquet::RowGroupBatches> row_group(int32_t index);
+
+  /// The decode itself, under this object's lock; see decode_group_().
+  std::shared_ptr<const Parquet::RowGroupBatches> decode_group_(int32_t index);
 
   Schema::File file_;
   std::unique_ptr<Arrow> arrow_;
   std::shared_ptr<parquet::arrow::FileReader> reader_;
   std::shared_ptr<Schema::GroupMap> groups_;
 
-  /// Most-recently-decoded row groups, newest last.  Bounded because a decoded
-  /// group is tens of megabytes; two is enough for a forward pass, where the
-  /// only backward reach is an entity straddling a group boundary.
+  /// Shared with every Parquet over the same archive (Manager::parquet()), so
+  /// sixteen readers decode a group once, not sixteen times.  Null when this
+  /// object was built outside a Manager; then cache_ below is used.
+  std::shared_ptr<RowGroupCache> shared_cache_;
+
+  /// Private fallback: most-recently-decoded row groups, newest last.  Bounded
+  /// because a decoded group is tens of megabytes; two is enough for a forward
+  /// pass, where the only backward reach is an entity straddling a group
+  /// boundary.
   static constexpr std::size_t kCachedGroups = 2;
   std::vector<std::pair<int32_t, std::shared_ptr<const Parquet::RowGroupBatches>>>
       cache_;
 
-  /// Guards cache_ AND the decode, which shares one file position.  See
-  /// row_group().
+  /// Guards cache_ (private path).  See row_group().
   std::mutex cache_mutex_;
+  /// Guards the decode, which shares one file position; taken on both paths.
+  std::recursive_mutex decode_mutex_;
 
   // Shared by every planner over this file; see StatsIndex.
   std::shared_ptr<StatsIndex> stats_;
@@ -159,6 +174,16 @@ void Parquet::Impl::parse_schema()
 std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
+  if (shared_cache_) {
+    // The archive-wide cache does the bookkeeping; the decode still runs
+    // under THIS object's lock (decode_group_), because that is what guards
+    // the file position.  Different objects decode different groups at once.
+    const auto bytes = static_cast<std::size_t>(
+        reader_->parquet_reader()->metadata()->RowGroup(index)->total_byte_size());
+    return shared_cache_->get(file_.file_name(), index, bytes,
+                              [this, index] { return decode_group_(index); });
+  }
+
   // The lock is held across the DECODE as well as the bookkeeping.
   //
   // Guarding only the cache would leave the real hazard untouched: the decode
@@ -185,6 +210,20 @@ Parquet::Impl::row_group(int32_t index)
   // and anything still using it holds its own shared_ptr.
   if (cache_.size() >= kCachedGroups) cache_.erase(cache_.begin());
 
+  auto batches = decode_group_(index);
+  cache_.emplace_back(index, batches);
+  return batches;
+}
+
+/******************************************************************************/
+std::shared_ptr<const Parquet::RowGroupBatches>
+Parquet::Impl::decode_group_(int32_t index)
+{
+  // Recursive: row_group() above holds cache_mutex_ on the private path and
+  // does not on the shared path, and the file position needs the lock either
+  // way.
+  std::unique_lock<std::recursive_mutex> guard(decode_mutex_);
+
   auto reader_result = reader_->GetRecordBatchReader({index});
   if (!reader_result.ok()) {
     throw ParquetError("read row group " + std::to_string(index) + ": " +
@@ -199,14 +238,14 @@ Parquet::Impl::row_group(int32_t index)
     }
     batches->push_back(*maybe_batch);
   }
-
-  cache_.emplace_back(index, batches);
   return batches;
 }
 
 /******************************************************************************/
-Parquet::Parquet(std::unique_ptr<IO::File> data, Schema::File file)
-    : impl_(std::make_unique<Impl>(std::move(data), std::move(file)))
+Parquet::Parquet(std::unique_ptr<IO::File> data,
+                 Schema::File file,
+                 std::shared_ptr<RowGroupCache> cache)
+    : impl_(std::make_unique<Impl>(std::move(data), std::move(file), std::move(cache)))
 {
 }
 

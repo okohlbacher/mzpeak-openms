@@ -192,7 +192,7 @@ Manager::spectrum_metadata(MetadataDetail detail,
 std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
 {
   std::unique_ptr<IO::File> data(archive_->read_file(file.file_name()));
-  return std::make_unique<Util::Parquet>(std::move(data), file);
+  return std::make_unique<Util::Parquet>(std::move(data), file, row_group_cache_);
 }
 
 } // namespace MzPeak::Util

@@ -45,6 +45,7 @@ directory of this repository.
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
+#include "mzpeak/util/manager.h"
 #include "mzpeak/util/parquet_writer.h"
 
 namespace {
@@ -333,6 +334,60 @@ BOOST_AUTO_TEST_CASE(one_shared_reader_across_threads_agrees)
 
   BOOST_TEST(mismatches.load() == 0);
   BOOST_TEST(read_spectra.load() == kThreads * static_cast<int>(kSpectra));
+}
+
+/******************************************************************************/
+// Readers over one archive share a decoded-group cache: eight threads, each
+// with its own reader over a contiguous range, decode every group exactly
+// once between them, and read it back right.
+BOOST_AUTO_TEST_CASE(readers_over_one_archive_decode_each_group_once)
+{
+  Scratch scratch("mzp-test-rowgroups-shared-cache");
+  auto index = MzPeak::open(write_fixture(scratch));
+
+  constexpr int kThreads = 8;
+  std::atomic<int> mismatches{0};
+  std::atomic<int> read_spectra{0};
+
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t] {
+      auto spectra = index.spectra(); // one reader per thread, shared archive
+      const uint64_t lo = kSpectra * static_cast<uint64_t>(t) / kThreads;
+      const uint64_t hi = kSpectra * static_cast<uint64_t>(t + 1) / kThreads;
+      for (uint64_t s = lo; s < hi; ++s) {
+        auto spectrum = spectra[s];
+        const auto& mz = spectrum.mz();
+        const auto& intensity = spectrum.intensity();
+        if (mz.size() != kPoints || intensity.size() != kPoints) {
+          ++mismatches;
+          continue;
+        }
+        for (uint64_t p = 0; p < kPoints; ++p) {
+          if (mz[p] != expected_mz(s, p) ||
+              intensity[p] != expected_intensity(s, p)) {
+            ++mismatches;
+            break;
+          }
+        }
+        ++read_spectra;
+      }
+    });
+  }
+  for (auto& thread : threads)
+    thread.join();
+
+  BOOST_TEST(mismatches.load() == 0);
+  BOOST_TEST(read_spectra.load() == static_cast<int>(kSpectra));
+
+  const auto data = index.find_file(MzPeak::Schema::EntityType::Spectrum,
+                                    MzPeak::Schema::DataKind::Type::DataArray);
+  BOOST_TEST_REQUIRE((data != index.files().end()));
+  const int groups = index.manager()->parquet(*data)->file_metadata()->num_row_groups();
+  const auto stats = index.manager()->row_group_cache().stats();
+  BOOST_TEST(groups > 1);
+  BOOST_TEST(stats.decodes == static_cast<std::size_t>(groups));
+  BOOST_TEST(stats.evictions == 0u);
 }
 
 /******************************************************************************/

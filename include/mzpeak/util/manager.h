@@ -57,7 +57,13 @@ public:
   /**
    * Open a Parquet file from the mzPeak archive.
    */
+  /// A reader over @p file.  Every Parquet from one Manager shares the
+  /// row-group cache below, so a group is decoded once for all of them.
   std::unique_ptr<Util::Parquet> parquet(const Schema::File&) const;
+
+  /// The archive-wide decoded-row-group cache: size its budget to the number
+  /// of readers you run, read its stats to see what they cost.
+  RowGroupCache& row_group_cache() const { return *row_group_cache_; }
 
   /**
    * The mzPeak format version from the index `metadata.version`, or an empty
@@ -104,6 +110,7 @@ public:
 
 private:
   std::shared_ptr<MzPeak::IO::Archive> archive_;
+  std::shared_ptr<RowGroupCache> row_group_cache_ = std::make_shared<RowGroupCache>();
   std::vector<Schema::File> files_;
 
   // The mzPeak format version from metadata.version (empty if absent).
