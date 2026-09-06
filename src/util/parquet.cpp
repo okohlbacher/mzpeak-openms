@@ -19,6 +19,8 @@ directory of this repository.
 #include <parquet/arrow/reader.h>
 #include <ranges>
 
+#include <arrow/memory_pool.h>
+
 #include "mzpeak/exception.h"
 #include "mzpeak/util/arrow.h"
 
@@ -71,6 +73,19 @@ struct Parquet::Impl {
     auto raf = arrow_->reader();
 
     auto reader_builder = parquet::arrow::FileReaderBuilder();
+    // Decoded row groups come from the SYSTEM pool, not Arrow's default.
+    //
+    // A decoded group outlives the thread that decoded it: the cache is
+    // shared across readers (RowGroupCache), so a buffer allocated on a
+    // worker is routinely freed later, often after that worker has exited --
+    // a consumer using OpenMP tears its workers down at the end of each
+    // parallel region.  Arrow 25's bundled mimalloc/jemalloc crash on that
+    // free (EXC_BAD_ACCESS in _mi_arenas_page_abandon); plain malloc/free
+    // does not care which thread frees, or whether it still exists.
+    // Measured cost on a 7,534-spectrum archive: none, and slightly less
+    // peak RSS (185 -> 180 MB at 16 threads).  Revisit if a later Arrow
+    // fixes the allocator.
+    reader_builder.memory_pool(arrow::system_memory_pool());
     auto status = reader_builder.Open(std::move(raf));
 
     if (!status.ok()) {

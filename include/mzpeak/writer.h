@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -162,6 +163,39 @@ struct RunContents {
  *         arrays differ in length, or if a chromatogram's type implies an
  *         SRM/MRM product selection this format cannot carry.
  */
+/// The streaming counterpart of write_run_archive() for spectra: append one
+/// at a time and they land on disk row group by row group, so memory is one
+/// row group of points plus a few hundred bytes of metadata per spectrum,
+/// never the run.  finish() writes the metadata tables and the index, seals
+/// the archive and removes the working files; a writer destroyed unfinished
+/// removes them too and leaves no archive.  Spectra only: chromatograms and
+/// wavelength spectra still go through write_run_archive().
+class RunArchiveWriter final {
+public:
+  /// @param points_per_row_group  points per Parquet row group, the unit a
+  ///   reader decodes; 1,048,576 matches the reference converter.
+  explicit RunArchiveWriter(const std::filesystem::path& zip_path,
+                            std::size_t points_per_row_group = std::size_t(1) << 20);
+  ~RunArchiveWriter();
+  RunArchiveWriter(const RunArchiveWriter&) = delete;
+  RunArchiveWriter& operator=(const RunArchiveWriter&) = delete;
+
+  /// Append the next spectrum; its index is the number appended before it.
+  /// Validated like write_run_archive(): equal mz/intensity lengths, no NaN
+  /// m/z; points are stored in ascending m/z.
+  void add(SpectrumData spectrum);
+  /// Run-level metadata for the index; any time before finish().
+  void set_metadata(const RunMetadata& metadata);
+  /// Spectra appended so far.
+  std::size_t size() const;
+  /// Seal the archive.  Idempotent.
+  void finish();
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 void write_run_directory(const std::filesystem::path& dir,
                          const RunContents& contents,
                          const RunMetadata* run_metadata = nullptr);

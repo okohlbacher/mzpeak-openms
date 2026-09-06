@@ -39,23 +39,26 @@ struct PointColumns {
 /******************************************************************************/
 // Validate all spectra up front so a bad input cannot leave a partial
 // artifact behind.
+void validate_one(const SpectrumData& s, std::size_t i, const char* context)
+{
+  if (s.mz.size() != s.intensity.size()) {
+    throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
+                       " has mismatched mz/intensity lengths");
+  }
+  if (std::ranges::any_of(s.mz, [](double m) { return std::isnan(m); })) {
+    throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
+                       " has a NaN m/z; points are written in ascending order "
+                       "and NaN has no place in that order");
+  }
+}
+
+// Points are written in ascending m/z under a sorting_rank:0 declaration.  A
+// NaN makes the sort comparator ill-defined (undefined behaviour) and could
+// leave the stored coordinate array non-ascending, contradicting the
+// declaration a reader may binary search on -- hence the NaN check above.
 void validate(const std::vector<SpectrumData>& spectra, const char* context)
 {
-  for (std::size_t i = 0; i < spectra.size(); ++i) {
-    if (spectra[i].mz.size() != spectra[i].intensity.size()) {
-      throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
-                         " has mismatched mz/intensity lengths");
-    }
-    // Points are written in ascending m/z under a sorting_rank:0 declaration.
-    // A NaN makes the sort comparator ill-defined (undefined behaviour) and
-    // could leave the stored coordinate array non-ascending, contradicting the
-    // declaration a reader may binary search on.
-    if (std::ranges::any_of(spectra[i].mz, [](double m) { return std::isnan(m); })) {
-      throw ParquetError(std::string(context) + ": spectrum " + std::to_string(i) +
-                         " has a NaN m/z; points are written in ascending order "
-                         "and NaN has no place in that order");
-    }
-  }
+  for (std::size_t i = 0; i < spectra.size(); ++i) validate_one(spectra[i], i, context);
 }
 
 /******************************************************************************/
@@ -180,22 +183,26 @@ std::string spectra_index_json(bool with_data,
 /******************************************************************************/
 // Per-spectrum metadata rows.  The data-point / peak counts gate which table
 // a reader loads a spectrum from, so they must match where the points went.
+Util::SpectrumMetaRow metadata_row(std::size_t i, const SpectrumData& s)
+{
+  return {/*index=*/static_cast<uint64_t>(i),
+          /*id=*/s.id.value_or("index=" + std::to_string(i)),
+          /*ms_level=*/s.ms_level,
+          /*retention_time=*/s.retention_time,
+          /*polarity=*/s.polarity,
+          /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
+          /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
+          /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128",
+          /*precursors=*/s.precursors};
+}
+
 std::vector<Util::SpectrumMetaRow>
 build_metadata_rows(const std::vector<SpectrumData>& spectra)
 {
   std::vector<Util::SpectrumMetaRow> rows;
   rows.reserve(spectra.size());
   for (std::size_t i = 0; i < spectra.size(); ++i) {
-    const SpectrumData& s = spectra[i];
-    rows.push_back({/*index=*/static_cast<uint64_t>(i),
-                    /*id=*/s.id.value_or("index=" + std::to_string(i)),
-                    /*ms_level=*/s.ms_level,
-                    /*retention_time=*/s.retention_time,
-                    /*polarity=*/s.polarity,
-                    /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
-                    /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
-                    /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128",
-                    /*precursors=*/s.precursors});
+    rows.push_back(metadata_row(i, spectra[i]));
   }
   return rows;
 }
@@ -628,6 +635,32 @@ void add_stored_member(zip_t* archive, const char* name, const std::string& data
 }
 
 /******************************************************************************/
+// Add a STORED member backed by a file on disk.  libzip reads it at
+// zip_close, so the file must stay put until then.
+void add_stored_file_member(zip_t* archive, const char* name, const fs::path& path)
+{
+  zip_source_t* source =
+      zip_source_file(archive, Util::narrow(path).c_str(), 0, ZIP_LENGTH_TO_END);
+  if (source == nullptr) {
+    throw ParquetError(std::string("RunArchiveWriter: zip_source_file failed for ") +
+                       name + ": " + zip_strerror(archive));
+  }
+  zip_int64_t idx =
+      zip_file_add(archive, name, source, ZIP_FL_ENC_UTF_8 | ZIP_FL_OVERWRITE);
+  if (idx < 0) {
+    zip_source_free(source);
+    throw ParquetError(std::string("RunArchiveWriter: zip_file_add failed for ") +
+                       name + ": " + zip_strerror(archive));
+  }
+  if (zip_set_file_compression(archive, static_cast<zip_uint64_t>(idx), ZIP_CM_STORE,
+                               0) != 0) {
+    throw ParquetError(std::string("RunArchiveWriter: zip_set_file_compression "
+                                   "failed for ") +
+                       name + ": " + zip_strerror(archive));
+  }
+}
+
+/******************************************************************************/
 void write_index_file(const fs::path& path, const std::string& json)
 {
   std::ofstream out(path, std::ios::binary);
@@ -887,6 +920,168 @@ void write_run_archive(const fs::path& zip_path,
     zip_discard(archive);
     throw ParquetError(msg);
   }
+}
+
+/******************************************************************************/
+struct RunArchiveWriter::Impl {
+  /// One point table (data or peaks): the pending row group and, once the
+  /// first group has been flushed, the stream writing to the working file.
+  struct Stream {
+    fs::path path;
+    PointColumns pending;
+    std::unique_ptr<Util::PointTableStream> table;
+    std::size_t points = 0;
+  };
+
+  fs::path zip_path;
+  fs::path tmp_dir;
+  std::size_t points_per_group;
+  std::optional<RunMetadata> metadata;
+  Stream data;
+  Stream peaks;
+  std::vector<Util::SpectrumMetaRow> rows;
+  bool finished = false;
+
+  Impl(fs::path path, std::size_t per_group)
+      : zip_path(std::move(path)), points_per_group(std::max<std::size_t>(1, per_group))
+  {
+    tmp_dir = zip_path;
+    tmp_dir += ".tmp";
+    std::error_code ec;
+    fs::remove_all(tmp_dir, ec);
+    fs::create_directories(tmp_dir);
+    data.path = tmp_dir / "spectra_data.parquet";
+    peaks.path = tmp_dir / "spectra_peaks.parquet";
+  }
+
+  ~Impl()
+  {
+    // Finished: the working files are already gone.  Abandoned: take them
+    // with us, and the streams' handles before them.
+    data.table.reset();
+    peaks.table.reset();
+    std::error_code ec;
+    fs::remove_all(tmp_dir, ec);
+  }
+
+  void flush(Stream& s)
+  {
+    if (s.pending.mz.empty()) return;
+    if (!s.table) s.table = std::make_unique<Util::PointTableStream>(s.path.string());
+    s.table->write_row_group(s.pending.spectrum_index, s.pending.mz, s.pending.intensity);
+    s.points += s.pending.mz.size();
+    s.pending.spectrum_index.clear();
+    s.pending.mz.clear();
+    s.pending.intensity.clear();
+  }
+};
+
+/******************************************************************************/
+RunArchiveWriter::RunArchiveWriter(const fs::path& zip_path,
+                                   std::size_t points_per_row_group)
+    : impl_(std::make_unique<Impl>(zip_path, points_per_row_group))
+{
+}
+
+RunArchiveWriter::~RunArchiveWriter() = default;
+
+/******************************************************************************/
+void RunArchiveWriter::add(SpectrumData s)
+{
+  if (impl_->finished) throw ParquetError("RunArchiveWriter: add after finish");
+  const std::size_t index = impl_->rows.size();
+  validate_one(s, index, "RunArchiveWriter");
+  impl_->rows.push_back(metadata_row(index, s));
+
+  // Points in ascending m/z, as flatten() does, so sorting_rank:0 holds.
+  Impl::Stream& stream = s.centroid ? impl_->peaks : impl_->data;
+  std::vector<std::size_t> order(s.mz.size());
+  std::iota(order.begin(), order.end(), std::size_t{0});
+  std::ranges::sort(order, [&](std::size_t a, std::size_t b) { return s.mz[a] < s.mz[b]; });
+  PointColumns& p = stream.pending;
+  for (std::size_t k : order) {
+    p.spectrum_index.push_back(static_cast<uint64_t>(index));
+    p.mz.push_back(s.mz[k]);
+    p.intensity.push_back(s.intensity[k]);
+  }
+  // Whole spectra per group, so a group boundary never splits one: the
+  // reader's straddling case is allowed but costs it a second group.
+  if (p.mz.size() >= impl_->points_per_group) impl_->flush(stream);
+}
+
+/******************************************************************************/
+void RunArchiveWriter::set_metadata(const RunMetadata& metadata)
+{
+  impl_->metadata = metadata;
+}
+
+std::size_t RunArchiveWriter::size() const { return impl_->rows.size(); }
+
+/******************************************************************************/
+void RunArchiveWriter::finish()
+{
+  if (impl_->finished) return;
+  Impl& im = *impl_;
+  im.flush(im.data);
+  im.flush(im.peaks);
+
+  const std::size_t total = im.rows.size();
+  const bool with_data = im.data.table != nullptr;
+  const bool with_peaks = im.peaks.table != nullptr;
+  if (with_data) im.data.table->close(point_file_kv(total, im.data.points));
+  if (with_peaks) im.peaks.table->close(point_file_kv(total, im.peaks.points));
+
+  // Same members as write_run_archive(): the point tables from their working
+  // files, the metadata tables and the index from memory (small: a few
+  // hundred bytes per spectrum).
+  std::vector<Member> members;
+  if (!im.rows.empty()) {
+    members.push_back({"spectra_metadata.parquet", Util::spectra_metadata_bytes(im.rows)});
+    std::array<std::string, 3> facets(Util::spectra_metadata_facet_bytes(im.rows));
+    members.push_back({"spectra_metadata_scans.parquet", std::move(facets[0])});
+    members.push_back({"spectra_metadata_precursors.parquet", std::move(facets[1])});
+    members.push_back({"spectra_metadata_selected_ions.parquet", std::move(facets[2])});
+  }
+  std::string index_json;
+  if (im.rows.empty()) {
+    index_json = Util::mzpeak_index_json({}, "0.9.0");
+  } else {
+    index_json = spectra_index_json(with_data, with_peaks,
+                                    im.metadata ? &*im.metadata : nullptr);
+  }
+  members.push_back({"mzpeak_index.json", std::move(index_json)});
+
+  int errnum = 0;
+  zip_t* archive = zip_open(Util::narrow(im.zip_path).c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
+  if (archive == nullptr) {
+    zip_error_t error;
+    zip_error_init_with_code(&error, errnum);
+    std::string msg("RunArchiveWriter: failed to create archive " + im.zip_path.string() +
+                    ": " + zip_error_strerror(&error));
+    zip_error_fini(&error);
+    throw ParquetError(msg);
+  }
+  try {
+    if (with_data) add_stored_file_member(archive, "spectra_data.parquet", im.data.path);
+    if (with_peaks) add_stored_file_member(archive, "spectra_peaks.parquet", im.peaks.path);
+    for (const Member& member : members) {
+      add_stored_member(archive, member.name.c_str(), member.bytes);
+    }
+  } catch (...) {
+    zip_discard(archive);
+    throw;
+  }
+  if (zip_close(archive) != 0) {
+    std::string msg("RunArchiveWriter: failed to finalize archive " + im.zip_path.string() +
+                    ": " + zip_strerror(archive));
+    zip_discard(archive);
+    throw ParquetError(msg);
+  }
+  im.finished = true;
+  im.data.table.reset();
+  im.peaks.table.reset();
+  std::error_code ec;
+  fs::remove_all(im.tmp_dir, ec);
 }
 
 } // namespace MzPeak

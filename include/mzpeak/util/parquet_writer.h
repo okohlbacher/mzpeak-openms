@@ -11,6 +11,7 @@ directory of this repository.
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -92,6 +93,33 @@ point_spectra_data_bytes(const std::vector<uint64_t>& spectrum_index,
  * must match the data table) and the data-point/peak counts that gate array
  * loading.  All other reference metadata fields are omitted for now.
  */
+/// A point table written row group by row group: open on a path, append,
+/// close with the file-level key/value metadata.  Same schema, properties and
+/// sorting-column declaration as write_point_spectra_data(), which is why the
+/// entity index must arrive in ascending order across every call -- a group
+/// whose first index is below the last one written is refused.
+class PointTableStream final {
+public:
+  explicit PointTableStream(const std::string& path);
+  ~PointTableStream();
+  PointTableStream(const PointTableStream&) = delete;
+  PointTableStream& operator=(const PointTableStream&) = delete;
+
+  /// One row group from three parallel columns.
+  void write_row_group(const std::vector<uint64_t>& spectrum_index,
+                       const std::vector<double>& mz,
+                       const std::vector<float>& intensity);
+  /// Points written so far.
+  int64_t rows() const;
+  /// Embed @p file_kv and finish the file.  Without this call the file is
+  /// incomplete; the destructor closes the handle and nothing more.
+  void close(const std::map<std::string, std::string>& file_kv);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 struct SpectrumMetaRow {
   uint64_t index;
   std::string id;

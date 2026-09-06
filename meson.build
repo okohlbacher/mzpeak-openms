@@ -247,6 +247,7 @@ test_names = [
     'writer_metadata',
     'eic',
     'spectra_query',
+    'stream_writer',
 ]
 
 foreach test : test_names

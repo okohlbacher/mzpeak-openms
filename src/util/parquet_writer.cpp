@@ -19,6 +19,7 @@ directory of this repository.
 #include <arrow/table.h>
 #include <arrow/type.h>
 #include <arrow/util/key_value_metadata.h>
+#include <limits>
 #include <memory>
 #include <parquet/arrow/writer.h>
 #include <parquet/properties.h>
@@ -170,6 +171,75 @@ bool entity_index_is_ascending(const arrow::Table& table)
 }
 
 /******************************************************************************/
+// The `point` struct table of a spectra data/peaks file: one struct column
+// whose three leaves mirror the reference file, each a nullable field of the
+// matching type.  Shared by the one-shot writer and the streaming one so the
+// two can never drift.
+std::shared_ptr<arrow::Table>
+point_spectra_table(const std::vector<uint64_t>& spectrum_index,
+                    const std::vector<double>& mz,
+                    const std::vector<float>& intensity)
+{
+  auto index_array(build_array<arrow::UInt64Builder>(spectrum_index));
+  auto mz_array(build_array<arrow::DoubleBuilder>(mz));
+  auto intensity_array(build_array<arrow::FloatBuilder>(intensity));
+  arrow::FieldVector point_fields{
+      arrow::field("spectrum_index", arrow::uint64(), /*nullable=*/true),
+      arrow::field("mz", arrow::float64(), /*nullable=*/true),
+      arrow::field("intensity", arrow::float32(), /*nullable=*/true),
+  };
+  auto point_result(arrow::StructArray::Make(
+      {index_array, mz_array, intensity_array}, point_fields));
+  if (!point_result.ok()) {
+    throw ParquetError("build point struct: " + point_result.status().ToString());
+  }
+  std::shared_ptr<arrow::Array> point_array(point_result.ValueOrDie());
+  auto schema(arrow::schema(
+      {arrow::field("point", point_array->type(), /*nullable=*/true)}));
+  return arrow::Table::Make(schema, {point_array});
+}
+
+// The project's standard writer properties: ZSTD, statistics, page index,
+// and -- when @p entity_index_leaf names one -- a sorting column on it.
+std::shared_ptr<parquet::WriterProperties>
+standard_writer_properties(std::optional<int> entity_index_leaf,
+                           std::optional<int64_t> max_row_group_length = std::nullopt)
+{
+  parquet::WriterProperties::Builder props_builder;
+  props_builder.compression(arrow::Compression::ZSTD);
+  props_builder.enable_statistics();
+  props_builder.enable_write_page_index();
+  // Parquet caps a row group at 1M rows by default and splits a larger
+  // WriteTable across groups.  A streaming writer sizes its own groups and
+  // hands over whole spectra, so it raises the cap and gets exactly the
+  // groups it asked for instead of a 1M group plus a ragged remainder.
+  if (max_row_group_length.has_value()) {
+    props_builder.max_row_group_length(*max_row_group_length);
+  }
+  if (entity_index_leaf.has_value()) {
+    props_builder.set_sorting_columns({parquet::SortingColumn{
+        /*column_idx=*/*entity_index_leaf, /*descending=*/false,
+        /*nulls_first=*/false}});
+  }
+  return props_builder.build();
+}
+
+void add_file_kv(parquet::arrow::FileWriter& writer,
+                 const std::map<std::string, std::string>& file_kv)
+{
+  if (file_kv.empty()) return;
+  std::vector<std::string> keys;
+  std::vector<std::string> values;
+  keys.reserve(file_kv.size());
+  values.reserve(file_kv.size());
+  for (const auto& [key, value] : file_kv) {
+    keys.push_back(key);
+    values.push_back(value);
+  }
+  auto kv(std::make_shared<arrow::KeyValueMetadata>(keys, values));
+  check(writer.AddKeyValueMetadata(kv), "add key/value metadata");
+}
+
 // Write an Arrow table to a Parquet sink with the project's standard
 // properties: ZSTD, statistics, page index, store_schema, a sorting column
 // on the first leaf (the entity index), a bounded row-group size, and
@@ -201,16 +271,7 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
     entity_index_leaf.reset();
   }
 
-  parquet::WriterProperties::Builder props_builder;
-  props_builder.compression(arrow::Compression::ZSTD);
-  props_builder.enable_statistics();
-  props_builder.enable_write_page_index();
-  if (entity_index_leaf.has_value()) {
-    props_builder.set_sorting_columns({parquet::SortingColumn{
-        /*column_idx=*/*entity_index_leaf, /*descending=*/false,
-        /*nulls_first=*/false}});
-  }
-  auto writer_props(props_builder.build());
+  auto writer_props(standard_writer_properties(entity_index_leaf));
 
   // Store the Arrow schema so the struct/types round-trip exactly.
   auto arrow_props(
@@ -237,18 +298,7 @@ void write_table_to_sink(const std::shared_ptr<arrow::io::OutputStream>& sink,
   check(writer->WriteTable(*table, row_group_size), "write table");
 
   // Embed file-level key/value metadata after the data, before Close().
-  if (!file_kv.empty()) {
-    std::vector<std::string> keys;
-    std::vector<std::string> values;
-    keys.reserve(file_kv.size());
-    values.reserve(file_kv.size());
-    for (const auto& [key, value] : file_kv) {
-      keys.push_back(key);
-      values.push_back(value);
-    }
-    auto kv(std::make_shared<arrow::KeyValueMetadata>(keys, values));
-    check(writer->AddKeyValueMetadata(kv), "add key/value metadata");
-  }
+  add_file_kv(*writer, file_kv);
 
   check(writer->Close(), "close parquet writer");
 }
@@ -307,33 +357,8 @@ void write_point_spectra_data_to_sink(
                        "the same length");
   }
 
-  // Leaf arrays for the three children of the `point` struct.
-  auto index_array(build_array<arrow::UInt64Builder>(spectrum_index));
-  auto mz_array(build_array<arrow::DoubleBuilder>(mz));
-  auto intensity_array(build_array<arrow::FloatBuilder>(intensity));
-
-  // Struct fields.  These mirror the reference file: each leaf is a
-  // nullable field of the matching type.
-  arrow::FieldVector point_fields{
-      arrow::field("spectrum_index", arrow::uint64(), /*nullable=*/true),
-      arrow::field("mz", arrow::float64(), /*nullable=*/true),
-      arrow::field("intensity", arrow::float32(), /*nullable=*/true),
-  };
-
-  auto point_result(arrow::StructArray::Make(
-      {index_array, mz_array, intensity_array}, point_fields));
-  if (!point_result.ok()) {
-    throw ParquetError("build point struct: " + point_result.status().ToString());
-  }
-  std::shared_ptr<arrow::Array> point_array(point_result.ValueOrDie());
-
-  // Top-level schema: a single struct column named `point`.
-  auto schema(arrow::schema(
-      {arrow::field("point", point_array->type(), /*nullable=*/true)}));
-
-  auto table(arrow::Table::Make(schema, {point_array}));
-
-  write_table_to_sink(sink, table, file_kv, max_row_group);
+  write_table_to_sink(sink, point_spectra_table(spectrum_index, mz, intensity),
+                      file_kv, max_row_group);
 }
 
 /******************************************************************************/
@@ -953,6 +978,88 @@ wavelength_metadata_bytes(const std::vector<WavelengthMetaRow>& rows,
   auto sink(buffer_sink());
   write_table_to_sink(sink, wavelength_metadata_table(rows), file_kv);
   return finish_to_string(sink);
+}
+
+/******************************************************************************/
+struct PointTableStream::Impl {
+  std::shared_ptr<arrow::io::FileOutputStream> sink;
+  std::unique_ptr<parquet::arrow::FileWriter> writer;
+  int64_t rows = 0;
+  uint64_t last_index = 0;
+  bool closed = false;
+};
+
+PointTableStream::PointTableStream(const std::string& path)
+    : impl_(std::make_unique<Impl>())
+{
+  auto sink_result(arrow::io::FileOutputStream::Open(path));
+  if (!sink_result.ok()) {
+    throw ParquetError("open point table for writing: " + path + ": " +
+                       sink_result.status().ToString());
+  }
+  impl_->sink = sink_result.ValueOrDie();
+
+  // The schema is fixed, so the sorting-column leaf can be derived from an
+  // empty table up front; whether the data honours it is enforced per group.
+  auto schema(point_spectra_table({}, {}, {})->schema());
+  auto writer_props(standard_writer_properties(entity_index_leaf_of(*schema),
+                                               std::numeric_limits<int64_t>::max()));
+  auto arrow_props(
+      parquet::ArrowWriterProperties::Builder().store_schema()->build());
+  auto writer_result(parquet::arrow::FileWriter::Open(
+      *schema, arrow::default_memory_pool(), impl_->sink, writer_props,
+      arrow_props));
+  if (!writer_result.ok()) {
+    throw ParquetError("open parquet writer: " + writer_result.status().ToString());
+  }
+  impl_->writer = std::move(writer_result).ValueOrDie();
+}
+
+PointTableStream::~PointTableStream()
+{
+  // An unclosed stream is an abandoned file: release the handle, write no
+  // footer, throw nothing.
+  if (impl_ && !impl_->closed && impl_->sink) {
+    (void)impl_->sink->Close();
+  }
+}
+
+void PointTableStream::write_row_group(const std::vector<uint64_t>& spectrum_index,
+                                       const std::vector<double>& mz,
+                                       const std::vector<float>& intensity)
+{
+  if (spectrum_index.size() != mz.size() || mz.size() != intensity.size()) {
+    throw ParquetError("PointTableStream: input vectors must have the same length");
+  }
+  if (spectrum_index.empty()) return;
+  if (impl_->closed) throw ParquetError("PointTableStream: write after close");
+  // The file declares the index sorted; keep that true across groups.
+  if (impl_->rows > 0 && spectrum_index.front() < impl_->last_index) {
+    throw ParquetError("PointTableStream: spectrum index " +
+                       std::to_string(spectrum_index.front()) +
+                       " arrives after " + std::to_string(impl_->last_index) +
+                       "; groups must be appended in ascending index order");
+  }
+  for (std::size_t i = 1; i < spectrum_index.size(); ++i) {
+    if (spectrum_index[i] < spectrum_index[i - 1]) {
+      throw ParquetError("PointTableStream: spectrum index not ascending within a group");
+    }
+  }
+  auto table(point_spectra_table(spectrum_index, mz, intensity));
+  check(impl_->writer->WriteTable(*table, table->num_rows()), "write row group");
+  impl_->rows += table->num_rows();
+  impl_->last_index = spectrum_index.back();
+}
+
+int64_t PointTableStream::rows() const { return impl_->rows; }
+
+void PointTableStream::close(const std::map<std::string, std::string>& file_kv)
+{
+  if (impl_->closed) return;
+  add_file_kv(*impl_->writer, file_kv);
+  check(impl_->writer->Close(), "close parquet writer");
+  check(impl_->sink->Close(), "close point table file");
+  impl_->closed = true;
 }
 
 } // namespace MzPeak::Util
