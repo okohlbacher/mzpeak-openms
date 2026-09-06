@@ -11,10 +11,14 @@ install_headers([
   'src/main/cpp/MSNumpress.hpp'
 ], subdir: 'MSNumpress')
 
-cpp_lib_so = library(
-  'numpress', cpp_sources,
-  include_directories : cpp_include,
-  install : true)
+# No dllexport annotations: on Windows a DLL would export nothing (see the
+# parent meson.build), so only the static library is built there.
+if host_machine.system() != 'windows'
+  cpp_lib_so = library(
+    'numpress', cpp_sources,
+    include_directories : cpp_include,
+    install : true)
+endif
 
 cpp_lib_a = static_library(
   'numpress', cpp_sources,
@@ -33,6 +37,8 @@ msnumpres_cpp_lib_a = declare_dependency(
   include_directories : cpp_include,
   link_with : cpp_lib_a)
 
-msnumpres_cpp_lib_so = declare_dependency(
-  include_directories : cpp_include,
-  link_with : cpp_lib_so)
+if host_machine.system() != 'windows'
+  msnumpres_cpp_lib_so = declare_dependency(
+    include_directories : cpp_include,
+    link_with : cpp_lib_so)
+endif

@@ -3,7 +3,9 @@ project('MZPeak C++ Library', 'cpp',
         version : '1.0.0',
         license : 'BSD3',
         default_options : [
-          'cpp_std=c++23',
+          # A list: meson takes the first one the compiler knows. MSVC has no
+          # 'c++23' choice, only 'c++latest'.
+          'cpp_std=c++23,c++latest',
           'warning_level=3',
         ])
 
@@ -17,7 +19,15 @@ add_project_arguments(compiler.get_supported_arguments([
   '-Wswitch-enum',
   '/w14061',
   '/w14062',
+  '/utf-8',  # MSVC: source is UTF-8 regardless of the code page
+  '/bigobj', # MSVC: Arrow/Boost template TUs overflow the default section count
 ]), language: 'cpp')
+
+is_windows = host_machine.system() == 'windows'
+if is_windows
+  # <windows.h> reaches in through Arrow; keep its min/max macros out.
+  add_project_arguments('-DNOMINMAX', '-DWIN32_LEAN_AND_MEAN', language : 'cpp')
+endif
 
 #Source files included in the library:
 lib_sources = [
@@ -166,14 +176,7 @@ deps = [
 # to the subproject left `decodeLinear`/`decodeSlof` UNDEFINED in libmzpeak.a,
 # so a downstream static link that used to work now fails unless the consumer
 # also links msnumpress.  link_whole restores the old property.
-deps_so = deps + [numpress.get_variable('msnumpres_cpp_lib_so')]
 deps_a = deps + [numpress.get_variable('msnumpres_cpp_lib_a')]
-
-libmzpeak_so = library(
-  'mzpeak', lib_sources,
-  dependencies : deps_so,
-  include_directories : include,
-  install : true)
 
 libmzpeak_a = static_library(
   'mzpeak', lib_sources,
@@ -181,6 +184,25 @@ libmzpeak_a = static_library(
   link_whole : numpress.get_variable('cpp_lib_a'),
   include_directories : include,
   install : true)
+
+# ponytail: nothing here carries dllexport annotations, so on Windows a DLL
+# would export no symbols and link.exe would emit no import library. Windows
+# builds the static library only; tests, tools and consumers link that.
+if is_windows
+  libmzpeak = libmzpeak_a
+  libmzpeak_deps = deps_a
+else
+  deps_so = deps + [numpress.get_variable('msnumpres_cpp_lib_so')]
+
+  libmzpeak_so = library(
+    'mzpeak', lib_sources,
+    dependencies : deps_so,
+    include_directories : include,
+    install : true)
+
+  libmzpeak = libmzpeak_so
+  libmzpeak_deps = deps_so
+endif
 
 #Testing
 test_names = [
@@ -225,8 +247,8 @@ foreach test : test_names
          executable('@0@_test'.format(test),
                     'test/@0@_test.cpp'.format(test),
                     include_directories : include,
-                    dependencies : deps_so,
-                    link_with : libmzpeak_so),
+                    dependencies : libmzpeak_deps,
+                    link_with : libmzpeak),
          verbose : false)
 endforeach
 
@@ -239,8 +261,8 @@ test('e2e',
      executable('e2e_test',
                 'test/e2e_test.cpp',
                 include_directories : include,
-                dependencies : deps_so,
-                link_with : libmzpeak_so),
+                dependencies : libmzpeak_deps,
+                link_with : libmzpeak),
      suite : 'e2e',
      timeout : 300,
      verbose : false)
@@ -257,8 +279,8 @@ if get_option('tools')
       example,
       'examples/@0@.cpp'.format(example),
       include_directories : include,
-      dependencies : deps_so,
-      link_with : libmzpeak_so,
+      dependencies : libmzpeak_deps,
+      link_with : libmzpeak,
       install : true,
       install_dir : 'examples')
   endforeach
@@ -273,8 +295,8 @@ if get_option('tools')
       tool,
       'bin/@0@.cpp'.format(tool),
       include_directories : include,
-      dependencies : deps_so,
-      link_with : libmzpeak_so,
+      dependencies : libmzpeak_deps,
+      link_with : libmzpeak,
       install : true)
   endforeach
 endif
