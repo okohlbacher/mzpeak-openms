@@ -20,6 +20,7 @@ directory of this repository.
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
 #include "mzpeak/writer.h"
+#include "mzpeak/util/compat.h"
 
 namespace fs = std::filesystem;
 
@@ -53,7 +54,7 @@ struct TempFile {
 zip_int32_t member_compression(const fs::path& archive_path, const char* name)
 {
   int errnum = 0;
-  zip_t* archive = zip_open(archive_path.c_str(), ZIP_RDONLY, &errnum);
+  zip_t* archive = zip_open(MzPeak::Util::narrow(archive_path).c_str(), ZIP_RDONLY, &errnum);
   if (archive == nullptr) return -1;
 
   zip_stat_t stat;

@@ -10,6 +10,7 @@ directory of this repository.
 
 #include "mzpeak/exception.h"
 #include "mzpeak/io/zip.h"
+#include "mzpeak/util/compat.h"
 
 namespace MzPeak::IO {
 
@@ -29,7 +30,7 @@ public:
   {
   }
 
-  std::string name() const override { return impl_->path_; }
+  std::string name() const override { return Util::narrow(impl_->path_); }
 
   std::size_t size() const override { return impl_->size_; }
 
@@ -112,7 +113,7 @@ struct Zip::Impl {
       , path_(path)
   {
     int errnum{};
-    archive = zip_open(path.c_str(), ZIP_RDONLY, &errnum);
+    archive = zip_open(Util::narrow(path).c_str(), ZIP_RDONLY, &errnum);
 
     if (archive == nullptr) {
       error("failed to open zip archive ", errnum);
@@ -201,19 +202,20 @@ std::unique_ptr<MzPeak::IO::File> Zip::read_file(const fs::path& path)
   // Open a dedicated archive handle for this member so its seeks are
   // independent of any other member the reader keeps open (RDR-26).
   int errnum{};
-  zip_t* archive = zip_open(impl_->path_.c_str(), ZIP_RDONLY, &errnum);
+  zip_t* archive = zip_open(Util::narrow(impl_->path_).c_str(), ZIP_RDONLY, &errnum);
   if (archive == nullptr) {
     impl_->error_open(path, errnum);
   }
 
   zip_stat_t stat;
-  if (zip_stat(archive, path.c_str(), ZIP_FL_UNCHANGED, &stat) != 0 ||
+  const std::string member = Util::narrow(path);
+  if (zip_stat(archive, member.c_str(), ZIP_FL_UNCHANGED, &stat) != 0 ||
       !(stat.valid & ZIP_STAT_SIZE)) {
     zip_close(archive);
     impl_->error_open(path, {});
   }
 
-  zip_file_t* file = zip_fopen(archive, path.c_str(), 0);
+  zip_file_t* file = zip_fopen(archive, member.c_str(), 0);
   if (file == nullptr) {
     zip_close(archive);
     impl_->error_open(path, {});

@@ -17,6 +17,7 @@ directory of this repository.
 #include <zip.h>
 
 #include "mzpeak/exception.h"
+#include "mzpeak/util/compat.h"
 #include "mzpeak/schema/data_kind.h"
 #include "mzpeak/util/json_writer.h"
 #include "mzpeak/util/parquet_writer.h"
@@ -735,7 +736,7 @@ void write_spectra_archive_impl(const fs::path& zip_path,
   std::string index_json(spectra_index_json(with_data, with_peaks, run_metadata));
 
   int errnum = 0;
-  zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
+  zip_t* archive = zip_open(Util::narrow(zip_path).c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
   if (archive == nullptr) {
     zip_error_t error;
     zip_error_init_with_code(&error, errnum);
@@ -861,7 +862,7 @@ void write_run_archive(const fs::path& zip_path,
   std::vector<Member> members(build_run_members(contents, run_metadata));
 
   int errnum = 0;
-  zip_t* archive = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
+  zip_t* archive = zip_open(Util::narrow(zip_path).c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
   if (archive == nullptr) {
     zip_error_t error;
     zip_error_init_with_code(&error, errnum);
