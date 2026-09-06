@@ -43,7 +43,15 @@ struct Scratch {
   {
     fs::remove_all(path);
   }
-  ~Scratch() { fs::remove_all(path); }
+  ~Scratch()
+  {
+    // error_code, not a throw: a destructor that throws terminates the process
+    // before Boost.Test reports anything. Windows refuses to delete a file that
+    // is still open, so a leaked handle shows up HERE, with its name.
+    std::error_code ec;
+    fs::remove_all(path, ec);
+    BOOST_TEST(!ec, "remove_all " << path.string() << ": " << ec.message());
+  }
 };
 
 /// A chromatogram with a linear ramp: times 0, 30, 60, 90, 120 SECONDS.

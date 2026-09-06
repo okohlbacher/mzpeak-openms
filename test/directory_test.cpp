@@ -37,5 +37,7 @@ BOOST_AUTO_TEST_CASE(can_read_file)
   std::string line;
 
   std::getline(*stream, line);
+  // The file is read raw; a CRLF checkout (Windows runners) leaves the \r.
+  if (!line.empty() && line.back() == '\r') line.pop_back();
   BOOST_TEST(line == "/*");
 }
