@@ -141,7 +141,9 @@ BOOST_AUTO_TEST_CASE(non_ascending_index_declares_no_sorting_column)
         path.string(), index, {100.0, 200.0, 300.0}, {1.0f, 2.0f, 3.0f}, kv);
     auto reader = parquet::ParquetFileReader::OpenFile(path.string());
     std::size_t n = reader->metadata()->RowGroup(0)->sorting_columns().size();
-    reader->Close();
+    // Close() keeps the source open until the reader dies; Windows refuses
+    // to remove a file that is still open.
+    reader.reset();
     fs::remove(path);
     return n;
   };

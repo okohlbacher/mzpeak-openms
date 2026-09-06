@@ -19,7 +19,9 @@ class DirFile_ final : public MzPeak::IO::File {
 public:
   DirFile_(const fs::path& path)
       : path_(path)
-      , stream_(path.c_str())
+      // Read-only and binary: the default in|out text mode turns \r\n into
+      // \n on Windows and stops at 0x1A, which corrupts every Parquet file.
+      , stream_(path, std::ios::in | std::ios::binary)
   {
   }
 
