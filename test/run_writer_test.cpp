@@ -14,6 +14,8 @@ directory of this repository.
 #include <arrow/table.h>
 #include <boost/json.hpp>
 #include <filesystem>
+#include <chrono>
+#include <thread>
 #include <fstream>
 #include <iterator>
 #include <parquet/api/reader.h>
@@ -47,9 +49,15 @@ struct Scratch {
   {
     // error_code, not a throw: a destructor that throws terminates the process
     // before Boost.Test reports anything. Windows refuses to delete a file that
-    // is still open, so a leaked handle shows up HERE, with its name.
+    // is still open, so a leaked handle shows up HERE, with its name -- after
+    // a few retries, because on GitHub's Windows runners the antivirus holds a
+    // freshly written file open for a moment (seen: 1 run in 2, this test).
     std::error_code ec;
-    fs::remove_all(path, ec);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      fs::remove_all(path, ec);
+      if (!ec) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
     BOOST_TEST(!ec, "remove_all " << path.string() << ": " << ec.message());
   }
 };
