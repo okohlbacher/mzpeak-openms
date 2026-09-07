@@ -21,6 +21,15 @@ directory of this repository.
 
 namespace MzPeak::Util {
 
+/// A row group's DECODED footprint: what an Arrow RecordBatch of it costs.
+///
+/// NOT Parquet's total_byte_size, which is the ENCODED size and can be several
+/// times smaller -- a sorted, repetitive column is RLE'd to almost nothing on
+/// disk and expands straight back out in memory.  Anyone sizing a memory
+/// budget in row groups must use this, or the budget is in the wrong unit.
+std::size_t decoded_row_group_bytes(const parquet::RowGroupMetaData& group,
+                                    const parquet::SchemaDescriptor& schema);
+
 /**
  * Low-level wrapper around Parquet files.
  */

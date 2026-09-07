@@ -198,8 +198,8 @@ void Parquet::Impl::parse_schema()
 /// ponytail: fixed-width leaves only.  BYTE_ARRAY has no width until it is
 /// read, so a schema containing one falls back to the encoded figure and
 /// under-counts that column; mzPeak's signal tables are all fixed-width.
-static std::size_t decoded_bytes(const parquet::RowGroupMetaData& group,
-                                 const parquet::SchemaDescriptor& schema)
+std::size_t decoded_row_group_bytes(const parquet::RowGroupMetaData& group,
+                                    const parquet::SchemaDescriptor& schema)
 {
   const auto rows = static_cast<std::size_t>(group.num_rows());
   std::size_t width = 0;
@@ -236,7 +236,8 @@ Parquet::Impl::row_group(int32_t index)
     // under THIS object's lock (decode_group_), because that is what guards
     // the file position.  Different objects decode different groups at once.
     const auto metadata = reader_->parquet_reader()->metadata();
-    const std::size_t bytes = decoded_bytes(*metadata->RowGroup(index), *metadata->schema());
+    const std::size_t bytes =
+        decoded_row_group_bytes(*metadata->RowGroup(index), *metadata->schema());
     return shared_cache_->get(file_.file_name(), index, bytes,
                               [this, index] { return decode_group_(index); });
   }
