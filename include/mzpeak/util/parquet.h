@@ -28,9 +28,20 @@ struct ReadCounters {
   long plan_group_evals = 0; ///< row groups examined while planning
   long batches_visited = 0;  ///< record batches walked in the executor
   long slices_made = 0;      ///< RecordBatch::Slice calls
+  long plan_pruned = 0;      ///< groups rejected by column statistics
+  long plan_full_scan = 0;   ///< groups planned as a WHOLE-GROUP range
+  long plan_page_index = 0;  ///< groups narrowed by the page index
+  long plan_pi_null = 0;     ///< groups with no usable page-index reader
+  long plan_ranges = 0;      ///< ranges emitted
+  long plan_range_rows = 0;  ///< rows covered by those ranges
 };
 ReadCounters read_counters();
 void count_plan_group_eval();
+void count_plan_pruned();
+void count_plan_full_scan();
+void count_plan_page_index();
+void count_plan_pi_null();
+void count_plan_range(long rows);
 
 /// A row group's DECODED footprint: what an Arrow RecordBatch of it costs.
 ///

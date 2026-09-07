@@ -38,16 +38,35 @@ namespace MzPeak::Util {
 namespace
 {
   std::atomic<long> g_plan_group_evals{0}, g_batches_visited{0}, g_slices_made{0};
+  std::atomic<long> g_plan_pruned{0}, g_plan_full_scan{0}, g_plan_page_index{0};
+  std::atomic<long> g_plan_pi_null{0}, g_plan_ranges{0}, g_plan_range_rows{0};
 }
 
 ReadCounters read_counters()
 {
   return {g_plan_group_evals.load(std::memory_order_relaxed),
           g_batches_visited.load(std::memory_order_relaxed),
-          g_slices_made.load(std::memory_order_relaxed)};
+          g_slices_made.load(std::memory_order_relaxed),
+          g_plan_pruned.load(std::memory_order_relaxed),
+          g_plan_full_scan.load(std::memory_order_relaxed),
+          g_plan_page_index.load(std::memory_order_relaxed),
+          g_plan_pi_null.load(std::memory_order_relaxed),
+          g_plan_ranges.load(std::memory_order_relaxed),
+          g_plan_range_rows.load(std::memory_order_relaxed)};
 }
 
 void count_plan_group_eval() { MZPEAK_COUNT(g_plan_group_evals); }
+void count_plan_pruned() { MZPEAK_COUNT(g_plan_pruned); }
+void count_plan_full_scan() { MZPEAK_COUNT(g_plan_full_scan); }
+void count_plan_page_index() { MZPEAK_COUNT(g_plan_page_index); }
+void count_plan_pi_null() { MZPEAK_COUNT(g_plan_pi_null); }
+void count_plan_range([[maybe_unused]] long rows)
+{
+  MZPEAK_COUNT(g_plan_ranges);
+#ifdef MZPEAK_READ_COUNTERS
+  g_plan_range_rows.fetch_add(rows, std::memory_order_relaxed);
+#endif
+}
 
 
 /******************************************************************************/

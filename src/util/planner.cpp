@@ -556,7 +556,10 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
   // then discard them was the dominant cost of planning on a file with
   // thousands of row groups.
   auto stats_result = with_column_stats(row_group_index);
-  if (stats_result.has_value() && !stats_result.value()) return;
+  if (stats_result.has_value() && !stats_result.value()) {
+    count_plan_pruned();
+    return;
+  }
 
   std::shared_ptr<parquet::RowGroupPageIndexReader> row_index_reader = nullptr;
 
@@ -565,6 +568,7 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
   }
 
   if (page_index_reader_ == nullptr || row_index_reader == nullptr) {
+    count_plan_pi_null();
     // Record this row group if the statistic planner selected it.  If
     // the plan failed we fall back to a full row group scan and
     // record it as well.
@@ -572,6 +576,7 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
       full_scan(row_group_index);
     }
   } else {
+    count_plan_page_index();
     std::shared_ptr<parquet::RowGroupMetaData> rg(
         metadata_->RowGroup(row_group_index));
 
@@ -583,6 +588,12 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
     // check.
     if (!page_res.has_value() && plan_.ranges.size() == before_count) {
       full_scan(row_group_index);
+    } else {
+      // Whatever the page index narrowed this group to: this is the number
+      // that decides how many record batches the executor must slice.
+      for (std::size_t r = before_count; r < plan_.ranges.size(); ++r) {
+        count_plan_range(plan_.ranges[r].length);
+      }
     }
   }
 }
@@ -597,6 +608,8 @@ void Planner::Impl::full_scan(int32_t row_group_index)
   // warning: a fresh Planner is built per fetch, so a per-call stderr line here
   // is one write per spectrum (hundreds of thousands on a real run) for a path
   // that is neither an error nor slow.
+  count_plan_full_scan();
+  count_plan_range(stats_->row_count(row_group_index));
   plan_.ranges.push_back({row_group_index, 0, stats_->row_count(row_group_index)});
 }
 
