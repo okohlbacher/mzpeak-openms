@@ -21,6 +21,17 @@ directory of this repository.
 
 namespace MzPeak::Util {
 
+/// Diagnostic counters for the per-entity read path.  Free-running and
+/// relaxed; they exist to answer "how much work does one spectrum cost"
+/// without a profiler, and cost an untaken increment when nobody reads them.
+struct ReadCounters {
+  long plan_group_evals = 0; ///< row groups examined while planning
+  long batches_visited = 0;  ///< record batches walked in the executor
+  long slices_made = 0;      ///< RecordBatch::Slice calls
+};
+ReadCounters read_counters();
+void count_plan_group_eval();
+
 /// A row group's DECODED footprint: what an Arrow RecordBatch of it costs.
 ///
 /// NOT Parquet's total_byte_size, which is the ENCODED size and can be several

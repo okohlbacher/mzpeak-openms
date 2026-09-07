@@ -6,6 +6,17 @@ top-level directory of this repository.
 
 */
 
+#include <atomic>
+#include <limits>
+
+// Diagnostic counters. OFF by default: the planner one fires hundreds of
+// millions of times per run, and a global atomic there is itself a cost.
+// Build with -DMZPEAK_READ_COUNTERS to measure.
+#ifdef MZPEAK_READ_COUNTERS
+#define MZPEAK_COUNT(c) (c).fetch_add(1, std::memory_order_relaxed)
+#else
+#define MZPEAK_COUNT(c) ((void)0)
+#endif
 #include "mzpeak/util/executor.h"
 
 #include <algorithm>
@@ -23,6 +34,21 @@ top-level directory of this repository.
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
+
+namespace
+{
+  std::atomic<long> g_plan_group_evals{0}, g_batches_visited{0}, g_slices_made{0};
+}
+
+ReadCounters read_counters()
+{
+  return {g_plan_group_evals.load(std::memory_order_relaxed),
+          g_batches_visited.load(std::memory_order_relaxed),
+          g_slices_made.load(std::memory_order_relaxed)};
+}
+
+void count_plan_group_eval() { MZPEAK_COUNT(g_plan_group_evals); }
+
 
 /******************************************************************************/
 struct Executor::Impl {
@@ -276,8 +302,12 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
     // The last row any range of this group wants.  Batches past it hold
     // nothing for this query.
     int64_t wanted_end = 0;
+    // ...and the first row any range wants.  Batches that end before it hold
+    // nothing either, and skipping them is an integer add.
+    int64_t wanted_begin = std::numeric_limits<int64_t>::max();
     for (const auto& range : row_group.second) {
       wanted_end = std::max(wanted_end, range.offset + range.length);
+      wanted_begin = std::min(wanted_begin, range.offset);
     }
 
     // Does THIS row group declare the predicate's column sorted?  Asked once
@@ -295,9 +325,24 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
     for (const auto& cached : *batches) {
       if (row_group_start >= wanted_end) break;
+      const int64_t rows = cached->num_rows();
 
-      std::shared_ptr<arrow::RecordBatch> batch = cached;
-      int64_t rows = batch->num_rows();
+      // Walk PAST the leading batches rather than through them.  A group holds
+      // ~17 batches of 65,536 rows and one spectrum's few hundred points sit
+      // inside one of them, but the traversal started at batch 0 every time:
+      // measured at 13.0 batches visited and 9.7 slices made per spectrum, for
+      // a run of 762,016 spectra.  Each visit copied the batch's shared_ptr
+      // and each slice copied the ownership of all three columns -- and Arrow
+      // shares one datatype object per primitive type, so those refcounts are
+      // TRUE sharing between every thread, whatever group it is reading.
+      if (row_group_start + rows <= wanted_begin) {
+        row_group_start += rows;
+        continue;
+      }
+      MZPEAK_COUNT(g_batches_visited);
+
+      // By reference: the cache owns these batches for the whole call.
+      const std::shared_ptr<arrow::RecordBatch>& batch = cached;
 
       for (const auto& range : row_group.second) {
         // Is this batch within this range?
@@ -310,6 +355,7 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
             range.offset, range.length, row_group_start, rows);
         if (length == 0) continue;
 
+        MZPEAK_COUNT(g_slices_made);
         auto sliced = batch->Slice(offset, length);
 
         std::pair<int64_t, int64_t> run{0, 0};
@@ -328,7 +374,7 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
         }
       }
 
-      row_group_start += batch->num_rows();
+      row_group_start += rows;
     }
   }
 
