@@ -9,6 +9,7 @@ top-level directory of this repository.
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <optional>
 
 // Diagnostic counters. OFF by default: the planner one fires hundreds of
 // millions of times per run, and a global atomic there is itself a cost.
@@ -35,6 +36,24 @@ top-level directory of this repository.
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
+
+namespace
+{
+  /// The query value as an int64, when it is an integer at all.  Used only to
+  /// pick which record batches can hold a key; a non-integer value simply
+  /// falls back to walking them.
+  std::optional<int64_t> integer_value(const Query::value_t& v)
+  {
+    if (auto p = std::get_if<int64_t>(&v)) return *p;
+    if (auto p = std::get_if<uint64_t>(&v)) return static_cast<int64_t>(*p);
+    if (auto p = std::get_if<int32_t>(&v)) return *p;
+    if (auto p = std::get_if<uint32_t>(&v)) return *p;
+    if (auto p = std::get_if<int8_t>(&v)) return *p;
+    if (auto p = std::get_if<uint8_t>(&v)) return *p;
+    return std::nullopt;
+  }
+} // namespace
+
 
 namespace
 {
@@ -401,7 +420,44 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
                           .count());
 #endif
 
-    for (const auto& cached : *batches) {
+    // WHICH batches can hold the wanted key, decided arithmetically.
+    //
+    // The decoded group carries the first and last key of every batch, taken
+    // once by the thread that decoded it. When the query is an equality on the
+    // sorted column, two binary searches over those give exactly the batches
+    // that can match -- typically one of ~17 -- and the rest are never touched
+    // at all: no shared_ptr copy, no Arrow accessor, no filter.
+    //
+    // That last part is the point. Arrow's RecordBatch::column() and
+    // StructArray::field() are not free once boxed: libstdc++ implements the
+    // atomic shared_ptr load they use with a pool of 16 process-wide mutexes,
+    // so every visited batch was contending with every other thread's visits
+    // regardless of which row group each was reading. 9.67 visits per spectrum
+    // over 762,016 spectra is 7.4 million of them.
+    std::size_t b_begin = 0;
+    std::size_t b_end = batches->batches.size();
+    if (sorted_column && batches->has_keys()) {
+      if (auto equality = plan.query.as_equality()) {
+        if (auto wanted = integer_value(equality->second)) {
+          // key_last is non-decreasing across batches: the first batch that
+          // could contain the key is the first whose last key reaches it.
+          const auto it = std::lower_bound(batches->key_last.begin(),
+                                           batches->key_last.end(), *wanted);
+          b_begin = static_cast<std::size_t>(it - batches->key_last.begin());
+          b_end = b_begin;
+          while (b_end < batches->key_first.size() &&
+                 batches->key_first[b_end] <= *wanted) {
+            ++b_end;
+          }
+        }
+      }
+    }
+
+    for (std::size_t bi = b_begin; bi < b_end; ++bi) {
+      const auto& cached = batches->batches[bi];
+      row_group_start = batches->row_offset.empty()
+                            ? row_group_start
+                            : batches->row_offset[bi];
       if (row_group_start >= wanted_end) break;
       const int64_t rows = cached->num_rows();
 

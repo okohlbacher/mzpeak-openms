@@ -13,6 +13,7 @@ directory of this repository.
 #include <condition_variable>
 #include <functional>
 #include <future>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -26,8 +27,29 @@ class RecordBatch;
 
 namespace MzPeak::Util {
 
-/// A decoded row group: the record batches Parquet hands back for it.
-using RowGroupBatches = std::vector<std::shared_ptr<arrow::RecordBatch>>;
+/// A decoded row group: the record batches Parquet hands back for it, plus
+/// what a reader needs to find a row in them WITHOUT touching Arrow.
+///
+/// The extra vectors are filled once, by the thread that decoded the group,
+/// and then only read.  That matters twice over: Arrow's accessors
+/// (RecordBatch::column, StructArray::field) are not free even when the child
+/// is already boxed -- libstdc++ implements the atomic shared_ptr load they
+/// use with a pool of 16 process-wide mutexes -- and a reader that can pick
+/// its batch arithmetically never calls them for the batches it skips.
+struct RowGroupBatches {
+  std::vector<std::shared_ptr<arrow::RecordBatch>> batches;
+
+  /// First row index of each batch, relative to the row group.
+  std::vector<int64_t> row_offset;
+
+  /// First and last value of the column this file declares sorted, per batch.
+  /// Empty unless the group declares exactly one sorted column and it decodes
+  /// to int64 -- the only case the reader's fast path uses.
+  std::vector<int64_t> key_first;
+  std::vector<int64_t> key_last;
+
+  bool has_keys() const { return !key_first.empty(); }
+};
 
 /******************************************************************************/
 /// One decoded copy of each row group, shared by every reader over an archive.

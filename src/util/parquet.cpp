@@ -13,6 +13,8 @@ directory of this repository.
 #include <arrow/util/key_value_metadata.h>
 #include <boost/json.hpp>
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <parquet/api/reader.h>
@@ -323,12 +325,24 @@ Parquet::Impl::decode_group_(int32_t index)
   }
 
   auto batches = std::make_shared<Parquet::RowGroupBatches>();
+
+  // The leaf index of the column this file declares sorted, if any.
+  int32_t sort_leaf = -1;
+  {
+    const auto rg = reader_->parquet_reader()->metadata()->RowGroup(index);
+    for (const auto& cs : rg->sorting_columns()) {
+      if (!cs.descending && !cs.nulls_first) sort_leaf = cs.column_idx;
+      break;
+    }
+  }
+  int64_t rows_seen = 0;
+  std::vector<std::pair<int64_t, int64_t>> keyed;
   for (auto maybe_batch : **reader_result) {
     if (!maybe_batch.ok()) {
       throw ParquetError("read row group " + std::to_string(index) + ": " +
                          maybe_batch.status().ToString());
     }
-    batches->push_back(*maybe_batch);
+    batches->batches.push_back(*maybe_batch);
   }
 
   // Materialise Arrow's LAZY per-array boxing while this group is still
@@ -343,13 +357,61 @@ Parquet::Impl::decode_group_(int32_t index)
   // the answer is no.  Doing it here, once, under the decode lock, means every
   // reader afterwards only READS a pointer that is already set, and the cache
   // publishes the group through a future, which supplies the happens-before.
-  for (const auto& batch : *batches) {
+  //
+  // The same walk collects the LEAVES in schema order, which is the order
+  // Parquet numbers them in, so the file's declared sorting column can be
+  // found by its leaf index.
+  std::vector<std::shared_ptr<arrow::Array>> leaves;
+  for (const auto& batch : batches->batches) {
+    leaves.clear();
     for (int c = 0; c < batch->num_columns(); ++c) {
       std::shared_ptr<arrow::Array> col = batch->column(c);
       if (col && col->type_id() == arrow::Type::STRUCT) {
         const auto& sa = static_cast<const arrow::StructArray&>(*col);
-        for (int f = 0; f < sa.num_fields(); ++f) (void)sa.field(f);
+        for (int f = 0; f < sa.num_fields(); ++f) leaves.push_back(sa.field(f));
+      } else {
+        leaves.push_back(std::move(col));
       }
+    }
+    batches->row_offset.push_back(rows_seen);
+    rows_seen += batch->num_rows();
+
+    // The sort-key span of this batch, when the file declares one and it is an
+    // int64 leaf. A reader can then binary-search its way to the batch holding
+    // a wanted key instead of walking and filtering every batch in the plan's
+    // range -- which is what makes the skipped batches cost nothing at all.
+    if (sort_leaf >= 0 && sort_leaf < static_cast<int32_t>(leaves.size()) &&
+        batch->num_rows() > 0) {
+      const auto& leaf = leaves[static_cast<std::size_t>(sort_leaf)];
+      // NOT null_count(): on a freshly decoded array that is often
+      // kUnknownNullCount (-1) until something forces the count, so comparing
+      // it to zero silently disables the fast path. Ask whether a validity
+      // bitmap exists at all instead -- that needs no counting.
+      //
+      // BOTH widths: an entity index is written unsigned, so this column
+      // decodes as UInt64, and checking only for Int64 disabled the whole fast
+      // path while looking like it worked.
+      if (leaf && !leaf->data()->MayHaveNulls()) {
+        if (leaf->type_id() == arrow::Type::INT64) {
+          const auto& a = static_cast<const arrow::Int64Array&>(*leaf);
+          keyed.push_back({a.Value(0), a.Value(a.length() - 1)});
+          continue;
+        }
+        if (leaf->type_id() == arrow::Type::UINT64) {
+          const auto& a = static_cast<const arrow::UInt64Array&>(*leaf);
+          keyed.push_back({static_cast<int64_t>(a.Value(0)),
+                           static_cast<int64_t>(a.Value(a.length() - 1))});
+          continue;
+        }
+      }
+    }
+    keyed.clear();
+    sort_leaf = -1; // one unusable batch disables the fast path for the group
+  }
+  if (sort_leaf >= 0 && keyed.size() == batches->batches.size()) {
+    for (const auto& [f, l] : keyed) {
+      batches->key_first.push_back(f);
+      batches->key_last.push_back(l);
     }
   }
   return batches;
