@@ -8,6 +8,8 @@ top-level directory of this repository.
 
 #include "mzpeak/data/signals.h"
 
+#include <chrono>
+
 #include <arrow/record_batch.h>
 #include <bit>
 #include <memory>
@@ -190,8 +192,21 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
     }
   }
 
+#ifdef MZPEAK_READ_COUNTERS
+  const auto t_plan0 = std::chrono::steady_clock::now();
+#endif
   Util::Planner planner = impl_->parquet_->planner(query);
+#ifdef MZPEAK_READ_COUNTERS
+  Util::count_ns_plan_ctor(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - t_plan0)
+                               .count());
+#endif
   auto plan = planner.plan();
+#ifdef MZPEAK_READ_COUNTERS
+  Util::count_ns_plan(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now() - t_plan0)
+                          .count());
+#endif
 
   Util::Executor executor = impl_->parquet_->executor(columns);
   return executor.execute(plan);

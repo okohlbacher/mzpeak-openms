@@ -34,6 +34,11 @@ struct ReadCounters {
   long plan_pi_null = 0;     ///< groups with no usable page-index reader
   long plan_ranges = 0;      ///< ranges emitted
   long plan_range_rows = 0;  ///< rows covered by those ranges
+  long ns_plan = 0;          ///< nanoseconds building + running the planner
+  long ns_plan_ctor = 0;     ///< of which: constructing the Planner
+  long ns_exec = 0;          ///< nanoseconds in Executor::execute
+  long ns_rowgroup = 0;      ///< nanoseconds obtaining a decoded row group
+  long ns_project = 0;       ///< nanoseconds in Executor::Impl::project
 };
 ReadCounters read_counters();
 void count_plan_group_eval();
@@ -42,6 +47,11 @@ void count_plan_full_scan();
 void count_plan_page_index();
 void count_plan_pi_null();
 void count_plan_range(long rows);
+void count_ns_plan(long ns);
+void count_ns_plan_ctor(long ns);
+void count_ns_exec(long ns);
+void count_ns_rowgroup(long ns);
+void count_ns_project(long ns);
 
 /// A row group's DECODED footprint: what an Arrow RecordBatch of it costs.
 ///

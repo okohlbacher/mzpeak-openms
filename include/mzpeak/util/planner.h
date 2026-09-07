@@ -14,6 +14,10 @@ top-level directory of this repository.
 #include "mzpeak/util/query.h"
 
 namespace parquet {
+class PageIndexReader;
+}
+
+namespace parquet {
 class FileMetaData;
 class Statistics;
 } // namespace parquet
@@ -65,6 +69,16 @@ public:
   /// column that is not actually sorted silently misses rows.
   bool sorted_ascending(int32_t row_group, int32_t column) const;
 
+  /// Is @p column declared sorted ascending in EVERY row group?  Only then are
+  /// the row groups matching an equality contiguous.
+  bool all_sorted_ascending(int32_t column) const;
+
+  /// The row group that last matched through this reader, and a setter for it.
+  /// A hint only: it can change which groups are examined first, never which
+  /// ones end up in the plan.
+  int32_t group_hint() const;
+  void set_group_hint(int32_t) const;
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -104,9 +118,13 @@ private:
   ///
   /// `stats` is shared with every other planner over the same file; passing
   /// null falls back to reading statistics from the file metadata each time.
+  /// @param page_index  the file's page-index reader, built ONCE by the
+  ///   caller. Obtaining it per query re-reads and re-parses index buffers;
+  ///   it depends only on the file, so it is built once and shared.
   Planner(parquet::arrow::FileReader&,
           const Query&,
-          std::shared_ptr<StatsIndex> stats);
+          std::shared_ptr<StatsIndex> stats,
+          std::shared_ptr<parquet::PageIndexReader> page_index = nullptr);
 
   class Impl;
   std::unique_ptr<Impl> impl_;

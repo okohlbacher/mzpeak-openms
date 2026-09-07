@@ -426,6 +426,12 @@ bool Parquet::sorted_ascending(int32_t row_group, int32_t leaf_column) const
 /******************************************************************************/
 Planner Parquet::planner(const Query& q)
 {
+  // NOT a cached page-index reader. Keeping one for the life of the file was
+  // tried and is 48% SLOWER in the parallel phase (4.98 -> 7.36 s at 64
+  // threads, 5.36 -> 7.67 at 192): a long-lived reader accumulates the parsed
+  // index of every group it has touched, and that costs more than rebuilding
+  // a fresh one per query. The constructor cost is real -- 79 of 95
+  // thread-seconds of planning -- but this is not the way to remove it.
   return Planner(*impl_->reader_, q, impl_->stats_);
 }
 

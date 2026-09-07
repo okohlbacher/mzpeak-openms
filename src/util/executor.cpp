@@ -7,6 +7,7 @@ top-level directory of this repository.
 */
 
 #include <atomic>
+#include <chrono>
 #include <limits>
 
 // Diagnostic counters. OFF by default: the planner one fires hundreds of
@@ -40,6 +41,8 @@ namespace
   std::atomic<long> g_plan_group_evals{0}, g_batches_visited{0}, g_slices_made{0};
   std::atomic<long> g_plan_pruned{0}, g_plan_full_scan{0}, g_plan_page_index{0};
   std::atomic<long> g_plan_pi_null{0}, g_plan_ranges{0}, g_plan_range_rows{0};
+  std::atomic<long> g_ns_plan_ctor{0};
+  std::atomic<long> g_ns_plan{0}, g_ns_exec{0}, g_ns_rowgroup{0}, g_ns_project{0};
 }
 
 ReadCounters read_counters()
@@ -52,7 +55,12 @@ ReadCounters read_counters()
           g_plan_page_index.load(std::memory_order_relaxed),
           g_plan_pi_null.load(std::memory_order_relaxed),
           g_plan_ranges.load(std::memory_order_relaxed),
-          g_plan_range_rows.load(std::memory_order_relaxed)};
+          g_plan_range_rows.load(std::memory_order_relaxed),
+          g_ns_plan.load(std::memory_order_relaxed),
+          g_ns_plan_ctor.load(std::memory_order_relaxed),
+          g_ns_exec.load(std::memory_order_relaxed),
+          g_ns_rowgroup.load(std::memory_order_relaxed),
+          g_ns_project.load(std::memory_order_relaxed)};
 }
 
 void count_plan_group_eval() { MZPEAK_COUNT(g_plan_group_evals); }
@@ -60,6 +68,37 @@ void count_plan_pruned() { MZPEAK_COUNT(g_plan_pruned); }
 void count_plan_full_scan() { MZPEAK_COUNT(g_plan_full_scan); }
 void count_plan_page_index() { MZPEAK_COUNT(g_plan_page_index); }
 void count_plan_pi_null() { MZPEAK_COUNT(g_plan_pi_null); }
+void count_ns_plan([[maybe_unused]] long ns)
+{
+#ifdef MZPEAK_READ_COUNTERS
+  g_ns_plan.fetch_add(ns, std::memory_order_relaxed);
+#endif
+}
+void count_ns_plan_ctor([[maybe_unused]] long ns)
+{
+#ifdef MZPEAK_READ_COUNTERS
+  g_ns_plan_ctor.fetch_add(ns, std::memory_order_relaxed);
+#endif
+}
+void count_ns_exec([[maybe_unused]] long ns)
+{
+#ifdef MZPEAK_READ_COUNTERS
+  g_ns_exec.fetch_add(ns, std::memory_order_relaxed);
+#endif
+}
+void count_ns_rowgroup([[maybe_unused]] long ns)
+{
+#ifdef MZPEAK_READ_COUNTERS
+  g_ns_rowgroup.fetch_add(ns, std::memory_order_relaxed);
+#endif
+}
+void count_ns_project([[maybe_unused]] long ns)
+{
+#ifdef MZPEAK_READ_COUNTERS
+  g_ns_project.fetch_add(ns, std::memory_order_relaxed);
+#endif
+}
+
 void count_plan_range([[maybe_unused]] long rows)
 {
   MZPEAK_COUNT(g_plan_ranges);
@@ -290,6 +329,18 @@ Executor::~Executor() = default;
 /******************************************************************************/
 std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 {
+#ifdef MZPEAK_READ_COUNTERS
+  const auto t_exec0 = std::chrono::steady_clock::now();
+  struct ExecTimer {
+    std::chrono::steady_clock::time_point t0;
+    ~ExecTimer()
+    {
+      count_ns_exec(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count());
+    }
+  } exec_timer{t_exec0};
+#endif
   impl_->slice_ = std::unique_ptr<Slice>(new Slice(impl_->projection_.get()));
   std::map<Schema::Group::index_type, std::vector<Planner::Range>> ranges;
 
@@ -340,7 +391,15 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
 
     // Decoded once per row group and retained, so reading a run entity by
     // entity costs one decode per group rather than one per entity.
+#ifdef MZPEAK_READ_COUNTERS
+    const auto t_rg0 = std::chrono::steady_clock::now();
+#endif
     auto batches = impl_->source_.row_group(row_group.first);
+#ifdef MZPEAK_READ_COUNTERS
+    count_ns_rowgroup(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now() - t_rg0)
+                          .count());
+#endif
 
     for (const auto& cached : *batches) {
       if (row_group_start >= wanted_end) break;
