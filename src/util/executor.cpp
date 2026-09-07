@@ -374,6 +374,25 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
             range.offset, range.length, row_group_start, rows);
         if (length == 0) continue;
 
+        // FAST PATH (under diagnosis): filter the UNSLICED batch and slice
+        // only the run that matched. See doc/HANDOFF-page-index-resolution.md.
+        if (sorted_column && plan.query.as_equality()) {
+          std::pair<int64_t, int64_t> run{0, 0};
+          bool have_run = false;
+          std::shared_ptr<arrow::RecordBatch> whole = batch;
+          (void)impl_->filter(plan, whole, sorted_column, run, have_run);
+          if (have_run) {
+            const int64_t lo = std::max(run.first, offset);
+            const int64_t hi = std::min(run.second, offset + length);
+            if (hi > lo) {
+              MZPEAK_COUNT(g_slices_made);
+              auto matched = batch->Slice(lo, hi - lo);
+              impl_->project(matched);
+            }
+            continue;
+          }
+        }
+
         MZPEAK_COUNT(g_slices_made);
         auto sliced = batch->Slice(offset, length);
 

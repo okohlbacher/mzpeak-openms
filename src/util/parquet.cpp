@@ -330,6 +330,28 @@ Parquet::Impl::decode_group_(int32_t index)
     }
     batches->push_back(*maybe_batch);
   }
+
+  // Materialise Arrow's LAZY per-array boxing while this group is still
+  // private to the decoding thread.
+  //
+  // RecordBatch::column(i) and StructArray::field(i) both box their child on
+  // first access and cache it inside the array object.  A decoded group is
+  // then shared, unsynchronised, by every reader thread through the cache, so
+  // the first access from N threads at once is N concurrent lazy
+  // initialisations of the same object.  Whether that is a data race depends
+  // on the Arrow build; relying on it is not worth the crash it produces when
+  // the answer is no.  Doing it here, once, under the decode lock, means every
+  // reader afterwards only READS a pointer that is already set, and the cache
+  // publishes the group through a future, which supplies the happens-before.
+  for (const auto& batch : *batches) {
+    for (int c = 0; c < batch->num_columns(); ++c) {
+      std::shared_ptr<arrow::Array> col = batch->column(c);
+      if (col && col->type_id() == arrow::Type::STRUCT) {
+        const auto& sa = static_cast<const arrow::StructArray&>(*col);
+        for (int f = 0; f < sa.num_fields(); ++f) (void)sa.field(f);
+      }
+    }
+  }
   return batches;
 }
 
