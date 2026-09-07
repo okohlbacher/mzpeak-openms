@@ -438,7 +438,12 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
     std::size_t b_end = batches->batches.size();
     if (sorted_column && batches->has_keys()) {
       if (auto equality = plan.query.as_equality()) {
-        if (auto wanted = integer_value(equality->second)) {
+        // The spans describe the column the FILE declares sorted. If the query
+        // asks about a different column, they say nothing about it.
+        const bool same_column =
+            equality->first.second->absolute_index() == batches->key_leaf;
+        if (auto wanted = same_column ? integer_value(equality->second)
+                                      : std::nullopt) {
           // key_last is non-decreasing across batches: the first batch that
           // could contain the key is the first whose last key reaches it.
           const auto it = std::lower_bound(batches->key_last.begin(),

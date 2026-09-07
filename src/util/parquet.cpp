@@ -141,11 +141,6 @@ struct Parquet::Impl {
   /// object was built outside a Manager; then cache_ below is used.
   std::shared_ptr<RowGroupCache> shared_cache_;
 
-  /// The group this reader last took from the shared cache, and a NON-owning
-  /// handle to it.  See row_group(): skips the cache's mutex for the common
-  /// case without pinning the group.
-  int32_t last_group_ = -1;
-  std::weak_ptr<const Parquet::RowGroupBatches> last_batches_;
 
   /// Private fallback: most-recently-decoded row groups, newest last.  Bounded
   /// because a decoded group is tens of megabytes; two is enough for a forward
@@ -240,32 +235,6 @@ std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
   if (shared_cache_) {
-    // Nearly every call asks for the group the previous one did: a group holds
-    // around a million points -- thousands of spectra -- and a reader walks a
-    // contiguous range of them.  Without this memo EVERY spectrum read entered
-    // the archive-wide cache and took its one mutex: 762,016 acquisitions
-    // across 192 threads on the benchmark archive.  It showed as the parallel
-    // phase getting SLOWER with more threads (6.0 s at 64, 7.1 s at 192) while
-    // the mzML reader's got faster (4.7 s -> 3.5 s) on the same spectra.
-    //
-    // A weak_ptr, deliberately, NOT a shared_ptr: holding the group would pin
-    // one per reader, and 192 readers x 20 MB is 3.8 GB of exactly the
-    // O(threads) memory the cache's admission control exists to prevent.  The
-    // cache owns the lifetime; this only skips asking for what it already
-    // handed over.
-    //
-    // NOTE: a memo hit does NOT refresh the cache's LRU recency -- that is
-    // updated inside get(), which a hit skips -- so a group being actively
-    // read can still be evicted and the weak lock then fails.  That is safe
-    // (the slow path below simply re-fetches) but it is a performance risk if
-    // the budget is ever tight enough to evict a hot group.
-    //
-    // This object is used by ONE thread (the library's concurrency model), so
-    // plain members need no synchronisation of their own.
-    if (index == last_group_) {
-      if (auto hit = last_batches_.lock()) return hit;
-    }
-
     // Also out of the per-spectrum path: computing the group's decoded size
     // walks every column of the schema, and it cannot change between calls.
     const auto metadata = reader_->parquet_reader()->metadata();
@@ -273,8 +242,6 @@ Parquet::Impl::row_group(int32_t index)
         decoded_row_group_bytes(*metadata->RowGroup(index), *metadata->schema());
     auto batches = shared_cache_->get(file_.file_name(), index, bytes,
                                       [this, index] { return decode_group_(index); });
-    last_group_ = index;
-    last_batches_ = batches;
     return batches;
   }
 
@@ -409,6 +376,7 @@ Parquet::Impl::decode_group_(int32_t index)
     sort_leaf = -1; // one unusable batch disables the fast path for the group
   }
   if (sort_leaf >= 0 && keyed.size() == batches->batches.size()) {
+    batches->key_leaf = sort_leaf;
     for (const auto& [f, l] : keyed) {
       batches->key_first.push_back(f);
       batches->key_last.push_back(l);

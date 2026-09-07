@@ -48,6 +48,13 @@ struct RowGroupBatches {
   std::vector<int64_t> key_first;
   std::vector<int64_t> key_last;
 
+  /// Which LEAF column key_first/key_last describe.  A reader must check this
+  /// against the column it is querying: the spans belong to the column the
+  /// FILE declares sorted, which is not necessarily the one being asked for,
+  /// and searching one column's spans with another's value silently returns
+  /// the wrong rows.
+  int32_t key_leaf = -1;
+
   bool has_keys() const { return !key_first.empty(); }
 };
 

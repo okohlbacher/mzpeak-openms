@@ -459,9 +459,10 @@ public:
        const Query& query,
        std::shared_ptr<StatsIndex> stats,
        std::shared_ptr<parquet::PageIndexReader> page_index)
-      : metadata_(reader.metadata())
-      , page_index_reader_(page_index ? std::move(page_index)
-                                      : reader.GetPageIndexReader())
+      : reader_(&reader)
+      , metadata_(reader.metadata())
+      , page_index_reader_(std::move(page_index))
+      , page_index_ready_(page_index_reader_ != nullptr)
       , stats_(std::move(stats))
       , plan_({query, {}})
   {
@@ -504,8 +505,28 @@ private:
    */
   void full_scan(int32_t);
 
+  /// The page-index reader, obtained ON DEMAND.
+  ///
+  /// Asking the file reader for one costs real time -- 79 of the 95
+  /// thread-seconds of planning, once the group scan was fixed -- and a query
+  /// that resolves to a whole group never needs it.  Caching one for the life
+  /// of the file was tried and is worse; see Parquet::planner.
+  std::shared_ptr<parquet::PageIndexReader> page_index()
+  {
+    if (!page_index_ready_) {
+      page_index_reader_ = reader_->GetPageIndexReader();
+      page_index_ready_ = true;
+    }
+    return page_index_reader_;
+  }
+
+  parquet::ParquetFileReader* reader_ = nullptr;
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::shared_ptr<parquet::PageIndexReader> page_index_reader_;
+  bool page_index_ready_ = false;
+  /// Set by plan() when the query resolves to whole row groups, so
+  /// plan_row_group() does not consult the page index at all.
+  bool whole_groups_ = false;
   std::shared_ptr<StatsIndex> stats_;
   Planner::Plan plan_;
 };
@@ -604,13 +625,25 @@ void Planner::Impl::plan_row_group(int32_t row_group_index)
     return;
   }
 
-  std::shared_ptr<parquet::RowGroupPageIndexReader> row_index_reader = nullptr;
-
-  if (page_index_reader_ != nullptr) {
-    row_index_reader = page_index_reader_->RowGroup(row_group_index);
+  // A query the executor can resolve inside the group by itself needs only to
+  // know WHICH group.  Narrowing further is wasted: the page index of a
+  // heavily-RLE'd sorted key column narrows to ~56% of a row group anyway, and
+  // the reader now finds its record batch from cached per-batch key spans.
+  if (whole_groups_) {
+    count_plan_full_scan();
+    count_plan_range(stats_->row_count(row_group_index));
+    plan_.ranges.push_back({row_group_index, 0, stats_->row_count(row_group_index)});
+    return;
   }
 
-  if (page_index_reader_ == nullptr || row_index_reader == nullptr) {
+  std::shared_ptr<parquet::RowGroupPageIndexReader> row_index_reader = nullptr;
+  auto page_index_reader_local = page_index();
+
+  if (page_index_reader_local != nullptr) {
+    row_index_reader = page_index_reader_local->RowGroup(row_group_index);
+  }
+
+  if (page_index_reader_local == nullptr || row_index_reader == nullptr) {
     count_plan_pi_null();
     // Record this row group if the statistic planner selected it.  If
     // the plan failed we fall back to a full row group scan and
@@ -688,6 +721,7 @@ const Planner::Plan& Planner::Impl::plan()
   }
 
   if (ordered && groups > 0) {
+    whole_groups_ = true; // the executor narrows within the group by key
     bool found = false;
     auto scan = [&](int32_t from, int32_t to) {
       for (int32_t i = from; i < to; ++i) {
