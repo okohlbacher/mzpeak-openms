@@ -69,6 +69,23 @@ map, per-thread reader construction, and tearing down an 8 GB working set.
 mzML pays none of them because its reader seeks to a byte offset and holds
 almost nothing.
 
+## Correctness, verified on the benchmark archive
+
+The measured binary is the committed source -- the sources on the benchmark
+host checksum-match the repository -- and:
+
+| check | result |
+|---|---|
+| this build vs shipped v1.2.1, mzPeak, 64 threads | **byte-identical** |
+| this build, 8 threads vs 384 threads | **byte-identical** |
+| mzPeak vs mzML, same spectra | 83 differing lines of 19,498,432 (4.3e-6) |
+
+The third is PRE-EXISTING and not a product of this work: since the build is
+byte-identical to v1.2.1 on the same container, the container-to-container
+difference is unchanged by any of it. It is the f32 intensity storage breaking
+peak-ranking ties, which is the deliberate trade that makes the archive 6.4x
+smaller.
+
 ## The blockers, in the order they mattered
 
 ### 1. The planner re-planned the entire file for every spectrum
