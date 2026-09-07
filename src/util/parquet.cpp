@@ -186,6 +186,48 @@ void Parquet::Impl::parse_schema()
 }
 
 /******************************************************************************/
+/// A row group's DECODED footprint: what an Arrow RecordBatch of it costs.
+///
+/// NOT Parquet's total_byte_size, which is the ENCODED size and can be several
+/// times smaller.  Arrow materialises fixed-width leaves flat, so the decoded
+/// size is rows x the leaf widths; on disk a sorted, repetitive column (a
+/// spectrum index, say) is RLE'd to almost nothing and expands straight back
+/// out in memory.  Measured on one archive: 4.5 MB encoded, 20.0 MB decoded,
+/// a 4.4x under-count that let the shared cache hold 4.4x its budget.
+///
+/// ponytail: fixed-width leaves only.  BYTE_ARRAY has no width until it is
+/// read, so a schema containing one falls back to the encoded figure and
+/// under-counts that column; mzPeak's signal tables are all fixed-width.
+static std::size_t decoded_bytes(const parquet::RowGroupMetaData& group,
+                                 const parquet::SchemaDescriptor& schema)
+{
+  const auto rows = static_cast<std::size_t>(group.num_rows());
+  std::size_t width = 0;
+  bool exact = true;
+
+  for (int i : std::views::iota(0, schema.num_columns())) {
+    const parquet::ColumnDescriptor* column = schema.Column(i);
+    switch (column->physical_type()) {
+      case parquet::Type::BOOLEAN: width += 1; break;
+      case parquet::Type::INT32:
+      case parquet::Type::FLOAT: width += 4; break;
+      case parquet::Type::INT64:
+      case parquet::Type::DOUBLE: width += 8; break;
+      case parquet::Type::INT96: width += 12; break;
+      case parquet::Type::FIXED_LEN_BYTE_ARRAY:
+        width += static_cast<std::size_t>(column->type_length());
+        break;
+      default: exact = false; break; // BYTE_ARRAY: length unknown until read
+    }
+    ++width; // Arrow's per-column validity bitmap, rounded up to a byte a row
+  }
+
+  const std::size_t estimate = rows * width;
+  const auto encoded = static_cast<std::size_t>(group.total_byte_size());
+  return exact ? estimate : std::max(estimate, encoded);
+}
+
+/******************************************************************************/
 std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
@@ -193,8 +235,8 @@ Parquet::Impl::row_group(int32_t index)
     // The archive-wide cache does the bookkeeping; the decode still runs
     // under THIS object's lock (decode_group_), because that is what guards
     // the file position.  Different objects decode different groups at once.
-    const auto bytes = static_cast<std::size_t>(
-        reader_->parquet_reader()->metadata()->RowGroup(index)->total_byte_size());
+    const auto metadata = reader_->parquet_reader()->metadata();
+    const std::size_t bytes = decoded_bytes(*metadata->RowGroup(index), *metadata->schema());
     return shared_cache_->get(file_.file_name(), index, bytes,
                               [this, index] { return decode_group_(index); });
   }

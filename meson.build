@@ -235,6 +235,7 @@ test_names = [
     'query_api',
     'roundtrip',
     'row_group',
+    'row_group_cache',
     'run_writer',
     'sorting_declaration',
     'spectra',

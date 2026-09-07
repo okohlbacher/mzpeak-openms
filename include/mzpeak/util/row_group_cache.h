@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <future>
 #include <map>
@@ -43,13 +44,21 @@ using RowGroupBatches = std::vector<std::shared_ptr<arrow::RecordBatch>>;
 /// file handle, so two readers decoding two different groups run in parallel.
 /// The lock covers only the bookkeeping.
 ///
-/// Bounded by BYTES, evicting the least recently used group that is not
-/// currently being decoded.  Memory therefore follows the number of distinct
-/// groups in flight -- at most one per reader plus a boundary -- rather than
-/// the number of readers.  A caller with many readers over huge groups should
-/// size its reader count so that in-flight groups fit the budget; a budget
-/// smaller than that thrashes (a group is decoded again each time a reader
-/// comes back to it) but stays correct.
+/// Bounded by BYTES in two places, because eviction alone cannot hold a
+/// budget: a group still being decoded is not evictable, so N readers used to
+/// pin N groups however small the budget was, and memory followed the READER
+/// COUNT rather than the budget.
+///
+/// So a decode is also ADMITTED: a reader that misses waits until the bytes
+/// already in flight leave room for its group (half the budget is reserved
+/// for them, the rest stays available to hold decoded groups).  A single
+/// reader is always admitted, so a group larger than the budget still makes
+/// progress.  Peak decoded memory therefore follows THE BUDGET, whatever the
+/// thread count -- which is what lets a caller run every core on tagging
+/// while reading stays bounded.
+///
+/// A budget smaller than the working set thrashes (a group is decoded again
+/// each time a reader comes back to it) but stays correct.
 class RowGroupCache final {
 public:
   using Batches = std::shared_ptr<const RowGroupBatches>;
@@ -78,6 +87,7 @@ public:
     std::size_t decodes = 0;   ///< groups decoded (each miss, once)
     std::size_t hits = 0;      ///< served from a decoded group
     std::size_t waits = 0;     ///< served by waiting for another reader's decode
+    std::size_t admission_waits = 0; ///< decodes held back to stay in budget
     std::size_t evictions = 0;
     std::size_t held_bytes = 0; ///< budget currently accounted for
   };
@@ -97,9 +107,11 @@ private:
   void evict_locked_(const Key& keep);
 
   mutable std::mutex mutex_;
+  std::condition_variable admit_;
   std::map<Key, Entry> entries_;
   std::size_t budget_;
   std::size_t held_ = 0;
+  std::size_t in_flight_ = 0; ///< bytes of entries still decoding
   std::uint64_t tick_ = 0;
   Stats stats_;
 };

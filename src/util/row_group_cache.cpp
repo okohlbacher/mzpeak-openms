@@ -26,25 +26,43 @@ RowGroupCache::Batches RowGroupCache::get(const std::string& file,
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
-    if (auto it = entries_.find(key); it != entries_.end()) {
-      it->second.used = ++tick_;
-      if (it->second.ready) {
-        ++stats_.hits;
-      } else {
-        ++stats_.waits;
+    // Both on arrival and again after an admission wait: another reader may
+    // have claimed this very group while this one waited.
+    for (;;) {
+      if (auto it = entries_.find(key); it != entries_.end()) {
+        it->second.used = ++tick_;
+        if (it->second.ready) {
+          ++stats_.hits;
+        } else {
+          ++stats_.waits;
+        }
+        std::shared_future<Batches> future = it->second.future;
+        lock.unlock();
+        // Outside the lock: a wait here must not stop other readers decoding
+        // OTHER groups meanwhile.
+        return future.get();
       }
-      std::shared_future<Batches> future = it->second.future;
-      lock.unlock();
-      // Outside the lock: a wait here must not stop other readers decoding
-      // OTHER groups meanwhile.
-      return future.get();
+
+      // Miss.  Admission control, and the reason peak memory follows the
+      // budget rather than the reader count: an entry being decoded is not
+      // evictable, so without this N readers pin N groups whatever the budget
+      // says.  Half the budget is reserved for decodes in flight; the rest
+      // stays available to HOLD decoded groups, which is what stops a fully
+      // admitted cache from evicting everything it just decoded.
+      //
+      // The in_flight_ == 0 escape guarantees progress: a group bigger than
+      // the budget is still decoded, alone.
+      if (in_flight_ == 0 || in_flight_ + bytes <= budget_ / 2) break;
+      ++stats_.admission_waits;
+      admit_.wait(lock);
     }
 
-    // Miss: claim the slot before decoding, so a second reader arriving during
-    // the decode finds it in flight and waits instead of decoding it again.
+    // Claim the slot before decoding, so a second reader arriving during the
+    // decode finds it in flight and waits instead of decoding it again.
     ++stats_.decodes;
     entries_.emplace(key, Entry{promise.get_future().share(), bytes, ++tick_, false});
     held_ += bytes;
+    in_flight_ += bytes;
     evict_locked_(key);
   }
 
@@ -54,11 +72,13 @@ RowGroupCache::Batches RowGroupCache::get(const std::string& file,
   } catch (...) {
     {
       std::lock_guard<std::mutex> guard(mutex_);
+      in_flight_ -= bytes;
       if (auto it = entries_.find(key); it != entries_.end()) {
         held_ -= it->second.bytes;
         entries_.erase(it);
       }
     }
+    admit_.notify_all();
     // Waiters holding the future get the same exception.
     promise.set_exception(std::current_exception());
     throw;
@@ -66,8 +86,12 @@ RowGroupCache::Batches RowGroupCache::get(const std::string& file,
 
   {
     std::lock_guard<std::mutex> guard(mutex_);
+    in_flight_ -= bytes;
     if (auto it = entries_.find(key); it != entries_.end()) it->second.ready = true;
+    // Now evictable: the entry that could not be reclaimed while it decoded.
+    evict_locked_(key);
   }
+  admit_.notify_all();
   promise.set_value(batches);
   return batches;
 }
@@ -94,6 +118,7 @@ void RowGroupCache::set_budget(std::size_t bytes)
   std::lock_guard<std::mutex> guard(mutex_);
   budget_ = bytes;
   evict_locked_(Key());
+  admit_.notify_all(); // a raised budget may admit a waiting decode
 }
 
 std::size_t RowGroupCache::budget() const
