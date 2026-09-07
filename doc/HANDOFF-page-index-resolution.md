@@ -1,9 +1,10 @@
 # Handoff: the writer's page index cannot locate a spectrum
 
-**Status:** open, writer-side. The obvious reader-side workaround was tried and
-REVERTED -- it crashes at high thread count, see the last section. So nothing
-mitigates this today, and the writer change is the way to make the *format*
-plan well for any reader.
+**Status:** open, writer-side. A reader-side workaround HAS now landed (see the
+last section) and cuts slicing by 89.6%, so this is no longer urgent -- but it
+is still worth doing: the workaround only helps a reader that knows to distrust
+the planned range, whereas fixing the writer makes the *format* plan well for
+any reader, including ones outside this repository.
 
 **Owner:** unassigned. Everything below is measured, not inferred, unless a
 line says otherwise.
@@ -144,37 +145,38 @@ for i in range(m.num_columns):
           c.has_column_index, c.has_offset_index)
 ```
 
-## A reader-side attempt that FAILED — read before retrying it
+## The reader-side workaround that landed
 
-The obvious reader-side workaround is to stop trusting the planned range: when
-the column is declared sorted and the query is an equality, filter the
-**unsliced** batch (one binary search) and slice only the run that matched.
-`Query::as_equality()` exposes the predicate, and `Executor::Impl::filter()`
-already returns a contiguous run for that case, so the change is short.
+Commit `38f059a`. When the column is declared sorted and the query is an
+equality, the executor filters the **unsliced** batch -- a binary search it was
+already doing -- and slices only the run that matched. `slices_made` fell
+7,368,304 -> 767,869 (1.008 per spectrum), wall time at 192 threads 14.34 s ->
+11.77 s, tags byte-identical.
 
-It was implemented and **it crashes**. Do not simply re-apply it.
+**Read this before touching that path again.** The first version of it crashed,
+and the reason is a trap anyone optimising here will meet:
+
+Handing the filter the SHARED cached batch instead of a private slice meant
+`RecordBatch::column()` and `StructArray::field()` were being initialised
+concurrently. Both box their child on first access and cache it *inside the
+array object*, so up to 192 threads were lazily initialising the same object.
 
 - 1 and 16 threads: byte-identical tags, 38/38 library tests pass.
-- 192 threads: `Aborted` on one run, `Segmentation fault` on another, and a
-  tag-file mismatch on a third.
-- The same tree with the fast path reverted: three clean runs at 192 threads,
-  19,498,431 tags each.
+- 192 threads: segfault or abort in 2 of 3 runs.
 
-So the defect is concurrency-dependent and invisible at low thread counts and
-to the test suite. Candidates not yet eliminated, in the order worth checking:
+The fix is in `decode_group_()`: materialise that boxing while the group is
+still private to the decoding thread. Readers afterwards only read pointers
+that are already set, and the cache publishes the group through a future,
+which supplies the happens-before. Six of six runs clean at 192 threads.
 
-1. `filter()` takes its batch by **non-const** reference and the fast path
-   hands it a copy of the cached batch. If anything on that path mutates the
-   batch, the cached, SHARED batch is being mutated under other threads.
-   `Executor::Impl::array()` is the thing to read first.
-2. Run bounds. `run.second` is exclusive (the existing caller does
-   `project_wanted(run.first, run.second - 1, ...)`, and `project_wanted` takes
-   inclusive indices). The fast path assumed exclusive and clamped with the
-   range's batch-relative `offset`/`length`. That reasoning holds at low thread
-   counts, but has not been proven for straddling ranges.
-3. Whether `have_run` can be true with `run` referring to a different array
-   than the batch just passed.
+The lesson worth carrying: **a byte-identical result at low thread count is not
+evidence of thread safety here**, and neither is the test suite. Anything that
+shares a decoded Arrow object across readers needs checking at full thread
+count, ideally under a sanitiser.
 
-Whoever retries this should run it at high thread count under a sanitiser
-before trusting a byte-identical low-thread result — that result was obtained
-here and was misleading.
+## What this does NOT fix
+
+The mzPeak read path still anti-scales, just less. The parallel phase is 6.11 s
+at 64 threads and 6.47 s at 192 (it was 6.00 -> 7.13). An mzML reader over the
+identical spectra goes 4.70 -> 3.54 s over the same range, so it still improves
+with threads where mzPeak degrades. The remaining cause is not established.
