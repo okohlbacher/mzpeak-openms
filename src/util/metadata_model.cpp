@@ -760,6 +760,28 @@ void attach_selected_ions(Map& out,
       SelectedIonInfo ion;
       ion.selected_ion_mz =
           opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
+      // A stored 0 (or any non-finite value) means the writer had no selected
+      // ion m/z, not that the ion sits at m/z 0.
+      //
+      // mzpeak-convert materialises an absent MS:1000744 as 0.0 rather than
+      // null -- its SelectedIon model holds a bare f64 -- and Bruker diaTracer
+      // mzML routinely omits that term, carrying only charge and peak
+      // intensity.  Measured on a 3,086,644-spectrum diaPASEF archive: every
+      // selected_ion_mz is a non-null 0.0.  A consumer that prefers a PRESENT
+      // ion m/z over the isolation-window target (OpenMS does, and so does
+      // this format's own precedence) then works from precursor m/z 0 and
+      // finds nothing, silently: 0 tags where the same run as mzML gives
+      // 62 million.  Reporting the value as absent puts such a file back on
+      // the isolation window, which is what the mzML reader would have used.
+      //
+      // Deliberately NOT generalised to the other numeric fields: intensity 0
+      // is a real measurement, retention time 0 is a real acquisition time,
+      // and charge 0 already means "unknown" to consumers that read it.  Only
+      // an m/z has no meaningful zero.
+      if (ion.selected_ion_mz &&
+          !(std::isfinite(*ion.selected_ion_mz) && *ion.selected_ion_mz > 0.0)) {
+        ion.selected_ion_mz.reset();
+      }
       ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
       ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
       // Ion mobility: null in all bundled fixtures, so this reads as nullopt
