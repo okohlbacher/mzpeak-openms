@@ -223,6 +223,7 @@ test_names = [
     'directory',
     'executor',
     'group',
+    'group_hint',
     'index',
     'parquet',
     'record_count',
