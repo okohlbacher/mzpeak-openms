@@ -10,6 +10,7 @@ top-level directory of this repository.
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <memory>
 
 #include "mzpeak/data/signals.h"
@@ -36,6 +37,7 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
 {
   resize(data_->record_count());
   load_metadata_(std::move(md));
+  resize_from_metadata_();
 }
 
 /******************************************************************************/
@@ -59,6 +61,39 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
   if (peaks_) count = std::max(count, peaks_->record_count());
   resize(count);
   load_metadata_(std::move(md));
+  resize_from_metadata_();
+}
+
+/******************************************************************************/
+void Spectra::resize_from_metadata_()
+{
+  // The signal tables' own counts are a FLOOR, not the answer.
+  //
+  // `spectrum_count` is a per-FILE key, and a converter is free to stamp each
+  // member with the number of spectra IN THAT MEMBER: mzpeak-convert does
+  // exactly that from 0.11 on, so a run of 14 profile and 34 centroid spectra
+  // carries "14" on spectra_data and "34" on spectra_peaks while holding 48
+  // spectra.  Taking the larger of the two then reports 34 and everything
+  // after it silently disappears from iteration and from get_spectra_batch --
+  // measured on a converted small.mzML, and on a 371,187-spectrum ddaPASEF run
+  // that reported 371,184.
+  //
+  // The metadata table is the one place that counts spectra rather than rows
+  // of one array, so a metadata index beyond both tables extends the run.  It
+  // can only ever grow the count: a metadata table that is SHORT (a facet
+  // misread, a truncated file) must not shrink the reachable set.
+  //
+  // Indices are dense and 0-based in every archive this reader has seen, and
+  // the enumeration contract here is numeric, so a sparse index set yields
+  // default-constructed spectra in the gaps -- the same behaviour a file with
+  // missing rows already gets.
+  if (!md_map_ || md_map_->begin() == md_map_->end()) return;
+
+  uint64_t last = 0;
+  for (const auto& [index, unused] : *md_map_) last = std::max(last, index);
+  if (last == std::numeric_limits<uint64_t>::max()) return; // last + 1 would wrap
+  const std::size_t from_metadata = static_cast<std::size_t>(last) + 1;
+  if (from_metadata > size()) resize(from_metadata);
 }
 
 /******************************************************************************/

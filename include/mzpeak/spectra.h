@@ -192,6 +192,13 @@ private:
   // Called from the constructors so that fetch() never publishes it lazily.
   void load_metadata_(std::shared_ptr<const MetadataMap> md);
 
+  // Grow the run to cover the metadata's highest spectrum index.  Called from
+  // the constructors AFTER load_metadata_ and on BOTH of its paths -- a caller
+  // supplying a cached map takes an early return inside it, which is the
+  // ordinary path through Index::spectra().  See the definition: a signal
+  // table's per-file spectrum_count is a floor, not the run's size.
+  void resize_from_metadata_();
+
   // Build id_to_index_ once, on first by_id()/index_for_id().
   void build_id_index_() const;
 
