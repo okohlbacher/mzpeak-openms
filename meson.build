@@ -243,6 +243,7 @@ test_names = [
     'util',
     'wavelength_spectra',
     'writer',
+    'zero_peaks',
     'zip',
     'index_metadata',
     'writer_metadata',
