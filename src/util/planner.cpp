@@ -737,6 +737,31 @@ const Planner::Plan& Planner::Impl::plan()
     };
     const int32_t hint = std::clamp(stats_->group_hint(), 0, groups - 1);
     scan(hint, groups);
+
+    // A match AT the hint says nothing about the group BEFORE it.
+    //
+    // An entity straddling a group boundary lives in two groups, and the
+    // forward scan above starts at the hint -- so fetching such an entity
+    // after the hint has moved to its SECOND group found only that half and
+    // returned a spectrum missing its first rows.  The forward scan cannot
+    // see this: it stops at the first non-match after a match, and there is
+    // no match before its starting point to stop at.  Reachable from any
+    // non-monotonic access order (a subsampled or random-access read, a
+    // re-read of the same spectrum) and silent whenever the file declares no
+    // per-spectrum count to check the short array against.
+    //
+    // Matches are contiguous, so walking DOWN from the hint until a group
+    // does not match costs one extra statistics evaluation in the common case
+    // (the group before the hint holds a different entity and stops it at
+    // once), and only runs when the hint itself matched.
+    if (found && hint > 0) {
+      for (int32_t i = hint - 1; i >= 0; --i) {
+        const std::size_t before = plan_.ranges.size();
+        plan_row_group(i);
+        if (plan_.ranges.size() == before) break;
+      }
+    }
+
     if (!found) scan(0, hint);
   } else {
     for (int32_t i : std::views::iota(0, groups)) {
