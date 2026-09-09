@@ -53,6 +53,16 @@ void Spectrum::decode_() const
     // rather than dereferencing a null signal reader.
     if (!signals_) return;
 
+    // Start from empty on EVERY attempt.  `call_once` does not consume its flag
+    // when the callable throws -- a later access retries the decode -- and the
+    // decoders below APPEND.  So a spectrum whose first decode threw (a short
+    // read against a declared count, say) re-appended the same rows and the
+    // retry "succeeded" with every peak duplicated: a wrong answer manufactured
+    // out of a correctly detected error, which is worse than the error.
+    peaks_->mz.clear();
+    peaks_->intensity.clear();
+    peaks_->mobility.clear();
+
     // The signal-file read for this spectrum happens here (not at
     // construction) so a metadata-only pass never touches the peak data.
     std::shared_ptr<Util::Slice> slice =
@@ -145,6 +155,28 @@ void Spectrum::decode_() const
       expected = md.number_of_peaks;
     } else if (md.representation == "MS:1000128") {
       expected = md.number_of_data_points;
+    } else {
+      // NO representation at all.  Until now that disabled the check entirely,
+      // so an archive whose metadata omits MS:1000525 could decode zero points
+      // against a declared count of thousands and hand the caller an empty
+      // spectrum -- the silent wrong answer this check exists to prevent.
+      //
+      // The count to compare against is the one belonging to the table
+      // Spectra::fetch_ actually read from, and with no representation that
+      // choice is itself a fallback: the peaks table when the profile count is
+      // absent-or-zero and the peak count is not.  Mirrored here rather than
+      // improvised, because measuring a decode against the OTHER array's count
+      // is a false alarm on a perfectly good file -- a profile spectrum that
+      // also declares a peak count would be judged by the wrong number.
+      const uint64_t points = md.number_of_data_points.value_or(0);
+      const uint64_t peaks = md.number_of_peaks.value_or(0);
+      if (points == 0 && peaks > 0) {
+        expected = md.number_of_peaks;
+      } else if (md.number_of_data_points.has_value()) {
+        expected = md.number_of_data_points;
+      } else if (md.number_of_peaks.has_value()) {
+        expected = md.number_of_peaks;
+      }
     }
 
     if (expected.has_value() && *expected != peaks_->mz.size()) {
