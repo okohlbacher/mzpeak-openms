@@ -82,6 +82,40 @@ not as a guarantee.
 Both need real files before their numbers are trusted. Remaining known issues
 are listed in [docs/roadmap.md](docs/roadmap.md).
 
+## Building
+
+Three configurations are used here, and all three are expected green:
+
+```sh
+meson setup build                                          # debug
+meson setup build-release --buildtype=release
+meson setup build-tsan --buildtype=debug -Db_sanitize=thread
+
+meson compile -C build && meson test -C build
+```
+
+`scripts/e2e.sh` additionally rebuilds the Rust reference from `../hupo-mzpeak`
+and runs the cross-implementation stages; a stage whose dependencies are absent
+is skipped rather than failed.
+
+### When a build that used to work stops linking
+
+Suspect the toolchain before the tree. Homebrew keeps several versions of a
+dependency installed at once, and a configured build directory caches the
+*absolute* path of the library it found. After a `brew upgrade` the headers
+under `/opt/homebrew/include` point at the new version while the build directory
+still links the old one. That surfaces as an undefined symbol in a third-party
+namespace, naming neither the version skew nor the fix:
+
+```
+Undefined symbols for architecture arm64:
+  "boost::program_options::detail::arg"
+```
+
+`meson setup --reconfigure <dir>` re-runs dependency detection and keeps the
+options the directory was created with. Observed with Boost 1.90 -> 1.92, where
+both versions remained in `/opt/homebrew/Cellar/boost`.
+
 ## About
 
 The mzPeak C++ library provides both high- and low-level interfaces.
