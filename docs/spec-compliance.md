@@ -103,6 +103,17 @@ reference corpus or a well-formed archive from the reference writer.
   schema of every fixture Parquet file), because the one place raw bytes appear
   -- an auxiliary array's `data` -- is a list, not a binary column. It becomes
   real the moment the schema gains a binary field.
+- **R5, isolation-window terms beyond the three preferred ones** — the typed
+  `IsolationWindow` fields resolve `MS:1000827` (target m/z), `MS:1000828`
+  (lower offset) and `MS:1000829` (upper offset), which are the three the
+  specification names for that group. The *deprecated* limit terms
+  `MS:1000793`/`MS:1000794` and the no-isolation flag `MS:1003159` are also
+  children of `MS:1000792` (isolation window attribute), so a conformant archive
+  may carry them instead. They reach the caller through
+  `IsolationWindow::parameters` rather than a typed field: nothing is lost, but a
+  caller computing window bounds from the typed fields alone sees an empty
+  window rather than an error. `mzdata` added handling for exactly these terms
+  in `58e509b` (2026-09-10), which is evidence that real files carry them.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
