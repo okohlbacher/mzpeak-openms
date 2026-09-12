@@ -377,10 +377,16 @@ the pre-change minutes convention. It is now wired up and correct.
 
 ### Known limitations, recorded rather than hidden
 
-- **`column_mapping` is parsed but not consulted.** Field resolution works from
-  hard-coded names plus three aliases, so a split-layout file that names a
-  column something else and maps it to the right CV term reads as absent. The
-  reference resolves through the mapping.
+- ~~**`column_mapping` is parsed but not consulted.**~~ **Corrected: it is
+  consulted.** This was written before `resolve_field_uncached` gained its final
+  fallback, and was left standing afterwards. Resolution tries the exact name,
+  then the mechanically de-prefixed/de-suffixed form, then three aliases, and
+  finally asks the index which column carries the requested accession
+  (`Schema::File::path_for`). A split-layout file that names a column something
+  else and maps it to the right CV term therefore reads correctly. The reference
+  writer's plain names fall out of the name transformation, which is why the
+  mapping fallback is rarely reached -- and why the claim survived unchallenged
+  for so long.
 - **Dimensions are grouped without regard to physical dtype**, so a file storing
   the same semantic array as float32 and float64 siblings can concatenate them.
 - **Chunked multi-unit arrays are neither coalesced nor unit-aligned**; only the

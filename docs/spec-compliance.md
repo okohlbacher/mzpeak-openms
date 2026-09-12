@@ -118,18 +118,22 @@ reference corpus or a well-formed archive from the reference writer.
   caller computing window bounds from the typed fields alone sees an empty
   window rather than an error. `mzdata` added handling for exactly these terms
   in `58e509b` (2026-09-10), which is evidence that real files carry them.
-- **`term_marker` column mappings are not interpreted** — `d0c16b3` formalised
-  two forms: a *string* column whose value is a CURIE for a child of the
-  mapping's accession (`spectrum_representation` -> `MS:1000127`/`MS:1000128`,
-  `activation.dissociation_method` -> `MS:1000422`/`MS:1000598`), and a
-  *boolean* column marking the presence of a value-less term
-  (`opt_MS_1002678_suppl_beam_disc`). Nothing in this tree reads the
-  `term_marker` flag. The standardised columns are unaffected in practice --
-  the specification lets them omit the flag, and they are resolved here by
-  name -- so the live gap is an `opt_`-prefixed term-marker column, which can
-  only be resolved through `column_mapping`. That parser exists but its output
-  is not consulted, which is the same root cause already recorded for
-  non-standard column names.
+- **`term_marker`, both forms — FIXED** (was a gap when `d0c16b3` landed). A
+  marker column states that a term APPLIES to a row rather than carrying its
+  value, and the terms live in sibling COLUMNS of `parameters` rather than
+  inside the list, so every pass that walked the list missed them. Both forms
+  now reach `parameters`: a boolean column contributes the mapping's own
+  accession when true, and a string column contributes the CURIE it carries,
+  which is a CHILD of the mapping's accession. The child's NAME is left unset,
+  because resolving a CURIE to a name needs a loaded CV this library does not
+  carry. Terms already surfaced as typed fields (`MS:1000525`, `MS:1000559`,
+  `MS:1000465`) are skipped so a writer that flags a standardised column does
+  not get it reported twice. Pinned by `test/term_marker_test.cpp` against
+  `test/files/term_markers.dir`, which was built for this because nothing in
+  either implementation's output carries such a column; the test fails if the
+  feature is removed. Residual limitation: a mapping is matched to a facet by
+  the LAST component of its path, so the same leaf name on two facets of one
+  file would attach the term to both.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
