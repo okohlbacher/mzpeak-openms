@@ -2,6 +2,10 @@
 
 Audited against `HUPO-PSI/mzPeak-specification` at `85442bd`
 (`docs/conformance.md`), as both a conformant reader and a conformant writer.
+Re-checked against `d0c16b3` (2026-09-11), which formalised `term_marker`,
+raised column statistics from optional to required, and moved the example
+`scan_start_time` from float32 to double; the deltas are folded into the rows
+below and into *Known deviations*.
 Two independent passes: this implementation's own, and an adversarial audit by
 an external model. Findings the audit raised are cited where they changed the
 verdict.
@@ -52,7 +56,7 @@ fixtures:
 | Req | Verdict | Notes |
 |---|---|---|
 | W1 produce a conformant archive | **PARTIAL** | subject to the S-invariants below; a NaN coordinate is now rejected rather than written non-ascending; caller-supplied unit CURIEs are not checked for CV ancestry (S8). |
-| W2 page index for index/coordinate columns | **OK** | `enable_write_page_index()` is the single choke point for every Parquet file written. |
+| W2 page index AND column statistics for index/coordinate columns | **OK** | `enable_write_page_index()` and `enable_statistics()` sit together in the single choke point for every Parquet file written (`parquet_writer.cpp`). `d0c16b3` raised statistics from "when present" to a writer MUST; this already satisfied it. |
 | W3 declare every CV used, version-pinned | **FIXED** | `cv_list` was hardcoded MS+UO regardless of content. It is now derived from every CURIE prefix reachable in the finished index; MS and UO are always present (the array index and column mappings use them); each prefix is pinned from a registry of the vocabularies a mass-spec archive plausibly cites. An unpinnable prefix is still declared with a visible placeholder and a warning, never silently omitted. |
 | W4 array index sufficient to reconstruct without names | **OK** (scope-limited) | full `path`/`data_type`/`array_type`/`unit`/`buffer_format`/`sorting_rank` per entry, in the spec-mandated Parquet KV location. Sufficiency holds for the writer's feature set: transforms, mobility and auxiliary arrays are not yet emitted. |
 
@@ -114,6 +118,18 @@ reference corpus or a well-formed archive from the reference writer.
   caller computing window bounds from the typed fields alone sees an empty
   window rather than an error. `mzdata` added handling for exactly these terms
   in `58e509b` (2026-09-10), which is evidence that real files carry them.
+- **`term_marker` column mappings are not interpreted** — `d0c16b3` formalised
+  two forms: a *string* column whose value is a CURIE for a child of the
+  mapping's accession (`spectrum_representation` -> `MS:1000127`/`MS:1000128`,
+  `activation.dissociation_method` -> `MS:1000422`/`MS:1000598`), and a
+  *boolean* column marking the presence of a value-less term
+  (`opt_MS_1002678_suppl_beam_disc`). Nothing in this tree reads the
+  `term_marker` flag. The standardised columns are unaffected in practice --
+  the specification lets them omit the flag, and they are resolved here by
+  name -- so the live gap is an `opt_`-prefixed term-marker column, which can
+  only be resolved through `column_mapping`. That parser exists but its output
+  is not consulted, which is the same root cause already recorded for
+  non-standard column names.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
