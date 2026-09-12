@@ -251,6 +251,7 @@ test_names = [
     'eic',
     'spectra_query',
     'stream_writer',
+    'term_marker',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the

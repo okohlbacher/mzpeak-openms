@@ -26,6 +26,17 @@ void parse_columns(const json::array& input, std::vector<File::Column>& output)
     }
   };
 
+  auto get_bool = [](const json::object& ob,
+                     std::string_view key) -> std::optional<bool> {
+    auto it = ob.find(key);
+
+    if (it != ob.end() && it->value().is_bool()) {
+      return it->value().as_bool();
+    } else {
+      return {};
+    }
+  };
+
   output.reserve(input.size());
 
   for (const auto& column : input) {
@@ -43,6 +54,7 @@ void parse_columns(const json::array& input, std::vector<File::Column>& output)
                     .value_or(""),
         .accession = get_string(colobj, "accession"),
         .unit = get_string(colobj, "unit"),
+        .term_marker = get_bool(colobj, "term_marker").value_or(false),
     };
 
     // A mapping without a path binds nothing and would only ever produce a

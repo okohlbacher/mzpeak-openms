@@ -49,6 +49,16 @@ public:
     /// term is unitless or the writer did not declare one.
     std::optional<std::string> unit;
 
+    /// This column marks the presence of a term rather than carrying a value.
+    ///
+    /// Two forms, per the specification: a BOOLEAN column where `true` means
+    /// this mapping's own accession applies to the row, and a STRING column
+    /// whose value is the CURIE of a CHILD of this mapping's accession (so
+    /// `MS:1000525` "spectrum representation" yields `MS:1000127` centroid or
+    /// `MS:1000128` profile).  A standardised column may leave the flag unset,
+    /// so its absence does not mean the column carries a value.
+    bool term_marker = false;
+
     /// Equality operator (File's operator== needs it).
     bool operator==(const Column&) const = default;
   };
