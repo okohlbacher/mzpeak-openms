@@ -603,24 +603,110 @@ CvParam extract_one_cv_param(const Facet& items, int64_t k)
 /// Mirrors the offset/length idiom already used by read_mz_delta_models.
 /// Each item body is handled by extract_one_cv_param so plans 01-02/01-03
 /// can reuse that helper for lone-CvParam structs (not lists).
+/// Terms this reader already surfaces through a typed field.
+///
+/// A writer MAY set `term_marker` on a standardised column -- the
+/// specification's own examples do -- and appending those to `parameters` as
+/// well would report the same term twice, once typed and once not.  Only
+/// CURIE-valued terms can appear here: a term marker never describes a column
+/// that carries a value, so `ms_level` and the like cannot collide.
+constexpr std::string_view kTypedTermMarkers[] = {
+    "MS:1000525", // spectrum representation -> SpectrumMetadata::representation
+    "MS:1000559", // spectrum type           -> SpectrumMetadata::spectrum_type
+    "MS:1000465", // scan polarity           -> SpectrumMetadata::polarity
+};
+
+/// Append the terms carried by this facet's `term_marker` columns.
+///
+/// A term marker states a term's PRESENCE rather than carrying its value, in
+/// one of the two shapes the specification defines:
+///
+///   - a BOOLEAN column, where `true` means this mapping's own accession
+///     applies to the row (`opt_calibration_spectrum` -> MS:1000928);
+///   - a STRING column, whose value is the CURIE of a CHILD of the mapping's
+///     accession (`dissociation_method` for MS:1000044 -> MS:1000422).
+///
+/// Without this they are invisible.  They are sibling COLUMNS of `parameters`,
+/// not entries inside it, so every pass that walks the list misses them
+/// entirely -- and on the activation facet, where nothing is typed, that is the
+/// difference between reporting the dissociation method and reporting nothing.
+/// They join the same list because that is where this API already reports the
+/// terms it does not give a field of their own.
+///
+/// The child term's NAME is deliberately left unset for the string form:
+/// turning a CURIE into a name needs a loaded controlled vocabulary, which this
+/// library does not carry, and inventing one would be worse than omitting it.
+/// The accession is what dispatch uses and it is preserved exactly.
+void append_term_markers(const Facet& facet, int64_t row, std::vector<CvParam>& out)
+{
+  if (facet.file == nullptr || !facet) return;
+
+  for (const auto& column : facet.file->columns()) {
+    if (!column.term_marker || !column.accession) continue;
+
+    bool typed = false;
+    for (const auto& known : kTypedTermMarkers) {
+      if (known == *column.accession) typed = true;
+    }
+    if (typed) continue;
+
+    // The mapping's path is file-absolute (`activation.dissociation_method`)
+    // while this facet IS the struct owning the leaf, so match the last
+    // component.  A leaf name repeated across two facets of one file would
+    // attach the term to both; no fixture or reference writer does that.
+    std::string_view leaf(column.path);
+    if (auto dot = leaf.rfind('.'); dot != std::string_view::npos) {
+      leaf.remove_prefix(dot + 1);
+    }
+
+    auto field = facet->GetFieldByName(std::string(leaf));
+    if (!field || row >= field->length() || field->IsNull(row)) continue;
+
+    std::optional<std::string> name;
+    if (!column.name.empty()) name = column.name;
+
+    if (auto flag = std::dynamic_pointer_cast<arrow::BooleanArray>(field)) {
+      // Presence marker: false and null alike mean the term is absent.
+      if (flag->Value(row)) {
+        out.push_back(CvParam{.accession = column.accession, .name = name});
+      }
+      continue;
+    }
+
+    std::optional<std::string> child;
+    if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+      child = large->GetString(row);
+    } else if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+      child = str->GetString(row);
+    }
+    // Anything that is neither boolean nor string is not a term marker,
+    // whatever the mapping claims; skip it rather than guess at a meaning.
+    if (child && !child->empty()) {
+      out.push_back(CvParam{.accession = std::move(child)});
+    }
+  }
+}
+
 std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
                                               const char* list_field_name,
                                               int64_t row)
 {
   std::vector<CvParam> out;
 
-  auto slice = list_slice(resolve_field(parent, list_field_name), row);
-  if (!slice) return out;
-
-  auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values);
-  if (!items) return out;
-
-  const int64_t begin = slice->begin;
-  const int64_t length = slice->length;
-  out.reserve(static_cast<std::size_t>(length));
-  for (int64_t k = 0; k < length; ++k) {
-    out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
+  // The list is optional, but term markers are columns in their own right, so
+  // they are collected whether or not this facet carries a `parameters` list.
+  if (auto slice = list_slice(resolve_field(parent, list_field_name), row)) {
+    if (auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values)) {
+      const int64_t begin = slice->begin;
+      const int64_t length = slice->length;
+      out.reserve(static_cast<std::size_t>(length));
+      for (int64_t k = 0; k < length; ++k) {
+        out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
+      }
+    }
   }
+
+  append_term_markers(parent, row, out);
   return out;
 }
 
