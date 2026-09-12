@@ -98,23 +98,40 @@ meson compile -C build && meson test -C build
 and runs the cross-implementation stages; a stage whose dependencies are absent
 is skipped rather than failed.
 
-### When a build that used to work stops linking
+### When a build that used to work stops working
 
-Suspect the toolchain before the tree. Homebrew keeps several versions of a
-dependency installed at once, and a configured build directory caches the
-*absolute* path of the library it found. After a `brew upgrade` the headers
-under `/opt/homebrew/include` point at the new version while the build directory
-still links the old one. That surfaces as an undefined symbol in a third-party
-namespace, naming neither the version skew nor the fix:
+Suspect the toolchain before the tree, and reach for the same fix in both cases
+below:
+
+```sh
+meson setup --reconfigure build build-release build-tsan
+```
+
+It re-runs dependency detection and keeps the options each directory was created
+with. Two distinct failures have been seen, days apart, neither caused by a
+change in this repository:
+
+**A dependency moved.** Homebrew keeps several versions installed at once, and a
+configured build directory caches the *absolute* path of the library it found.
+After a `brew upgrade` the headers under `/opt/homebrew/include` point at the new
+version while the build directory still links the old one. That surfaces as an
+undefined symbol in a third-party namespace, naming neither the version skew nor
+the fix:
 
 ```
 Undefined symbols for architecture arm64:
   "boost::program_options::detail::arg"
 ```
 
-`meson setup --reconfigure <dir>` re-runs dependency detection and keeps the
-options the directory was created with. Observed with Boost 1.90 -> 1.92, where
-both versions remained in `/opt/homebrew/Cellar/boost`.
+Observed with Boost 1.90 -> 1.92, both left in `/opt/homebrew/Cellar/boost`.
+
+**Meson itself moved.** A build directory records the version that generated it
+and refuses to run under another. This one at least names its own remedy:
+
+```
+ERROR: Build directory has been generated with Meson version 1.11.1,
+which is incompatible with the current version 1.12.0.
+```
 
 ## About
 
