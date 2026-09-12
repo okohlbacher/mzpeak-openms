@@ -1257,7 +1257,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   {
     // Earliest scan seen per spectrum, so a multi-scan spectrum reports the
     // representative (earliest) scan rather than the last row read.
-    std::map<uint64_t, std::optional<float>> earliest_scan;
+    std::map<uint64_t, std::optional<double>> earliest_scan;
 
     for (const auto& scan : facets_for("scan", scans_table, files.scans)) {
       {
@@ -1284,7 +1284,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
           // reports a spectrum later than it is, so an RT-range query silently
           // misses it.  Scan windows still accumulate across every scan.
           auto sst =
-              opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
+              opt_double(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
 
           bool representative = true;
           if (auto seen = earliest_scan.find(*src_idx);
@@ -1309,12 +1309,13 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
             // docs/schemas/spectra.md).  ×60 -> seconds (a silent
             // minutes/seconds mismatch is a 60x error).
             //
-            // scan_start_time is float32 while spectrum.time is float64 and
-            // carries the same quantity, so when the two agree to within float32
-            // precision keep the PASS 1 value rather than losing digits at an
-            // exact range boundary.
+            // scan_start_time and spectrum.time carry the same quantity, so
+            // when the two agree keep the PASS 1 value rather than losing
+            // digits at an exact range boundary.  The tolerance stays at
+            // float32 scale because either column may still be stored float32:
+            // the specification only prefers double, it does not require it.
             if (sst) {
-              const double from_scan = static_cast<double>(*sst) * 60.0;
+              const double from_scan = *sst * 60.0;
               const double previous = it->second.retention_time.value_or(from_scan);
               const double scale = std::max(std::abs(from_scan), 1.0);
               if (std::abs(previous - from_scan) > 1e-6 * scale) {
@@ -1519,7 +1520,7 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
   // scan_windows are deliberately NOT read here.  The reference writer maps
   // their limits to m/z units even for wavelength spectra, so a nanometre bound
   // arrives labelled as m/z; reading it would launder that error into our API.
-  std::map<uint64_t, std::optional<float>> earliest_scan;
+  std::map<uint64_t, std::optional<double>> earliest_scan;
   for (const auto& scan :
        facets_of(table, "scan", scans_table, primary_file,
                  files.scans ? &files.scans->index_file() : nullptr)) {
@@ -1537,7 +1538,7 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
         continue;
       }
 
-      auto sst = opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
+      auto sst = opt_double(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
 
       bool representative = true;
       if (auto seen = earliest_scan.find(*src_idx); seen != earliest_scan.end()) {
@@ -1549,11 +1550,11 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
 
       it->second.scan_parameters = read_cv_params_from_list(scan, "parameters", r);
 
-      // scan_start_time is float32 while spectrum.time is float64 and carries
-      // the same quantity, so keep the more precise value when the two agree to
-      // within float32 rounding.
+      // scan_start_time and spectrum.time carry the same quantity, so keep the
+      // PASS 1 value when the two agree.  The tolerance stays at float32 scale
+      // because either column may still be stored float32.
       if (sst) {
-        const double from_scan = static_cast<double>(*sst) * 60.0;
+        const double from_scan = *sst * 60.0;
         const double previous = it->second.time.value_or(from_scan);
         const double scale = std::max(std::abs(from_scan), 1.0);
         if (std::abs(previous - from_scan) > 1e-6 * scale) {
