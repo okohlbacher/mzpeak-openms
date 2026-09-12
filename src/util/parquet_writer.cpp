@@ -516,25 +516,25 @@ namespace {
 std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& rows)
 {
   std::vector<uint64_t> source_index, scan_index;
-  std::vector<std::optional<float>> scan_start_time;
+  std::vector<std::optional<double>> scan_start_time;
   for (const auto& r : rows) {
     source_index.push_back(r.index);
     scan_index.push_back(0);
     scan_start_time.push_back(
         r.retention_time
             // Seconds -> minutes, as for `time` above.
-            ? std::optional<float>(static_cast<float>(*r.retention_time / 60.0))
+            ? std::optional<double>(*r.retention_time / 60.0)
             : std::nullopt);
   }
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("scan_index", arrow::uint64(), true),
-      arrow::field("scan_start_time", arrow::float32(), true),
+      arrow::field("scan_start_time", arrow::float64(), true),
   }));
   return arrow::Table::Make(
       schema, {build_array<arrow::UInt64Builder>(source_index),
                build_array<arrow::UInt64Builder>(scan_index),
-               build_optional_array<arrow::FloatBuilder>(scan_start_time)});
+               build_optional_array<arrow::DoubleBuilder>(scan_start_time)});
 }
 
 /// Precursor facet: one row per (spectrum, precursor).  Column names are the
@@ -946,27 +946,26 @@ std::string wavelength_scans_bytes(const std::vector<WavelengthMetaRow>& rows,
 {
   std::vector<uint64_t> source_index;
   std::vector<uint64_t> scan_index;
-  std::vector<std::optional<float>> start_time;
+  std::vector<std::optional<double>> start_time;
 
   for (const auto& r : rows) {
     source_index.push_back(r.index);
     scan_index.push_back(0);
     // Stored in minutes, like the primary column it mirrors.
-    start_time.push_back(r.time.has_value()
-                             ? std::optional<float>(static_cast<float>(*r.time))
-                             : std::nullopt);
+    start_time.push_back(r.time.has_value() ? std::optional<double>(*r.time)
+                                            : std::nullopt);
   }
 
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("scan_index", arrow::uint64(), true),
-      arrow::field("scan_start_time", arrow::float32(), true),
+      arrow::field("scan_start_time", arrow::float64(), true),
   }));
 
   auto table(arrow::Table::Make(
       schema, {build_array<arrow::UInt64Builder>(source_index),
                build_array<arrow::UInt64Builder>(scan_index),
-               build_optional_array<arrow::FloatBuilder>(start_time)}));
+               build_optional_array<arrow::DoubleBuilder>(start_time)}));
   return table_bytes(table, file_kv);
 }
 
