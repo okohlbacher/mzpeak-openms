@@ -253,6 +253,12 @@ test_names = [
     'stream_writer',
 ]
 
+# A timed-out test is reported as neither pass nor fail: it drops out of the
+# count entirely, so the run still says `Fail: 0` and reads as green while
+# having silently tested less. Not hypothetical -- one thread-sanitizer run
+# reported 39 of 40 with no failure, and did not reproduce. Meson's default is
+# 30 s and the slowest sanitised unit test measures 8.5 s, so a loaded machine
+# need only be ~3.5x slower to lose one.
 foreach test : test_names
     test(test,
          executable('@0@_test'.format(test),
@@ -260,6 +266,7 @@ foreach test : test_names
                     include_directories : include,
                     dependencies : libmzpeak_deps,
                     link_with : libmzpeak),
+         timeout : 120,
          verbose : false)
 endforeach
 
