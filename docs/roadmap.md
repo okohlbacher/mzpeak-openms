@@ -78,6 +78,14 @@ trusted numerically until one is.
   conversion: check the reconstructed m/z against the vendor's own values, and
   that Int32 intensities survive.
 
+**This may now be unblocked.** The prototype gained a real (small) Bruker
+diaPASEF dataset at `test/data/diaPASEF.d/` in `e62e18c` -- `analysis.tdf` plus
+`analysis.tdf_bin`, about 1 MB together. Converting it through the reference
+writer would produce the first genuine vendor-derived archive available here,
+and would speak to BOTH items above at once, since a diaPASEF run carries the
+per-peak mobility array as well as the TDF calibration. Nobody has tried it
+yet; the blocker was only ever the absence of a file.
+
 ## Open — from the 2026-08-03 adversarial review (Codex)
 
 Verified against the code but NOT yet fixed. Ordered by severity. Each is a
