@@ -136,14 +136,18 @@ reference corpus or a well-formed archive from the reference writer.
   feature is removed. Residual limitation: a mapping is matched to a facet by
   the LAST component of its path, so the same leaf name on two facets of one
   file would attach the term to both.
-- **SHA-512 checksums — WRITTEN (FIXED); not verified on read.** `e5e9021`
+- **SHA-512 checksums — FIXED, both sides.** `e5e9021`
   made a lowercase, separator-free SHA-512 digest per indexed file a MUST (the
   ZIP container is explicitly excluded, since packed and unpacked archives are
-  equally valid). All four writer paths now stamp one. The read side parses
-  `checksum` into `Schema::File` but does NOT verify it: the specification makes
-  verification a MAY, and a reader that refused an archive over a stale digest
-  would be less useful than one that can report it. Exposing a verify entry
-  point is the obvious next step and is not done. Semantics were confirmed
+  equally valid). All four writer paths stamp one, and the reader verifies on
+  request: `MzPeak::open(path, Validate::Checksums)` refuses a mismatch and
+  `Index::verify_checksums()` reports one instead. Verification is opt in
+  because it costs a full pass over every indexed member. The report separates
+  `verified` from `unchecked`, so an archive predating the requirement -- which
+  passes having proved nothing -- stays distinguishable from one actually
+  checked; such an archive is not refused, since rejecting everything older than
+  the rule would be a worse reader rather than a stricter one. Semantics were
+  confirmed
   against the reference rather than inferred -- all ten digests in
   `small.unpacked.mzpeak` reproduce as a plain SHA-512 over each file's raw
   bytes, no salt, no header exclusions -- and `test/sha512_test.cpp` recomputes
