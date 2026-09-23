@@ -136,17 +136,18 @@ reference corpus or a well-formed archive from the reference writer.
   feature is removed. Residual limitation: a mapping is matched to a facet by
   the LAST component of its path, so the same leaf name on two facets of one
   file would attach the term to both.
-- **No SHA-512 checksums are written or verified** — `e5e9021` added an
-  integrity section: a conformant file **MUST** carry a lowercase, separator-free
-  SHA-512 hex digest for every file named in `mzpeak_index.json` (the ZIP
-  container itself is explicitly excluded, since packed and unpacked archives are
-  equally valid). This writer emits none, so its archives are not conformant on
-  that point. The reader is unaffected: `checksum` is an unknown key and is
-  ignored, which R6 requires, and all four regenerated reference archives were
-  read correctly after the reference began emitting them. The semantics were
-  confirmed against the reference rather than assumed -- all ten digests in
+- **SHA-512 checksums — WRITTEN (FIXED); not verified on read.** `e5e9021`
+  made a lowercase, separator-free SHA-512 digest per indexed file a MUST (the
+  ZIP container is explicitly excluded, since packed and unpacked archives are
+  equally valid). All four writer paths now stamp one. The read side parses
+  `checksum` into `Schema::File` but does NOT verify it: the specification makes
+  verification a MAY, and a reader that refused an archive over a stale digest
+  would be less useful than one that can report it. Exposing a verify entry
+  point is the obvious next step and is not done. Semantics were confirmed
+  against the reference rather than inferred -- all ten digests in
   `small.unpacked.mzpeak` reproduce as a plain SHA-512 over each file's raw
-  bytes, with no salt and no header exclusions.
+  bytes, no salt, no header exclusions -- and `test/sha512_test.cpp` recomputes
+  that same digest so the two implementations are checked against each other.
 - **Grid encoding is refused, not read** — the prototype added a `grid` buffer
   encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
   maps anything it does not know to `Layout::Unknown`, and the decoder raises
