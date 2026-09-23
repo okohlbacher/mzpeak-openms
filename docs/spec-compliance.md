@@ -4,8 +4,10 @@ Audited against `HUPO-PSI/mzPeak-specification` at `85442bd`
 (`docs/conformance.md`), as both a conformant reader and a conformant writer.
 Re-checked against `d0c16b3` (2026-09-11), which formalised `term_marker`,
 raised column statistics from optional to required, and moved the example
-`scan_start_time` from float32 to double; the deltas are folded into the rows
-below and into *Known deviations*.
+`scan_start_time` from float32 to double; and again against `e5e9021`
+(2026-09-22), which made a SHA-512 checksum per indexed file a MUST and
+extended the page-index requirement to cover row group statistics.  The deltas
+are folded into the rows below and into *Known deviations*.
 Two independent passes: this implementation's own, and an adversarial audit by
 an external model. Findings the audit raised are cited where they changed the
 verdict.
@@ -134,6 +136,23 @@ reference corpus or a well-formed archive from the reference writer.
   feature is removed. Residual limitation: a mapping is matched to a facet by
   the LAST component of its path, so the same leaf name on two facets of one
   file would attach the term to both.
+- **No SHA-512 checksums are written or verified** — `e5e9021` added an
+  integrity section: a conformant file **MUST** carry a lowercase, separator-free
+  SHA-512 hex digest for every file named in `mzpeak_index.json` (the ZIP
+  container itself is explicitly excluded, since packed and unpacked archives are
+  equally valid). This writer emits none, so its archives are not conformant on
+  that point. The reader is unaffected: `checksum` is an unknown key and is
+  ignored, which R6 requires, and all four regenerated reference archives were
+  read correctly after the reference began emitting them. The semantics were
+  confirmed against the reference rather than assumed -- all ten digests in
+  `small.unpacked.mzpeak` reproduce as a plain SHA-512 over each file's raw
+  bytes, with no salt and no header exclusions.
+- **Grid encoding is refused, not read** — the prototype added a `grid` buffer
+  encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
+  maps anything it does not know to `Layout::Unknown`, and the decoder raises
+  `UnknownLayoutError` rather than guessing, so such an archive is refused
+  cleanly instead of being misread. Supporting it is unstarted work, not a
+  latent corruption.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
