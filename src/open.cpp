@@ -12,13 +12,14 @@ top-level directory of this repository.
 #include <memory>
 #include <stdexcept>
 
+#include "mzpeak/exception.h"
 #include "mzpeak/io/directory.h"
 #include "mzpeak/io/zip.h"
 
 namespace MzPeak {
 
 /******************************************************************************/
-MzPeak::Index open(const fs::path& path)
+MzPeak::Index open(const fs::path& path, Validate validate)
 {
   std::unique_ptr<MzPeak::IO::Archive> archive;
 
@@ -33,7 +34,27 @@ MzPeak::Index open(const fs::path& path)
     throw std::runtime_error("network access not implemented");
   }
 
-  return MzPeak::Index(std::move(archive));
+  MzPeak::Index index(std::move(archive));
+
+  if (validate == Validate::Checksums) {
+    const ChecksumReport report = index.verify_checksums();
+    if (!report.ok()) {
+      // Name one member and both digests: "checksum mismatch" alone leaves the
+      // caller unable to tell a damaged transfer from an edited archive.
+      const ChecksumMismatch& first = report.mismatches.front();
+      std::string msg("checksum mismatch in " + path.string() + ": " +
+                      first.file_name + " hashes to " +
+                      (first.actual.empty() ? std::string("nothing (member absent)")
+                                            : first.actual) +
+                      ", index records " + first.expected);
+      if (report.mismatches.size() > 1) {
+        msg += " (and " + std::to_string(report.mismatches.size() - 1) + " more)";
+      }
+      throw ChecksumError(msg);
+    }
+  }
+
+  return index;
 }
 
 } // namespace MzPeak

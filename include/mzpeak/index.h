@@ -9,6 +9,7 @@ directory of this repository.
 #pragma once
 
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -38,10 +39,49 @@ class Spectra;
 /**
  * Read-only access to the index inside a MzPeak archive.
  */
+/// One member whose bytes do not hash to the digest the index records.
+struct ChecksumMismatch {
+  std::string file_name;
+  std::string expected; ///< what `mzpeak_index.json` claims
+  std::string actual;   ///< what the stored bytes actually hash to
+};
+
+/**
+ * The outcome of verifying an archive's recorded SHA-512 digests.
+ *
+ * `unchecked` is reported separately and deliberately: an archive written
+ * before the digests became mandatory records none at all, and such an archive
+ * would otherwise "pass" verification having proved nothing.  A caller that
+ * cares about integrity must look at `verified`, not only at `ok()`.
+ */
+struct ChecksumReport {
+  std::size_t verified = 0;  ///< members whose digest matched their bytes
+  std::size_t unchecked = 0; ///< members the index records no digest for
+  std::vector<ChecksumMismatch> mismatches;
+
+  /// True when nothing disagreed.  Vacuously true for an archive that records
+  /// no digests -- see `verified`.
+  bool ok() const { return mismatches.empty(); }
+};
+
 class Index {
 public:
   /// Constructor.
   Index(std::unique_ptr<MzPeak::IO::Archive>);
+
+  /**
+   * Recompute the SHA-512 of every member the index records one for.
+   *
+   * Reads every byte of every indexed member, so the cost is the size of the
+   * archive; that is why it is a separate call rather than part of opening.
+   * Members are streamed, not held.
+   *
+   * Reports rather than throws, so a caller can distinguish a damaged member
+   * from an archive that simply predates the requirement, and can decide for
+   * itself whether to continue.  `MzPeak::open(path, Validate::Checksums)`
+   * wraps this and throws instead.
+   */
+  ChecksumReport verify_checksums() const;
 
   /**
    * Return a list of files found in the index.
