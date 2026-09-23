@@ -9,10 +9,12 @@ ordinary split-layout archive:
   opt_calibration_spectrum   boolean  MS:1000928  presence of a value-less term
   opt_dissociation_method    string   MS:1000044  CURIE of a CHILD of that term
 
-and additionally sets `term_marker` on the STANDARDISED `spectrum_representation`
-mapping (MS:1000525).  That column is already surfaced as a typed field, so a
-reader that appends every marker blindly reports it twice; the fixture pins that
-it does not.
+and additionally sets `term_marker` on two STANDARDISED mappings that this
+reader already surfaces as typed fields -- `spectrum_representation`
+(MS:1000525) and a column carrying MS:1000626 -- so a reader that appends every
+marker blindly reports those twice.  The fixture pins that it does not.  Both
+accessions are ones the reference writer really does flag as of prototype
+1505fce, which is how the MS:1000626 case was found.
 
 Row layout, chosen so one archive covers every branch:
 
@@ -36,6 +38,10 @@ import pyarrow.parquet as pq
 
 CALIBRATION = [True, False, None, False]
 DISSOCIATION = ["MS:1000422", "MS:1000598", None, ""]
+# Mapped to MS:1000626, which this reader types as ChromatogramMetadata::type.
+# The skip is purely accession-based, so carrying it on a spectrum column tests
+# the same branch without needing a second, chromatogram-bearing archive.
+CHROMATOGRAM_TYPE = ["MS:1000235", None, None, None]
 
 ADDED_MAPPINGS = [
     {
@@ -49,6 +55,13 @@ ADDED_MAPPINGS = [
         "name": "dissociation method",
         "path": "opt_dissociation_method",
         "accession": "MS:1000044",
+        "unit": None,
+        "term_marker": True,
+    },
+    {
+        "name": "chromatogram type",
+        "path": "opt_chromatogram_type",
+        "accession": "MS:1000626",
         "unit": None,
         "term_marker": True,
     },
@@ -78,6 +91,9 @@ def main() -> int:
     )
     table = table.append_column(
         "opt_dissociation_method", pa.array(DISSOCIATION, pa.string())
+    )
+    table = table.append_column(
+        "opt_chromatogram_type", pa.array(CHROMATOGRAM_TYPE, pa.string())
     )
     pq.write_table(
         table.replace_schema_metadata(key_value), path, store_schema=True

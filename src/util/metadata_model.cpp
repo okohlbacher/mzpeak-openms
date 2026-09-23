@@ -610,10 +610,14 @@ CvParam extract_one_cv_param(const Facet& items, int64_t k)
 /// well would report the same term twice, once typed and once not.  Only
 /// CURIE-valued terms can appear here: a term marker never describes a column
 /// that carries a value, so `ms_level` and the like cannot collide.
+/// Kept in step with what the reference writer actually flags: every accession
+/// it marks is listed here if this reader also types it.  As of prototype
+/// 1505fce that is exactly this set.
 constexpr std::string_view kTypedTermMarkers[] = {
     "MS:1000525", // spectrum representation -> SpectrumMetadata::representation
     "MS:1000559", // spectrum type           -> SpectrumMetadata::spectrum_type
     "MS:1000465", // scan polarity           -> SpectrumMetadata::polarity
+    "MS:1000626", // chromatogram type       -> ChromatogramMetadata::type
 };
 
 /// Append the terms carried by this facet's `term_marker` columns.
