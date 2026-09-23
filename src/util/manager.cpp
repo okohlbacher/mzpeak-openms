@@ -195,4 +195,10 @@ std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
   return std::make_unique<Util::Parquet>(std::move(data), file, row_group_cache_);
 }
 
+/******************************************************************************/
+std::unique_ptr<MzPeak::IO::File> Manager::read_member(const std::string& name) const
+{
+  return archive_->read_file(name);
+}
+
 } // namespace MzPeak::Util

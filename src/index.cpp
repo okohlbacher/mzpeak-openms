@@ -18,6 +18,7 @@ directory of this repository.
 #include "mzpeak/io/archive.h"
 #include "mzpeak/metadata/table.h"
 #include "mzpeak/util/manager.h"
+#include "mzpeak/util/sha512.h"
 #include "mzpeak/util/metadata_model.h"
 
 namespace MzPeak {
@@ -30,6 +31,45 @@ Index::Index(std::unique_ptr<MzPeak::IO::Archive> archive)
 
 /******************************************************************************/
 const std::vector<Schema::File>& Index::files() const { return manager_->files(); }
+
+/******************************************************************************/
+ChecksumReport Index::verify_checksums() const
+{
+  ChecksumReport report;
+
+  for (const Schema::File& file : manager_->files()) {
+    const std::optional<std::string>& expected = file.checksum();
+    if (!expected.has_value() || expected->empty()) {
+      ++report.unchecked;
+      continue;
+    }
+
+    std::unique_ptr<IO::File> member(manager_->read_member(file.file_name()));
+    if (member == nullptr) {
+      // The index names a member the archive does not contain.  That is a
+      // broken archive, and silently counting it as unchecked would hide it.
+      report.mismatches.push_back({file.file_name(), *expected, std::string()});
+      continue;
+    }
+
+    Util::Sha512 hash;
+    std::vector<uint8_t> buffer(64 * 1024);
+    for (;;) {
+      std::optional<std::size_t> got = member->read(buffer.data(), buffer.size());
+      if (!got.has_value() || *got == 0) break;
+      hash.update(buffer.data(), *got);
+    }
+
+    std::string actual(hash.hex_digest());
+    if (actual == *expected) {
+      ++report.verified;
+    } else {
+      report.mismatches.push_back({file.file_name(), *expected, std::move(actual)});
+    }
+  }
+
+  return report;
+}
 
 /******************************************************************************/
 std::vector<Schema::File>::const_iterator Index::find(std::string_view name) const

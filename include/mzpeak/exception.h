@@ -75,6 +75,24 @@ public:
 };
 
 /**
+ * A member's bytes do not hash to the SHA-512 the index records for it, so the
+ * archive has been altered or damaged since it was written.  Only raised when
+ * the caller asked for verification: it is a MAY in the specification, and
+ * most archives predate the requirement entirely.
+ */
+class ChecksumError final : public Exception {
+public:
+  /// Constructor.
+  ChecksumError(const std::string& msg)
+      : Exception(msg)
+  {
+  }
+
+  /// Destructor.
+  ~ChecksumError() = default;
+};
+
+/**
  * Automatic decoding of signal data is only supported for standard
  * file layouts such as point and chunked.
  */

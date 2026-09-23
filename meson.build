@@ -254,6 +254,7 @@ test_names = [
     'stream_writer',
     'term_marker',
     'sha512',
+    'validation',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the
