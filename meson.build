@@ -68,6 +68,7 @@ lib_sources = [
   'src/util/executor.cpp',
   'src/util/manager.cpp',
   'src/util/parquet.cpp',
+  'src/util/sha512.cpp',
   'src/util/json_writer.cpp',
   'src/util/metadata_model.cpp',
   'src/util/null_fill.cpp',
@@ -252,6 +253,7 @@ test_names = [
     'spectra_query',
     'stream_writer',
     'term_marker',
+    'sha512',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the

@@ -12,6 +12,7 @@ directory of this repository.
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <numeric>
 #include <string>
 #include <zip.h>
@@ -21,6 +22,7 @@ directory of this repository.
 #include "mzpeak/schema/data_kind.h"
 #include "mzpeak/util/json_writer.h"
 #include "mzpeak/util/parquet_writer.h"
+#include "mzpeak/util/sha512.h"
 
 namespace MzPeak {
 
@@ -150,9 +152,11 @@ std::vector<Util::IndexFileEntry> spectra_facet_entries()
 // mzpeak_index.json describing the data + metadata tables (+ peaks if present).
 // WRT-2: when `run_metadata` is non-null, its serialized run-level blocks are
 // merged into the emitted `metadata{}` alongside `version`.
-std::string spectra_index_json(bool with_data,
-                               bool with_peaks,
-                               const RunMetadata* run_metadata = nullptr)
+std::string
+spectra_index_json(bool with_data,
+                   bool with_peaks,
+                   const RunMetadata* run_metadata = nullptr,
+                   const std::map<std::string, std::string>& checksums = {})
 {
   using Schema::DataKind;
   std::vector<Util::IndexFileEntry> files;
@@ -174,6 +178,14 @@ std::string spectra_index_json(bool with_data,
     files.push_back({"spectra_peaks.parquet", "spectrum",
                      Schema::DataKind(DataKind::Peaks).to_string()});
   }
+  // The index cannot carry its own digest, so only the members written beside
+  // it are stamped; a name absent from the map stays null rather than empty.
+  for (auto& file : files) {
+    if (auto it = checksums.find(file.name); it != checksums.end()) {
+      file.checksum = it->second;
+    }
+  }
+
   if (run_metadata != nullptr) {
     return Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json());
   }
@@ -215,6 +227,25 @@ struct Member {
   std::string name;
   std::string bytes;
 };
+
+/******************************************************************************/
+/// SHA-512 of a file already written to disk, streamed rather than slurped: a
+/// point table can be gigabytes, and hashing must not be the thing that decides
+/// how much memory writing a run takes.
+std::string checksum_of_file(const fs::path& path)
+{
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw ParquetError("cannot reopen to checksum: " + path.string());
+
+  Util::Sha512 hash;
+  char buffer[64 * 1024];
+  while (in.read(buffer, sizeof(buffer)) || in.gcount() > 0) {
+    hash.update(buffer, static_cast<std::size_t>(in.gcount()));
+    if (!in) break;
+  }
+  if (in.bad()) throw ParquetError("error reading to checksum: " + path.string());
+  return hash.hex_digest();
+}
 
 /******************************************************************************/
 // Chromatogram types that select ions this writer cannot record.
@@ -591,6 +622,13 @@ std::vector<Member> build_run_members(const RunContents& contents,
   // Run-level metadata goes in unconditionally.  The reference writer copies it
   // only in its chromatogram close path, so a wavelength-only archive can lose
   // the version, CV list and run description entirely.
+  // Stamp each index entry with the digest of the member it names, which must
+  // happen before the index is serialised and cannot cover the index itself.
+  for (auto& file : files) {
+    const auto member = std::ranges::find(members, file.name, &Member::name);
+    if (member != members.end()) file.checksum = Util::sha512_hex(member->bytes);
+  }
+
   std::string index_json(
       run_metadata != nullptr
           ? Util::mzpeak_index_json(files, "0.9.0", run_metadata->to_json())
@@ -716,8 +754,19 @@ void write_spectra_directory_impl(const fs::path& dir,
     Util::write_spectra_metadata_facets(tmp_dir.string(),
                                         build_metadata_rows(spectra));
 
-    write_index_file(tmp_dir / "mzpeak_index.json",
-                     spectra_index_json(with_data, with_peaks, run_metadata));
+    // Hashed back off disk rather than kept in memory: these tables were
+    // written straight through, and a run large enough to matter is a run too
+    // large to hold twice.
+    std::map<std::string, std::string> checksums;
+    for (const auto& entry : fs::directory_iterator(tmp_dir)) {
+      if (!entry.is_regular_file()) continue;
+      checksums.emplace(entry.path().filename().string(),
+                        checksum_of_file(entry.path()));
+    }
+
+    write_index_file(
+        tmp_dir / "mzpeak_index.json",
+        spectra_index_json(with_data, with_peaks, run_metadata, checksums));
 
     // Remove any existing target before the atomic rename (M10: POSIX rename
     // returns ENOTEMPTY for non-empty directories).
@@ -766,7 +815,23 @@ void write_spectra_archive_impl(const fs::path& zip_path,
       Util::spectra_metadata_bytes(build_metadata_rows(spectra)));
   std::array<std::string, 3> facet_bytes(
       Util::spectra_metadata_facet_bytes(build_metadata_rows(spectra)));
-  std::string index_json(spectra_index_json(with_data, with_peaks, run_metadata));
+  std::map<std::string, std::string> checksums;
+  if (with_data) {
+    checksums.emplace("spectra_data.parquet", Util::sha512_hex(data_bytes));
+  }
+  if (with_peaks) {
+    checksums.emplace("spectra_peaks.parquet", Util::sha512_hex(peaks_bytes));
+  }
+  checksums.emplace("spectra_metadata.parquet", Util::sha512_hex(metadata_bytes));
+  checksums.emplace("spectra_metadata_scans.parquet",
+                    Util::sha512_hex(facet_bytes[0]));
+  checksums.emplace("spectra_metadata_precursors.parquet",
+                    Util::sha512_hex(facet_bytes[1]));
+  checksums.emplace("spectra_metadata_selected_ions.parquet",
+                    Util::sha512_hex(facet_bytes[2]));
+
+  std::string index_json(
+      spectra_index_json(with_data, with_peaks, run_metadata, checksums));
 
   int errnum = 0;
   zip_t* archive = zip_open(Util::narrow(zip_path).c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errnum);
@@ -1042,12 +1107,25 @@ void RunArchiveWriter::finish()
     members.push_back({"spectra_metadata_precursors.parquet", std::move(facets[1])});
     members.push_back({"spectra_metadata_selected_ions.parquet", std::move(facets[2])});
   }
+  std::map<std::string, std::string> checksums;
+  for (const Member& member : members) {
+    checksums.emplace(member.name, Util::sha512_hex(member.bytes));
+  }
+  // The point tables never passed through memory here; they are streamed from
+  // the working files they were written to.
+  if (with_data) {
+    checksums.emplace("spectra_data.parquet", checksum_of_file(im.data.path));
+  }
+  if (with_peaks) {
+    checksums.emplace("spectra_peaks.parquet", checksum_of_file(im.peaks.path));
+  }
+
   std::string index_json;
   if (im.rows.empty()) {
     index_json = Util::mzpeak_index_json({}, "0.9.0");
   } else {
-    index_json = spectra_index_json(with_data, with_peaks,
-                                    im.metadata ? &*im.metadata : nullptr);
+    index_json = spectra_index_json(
+        with_data, with_peaks, im.metadata ? &*im.metadata : nullptr, checksums);
   }
   members.push_back({"mzpeak_index.json", std::move(index_json)});
 
