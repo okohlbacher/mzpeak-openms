@@ -118,4 +118,10 @@ BOOST_AUTO_TEST_CASE(typed_term_is_not_reported_twice)
   const auto s0 = spectra[0];
   BOOST_TEST(!has(accessions(s0.metadata()), "MS:1000525"));
   BOOST_TEST(!s0.metadata().representation.empty());
+
+  // MS:1000626 is typed as ChromatogramMetadata::type, and the reference writer
+  // flags it (prototype 1505fce).  The skip is accession-based, so the child
+  // CURIE must not surface even though the column sits on a spectrum here.
+  BOOST_TEST(!has(accessions(s0.metadata()), "MS:1000626"));
+  BOOST_TEST(!has(accessions(s0.metadata()), "MS:1000235"));
 }

@@ -56,6 +56,13 @@
           "accession": "MS:1000044",
           "unit": null,
           "term_marker": true
+        },
+        {
+          "name": "chromatogram type",
+          "path": "opt_chromatogram_type",
+          "accession": "MS:1000626",
+          "unit": null,
+          "term_marker": true
         }
       ],
       "parameters": []
