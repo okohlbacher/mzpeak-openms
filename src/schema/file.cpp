@@ -83,6 +83,11 @@ try
   if (cs != o.end() && cs->value().is_array()) {
     parse_columns(cs->value().as_array(), columns_);
   }
+
+  // Explicitly null is how an archive says "no digest", and is not an error.
+  if (auto sum = o.find("checksum"); sum != o.end() && sum->value().is_string()) {
+    checksum_ = std::string(sum->value().as_string());
+  }
 } catch (const std::exception& e) {
   throw MzPeak::JsonError(std::string("schema::File: ") + e.what());
 }

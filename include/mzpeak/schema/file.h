@@ -78,6 +78,12 @@ public:
   /// This file's data kind.
   DataKind data_kind() const { return data_kind_; }
 
+  /// The SHA-512 the index records for this file, lowercase hex with no
+  /// separators, or absent when the archive declares none.  The specification
+  /// requires one per indexed file, but archives written before that rule are
+  /// common and are not rejected over it.
+  const std::optional<std::string>& checksum() const { return checksum_; }
+
   /// This file's entity type.
   EntityType entity_type() const { return entity_type_; }
 
@@ -99,6 +105,9 @@ private:
   DataKind data_kind_ = DataKind("other");
   EntityType entity_type_ = EntityType("other");
   std::vector<Column> columns_;
+
+  // SHA-512 hex digest from the index, if the archive declares one.
+  std::optional<std::string> checksum_;
 };
 
 } // namespace MzPeak::Schema
