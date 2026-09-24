@@ -44,9 +44,12 @@ upstream `trunk` and adds the following.
   MS-Numpress (`MS:1002312` / `MS:1002314`) encodings.
 - Bruker TDF *ims-compact*, which stores no m/z array at all — m/z is
   reconstructed from a `tof` column as `(a + b*tof)^2`.
-- Per-peak ion mobility (`Spectrum::ion_mobility_array()`) and per-window
-  mobility limits, which diaPASEF needs: a frame is one spectrum carrying
-  several isolation windows over disjoint mobility ranges.
+- Per-peak ion mobility (`Spectrum::ion_mobility_array()`), validated against a
+  real Bruker diaPASEF acquisition: the array is parallel to m/z and matches the
+  vendor-derived values exactly (`test/files/diapasef.dir`). Per-window mobility
+  limits are also read, but no file seen so far carries them -- that converter
+  emits one spectrum per window with a single precursor, rather than one frame
+  spanning several.
 - Selection and batch access: `by_id`, `indices_in_time_range`,
   `extract_ion_chromatogram`, `get_spectra_batch`.
 - Streaming is preserved throughout: metadata is readable without decoding
@@ -74,10 +77,14 @@ not as a guarantee.
 
 ### What is NOT validated
 
-- **Ion mobility** — no bundled fixture carries a mobility array, so that code
-  is pinned only by its CV mapping and its absent-data behaviour.
-- **Bruker TDF** — exercised end to end by a hand-built fixture
-  (`test/files/ims_compact.dir`), not by a real vendor archive.
+- **Bruker TDF *ims-compact*** — exercised end to end by a hand-built fixture
+  (`test/files/ims_compact.dir`), not by a real vendor archive. A real diaPASEF
+  `.d` is now available and has been converted, but the conversion declares no
+  `ims_calibration` and stores explicit m/z, so the `(a + b*tof)^2`
+  reconstruction still has never run on vendor data.
+- **Per-window ion-mobility limits** — the acquisition validated below records
+  a mobility VALUE per selected ion and no limits, so
+  `ion_mobility_lower_limit`/`_upper_limit` remain unexercised.
 
 Both need real files before their numbers are trusted. Remaining known issues
 are listed in [docs/roadmap.md](docs/roadmap.md).
