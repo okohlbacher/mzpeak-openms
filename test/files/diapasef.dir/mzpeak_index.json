@@ -1,0 +1,466 @@
+{
+  "files": [
+    {
+      "name": "spectra_data.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "data_arrays",
+      "column_mapping": [],
+      "parameters": [],
+      "checksum": "d63cee38c03177278f58f86c7594c2b1dd015e4924d6b81d76fe5a439fdaa636f781d530f94399a08ae393343a6e3ddee23722662342bcf5a77673ae02527cf1"
+    },
+    {
+      "name": "spectra_peaks.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "peaks",
+      "column_mapping": [],
+      "parameters": [],
+      "checksum": "f5a4be77b0982dd5cb330bc9177a9e8a4b30c828421e7d8d8e7b22983f05c3c763f2ba5bc86733a999165cfe7a6ff7c974a4380aa94d7ff79ebfb71a8e672d36"
+    },
+    {
+      "name": "spectra_metadata.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "metadata",
+      "column_mapping": [
+        {
+          "name": "ms level",
+          "path": "ms_level",
+          "accession": "MS:1000511",
+          "unit": null
+        },
+        {
+          "name": "scan polarity",
+          "path": "scan_polarity",
+          "accession": "MS:1000465",
+          "unit": null
+        },
+        {
+          "name": "spectrum representation",
+          "path": "spectrum_representation",
+          "accession": "MS:1000525",
+          "unit": null,
+          "term_marker": true
+        },
+        {
+          "name": "spectrum type",
+          "path": "spectrum_type",
+          "accession": "MS:1000559",
+          "unit": null,
+          "term_marker": true
+        },
+        {
+          "name": "lowest observed m/z",
+          "path": "lowest_observed_mz",
+          "accession": "MS:1000528",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "highest observed m/z",
+          "path": "highest_observed_mz",
+          "accession": "MS:1000527",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "number of data points",
+          "path": "number_of_data_points",
+          "accession": "MS:1003060",
+          "unit": null
+        },
+        {
+          "name": "number of peaks",
+          "path": "number_of_peaks",
+          "accession": "MS:1003059",
+          "unit": null
+        },
+        {
+          "name": "base peak m/z",
+          "path": "base_peak_mz",
+          "accession": "MS:1000504",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "base peak intensity",
+          "path": "base_peak_intensity",
+          "accession": "MS:1000505",
+          "unit": "MS:1000131"
+        },
+        {
+          "name": "total ion current",
+          "path": "total_ion_current",
+          "accession": "MS:1000285",
+          "unit": "MS:1000131"
+        }
+      ],
+      "parameters": [],
+      "checksum": "69ff387072b04f779ce8d34bcf7671303bd37f60a166e44867edbde10486343052ca93ccf092f5a4e315262c1ed342cf2d9e3ba4c546c98685804558fb62e9b8"
+    },
+    {
+      "name": "spectra_metadata_scans.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "scans",
+      "column_mapping": [
+        {
+          "name": "scan start time",
+          "path": "scan_start_time",
+          "accession": "MS:1000016",
+          "unit": "UO:0000031"
+        },
+        {
+          "name": "preset scan configuration",
+          "path": "preset_scan_configuration",
+          "accession": "MS:1000616",
+          "unit": null
+        },
+        {
+          "name": "filter string",
+          "path": "filter_string",
+          "accession": "MS:1000512",
+          "unit": null
+        },
+        {
+          "name": "ion injection time",
+          "path": "ion_injection_time",
+          "accession": "MS:1000927",
+          "unit": "UO:0000028"
+        },
+        {
+          "name": "scan window lower limit",
+          "path": "scan_windows.scan_window_lower_limit",
+          "accession": "MS:1000501",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "scan window upper limit",
+          "path": "scan_windows.scan_window_upper_limit",
+          "accession": "MS:1000500",
+          "unit": "MS:1000040"
+        }
+      ],
+      "parameters": [],
+      "checksum": "3c06a5c49588a664f0c3a048d1b60bdf5b62219e2a2042c15eeee4451571cf451af7fe9d788d35854edecd3ab58e915739fefcb5b2e468ec149d734ba717fdb9"
+    },
+    {
+      "name": "spectra_metadata_precursors.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "precursors",
+      "column_mapping": [
+        {
+          "name": "isolation window target m/z",
+          "path": "isolation_window.isolation_window_target",
+          "accession": "MS:1000827",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "isolation window lower offset",
+          "path": "isolation_window.isolation_window_lower_offset",
+          "accession": "MS:1000828",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "isolation window upper offset",
+          "path": "isolation_window.isolation_window_upper_offset",
+          "accession": "MS:1000829",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "dissociation method",
+          "path": "activation.dissociation_method",
+          "accession": "MS:1000044",
+          "unit": null
+        },
+        {
+          "name": "collision energy",
+          "path": "activation.collision_energy",
+          "accession": "MS:1000045",
+          "unit": "UO:0000266"
+        }
+      ],
+      "parameters": [],
+      "checksum": "a9cb76a89cd80e953367605e5ed6dbc58cb963fba272e6c4094e4a7b814db01038192c9fe5e2f675cea0e74c307881b0c93b467cc06f980c78e331b687c1ef8d"
+    },
+    {
+      "name": "spectra_metadata_selected_ions.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "selected_ions",
+      "column_mapping": [
+        {
+          "name": "selected ion m/z",
+          "path": "selected_ion_mz",
+          "accession": "MS:1000744",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "charge state",
+          "path": "charge_state",
+          "accession": "MS:1000041",
+          "unit": null
+        },
+        {
+          "name": "intensity",
+          "path": "peak_intensity",
+          "accession": "MS:1000042",
+          "unit": "MS:1000131"
+        }
+      ],
+      "parameters": [],
+      "checksum": "d3978dea9ff101abc386a7a79d5c7dfd085789af51c5a6037f5e3cfbcf987aa5482dbfe347bca97fb4173c357dc9f88fdf49ec9f55a160c017d1ba81e1433be2"
+    }
+  ],
+  "metadata": {
+    "run": {
+      "default_data_processing_id": null,
+      "default_instrument_id": 1,
+      "default_source_file_id": "analysis.tdf",
+      "id": "test/data/diaPASEF.d",
+      "start_time": "2019-08-24T18:27:02.345+02:00"
+    },
+    "instrument_configuration_list": [
+      {
+        "components": [
+          {
+            "component_type": "ionsource",
+            "order": 1,
+            "parameters": [
+              {
+                "accession": "MS:1000398",
+                "name": "nanoelectrospray",
+                "unit": null,
+                "value": null
+              },
+              {
+                "accession": "MS:1000485",
+                "name": "nanospray inlet",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "analyzer",
+            "order": 2,
+            "parameters": [
+              {
+                "accession": "MS:1000081",
+                "name": "quadrupole",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "analyzer",
+            "order": 3,
+            "parameters": [
+              {
+                "accession": "MS:1000084",
+                "name": "time-of-flight",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "detector",
+            "order": 4,
+            "parameters": [
+              {
+                "accession": "MS:1000114",
+                "name": "microchannel plate detector",
+                "unit": null,
+                "value": null
+              }
+            ]
+          },
+          {
+            "component_type": "detector",
+            "order": 5,
+            "parameters": [
+              {
+                "accession": "MS:1000116",
+                "name": "photomultiplier",
+                "unit": null,
+                "value": null
+              }
+            ]
+          }
+        ],
+        "id": 0,
+        "parameters": [
+          {
+            "accession": "MS:1000529",
+            "name": "instrument serial number",
+            "unit": null,
+            "value": 1854399.63
+          },
+          {
+            "accession": "MS:1003005",
+            "name": "timsTOF Pro",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "software_reference": "ACQ_SW"
+      }
+    ],
+    "version": "0.9.0",
+    "scan_settings_list": [],
+    "cv_list": [
+      {
+        "full_name": "Proteomics Standards Initiative Mass Spectrometry Ontology",
+        "id": "MS",
+        "uri": "http://purl.obolibrary.org/obo/ms/4.1.249/psi-ms.obo",
+        "version": "4.1.249"
+      },
+      {
+        "full_name": "Units of measurement ontology",
+        "id": "UO",
+        "uri": "http://purl.obolibrary.org/obo/uo/releases/2026-01-16/uo.obo",
+        "version": "2026-01-16"
+      }
+    ],
+    "file_description": {
+      "contents": [
+        {
+          "accession": "MS:1000579",
+          "name": "MS1 spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000580",
+          "name": "MSn spectrum",
+          "unit": null,
+          "value": null
+        }
+      ],
+      "source_files": [
+        {
+          "id": "analysis.tdf",
+          "location": "file:///Users/kohlbach/Claude/mzPeak OpenMS/hupo-mzpeak/test/data/diaPASEF.d",
+          "name": "analysis.tdf",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "6406479af440ac2140c7bb81d33c003ac600f7c8"
+            },
+            {
+              "accession": "MS:1002817",
+              "name": "Bruker TDF format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1002818",
+              "name": "Bruker TDF nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "analysis.tdf_bin",
+          "location": "file:///Users/kohlbach/Claude/mzPeak OpenMS/hupo-mzpeak/test/data/diaPASEF.d",
+          "name": "analysis.tdf_bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "d2d881dbb808568c74ecad34033bcab7c3a505c7"
+            },
+            {
+              "accession": "MS:1002817",
+              "name": "Bruker TDF format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1002818",
+              "name": "Bruker TDF nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        }
+      ]
+    },
+    "sample_list": [
+      {
+        "id": "SAMPLE_1",
+        "name": "HYE 200ng",
+        "parameters": [
+          {
+            "accession": null,
+            "name": "TDF:AnalysisId",
+            "unit": null,
+            "value": "00000000-0000-0000-0000-000000000000"
+          }
+        ]
+      }
+    ],
+    "data_processing_method_list": [
+      {
+        "id": "mzpeak_conversion1",
+        "methods": [
+          {
+            "order": 1,
+            "parameters": [
+              {
+                "accession": null,
+                "name": "conversion options",
+                "unit": null,
+                "value": "test/data/diaPASEF.d -o /private/tmp/claude-501/-Users-kohlbach-Claude-mzPeak-OpenMS/c596aa18-6329-4f17-b5d1-2688b10aa923/scratchpad/diapasef.mzpeak"
+              }
+            ],
+            "software_reference": "mzpeak_prototyping_convert1"
+          }
+        ]
+      }
+    ],
+    "software_list": [
+      {
+        "id": "TIMS_SDK",
+        "parameters": [
+          {
+            "accession": "MS:1000692",
+            "name": "Bruker software",
+            "unit": null,
+            "value": null
+          },
+          {
+            "accession": null,
+            "name": "software name",
+            "unit": null,
+            "value": "timsrust"
+          }
+        ],
+        "version": "*"
+      },
+      {
+        "id": "ACQ_SW",
+        "parameters": [
+          {
+            "accession": "MS:1000726",
+            "name": "micrOTOFcontrol",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "version": "6.0.110.229-14868-vc141"
+      },
+      {
+        "id": "mzpeak_prototyping_convert1",
+        "parameters": [
+          {
+            "accession": "MS:1000799",
+            "name": "custom unreleased software tool",
+            "unit": null,
+            "value": "mzpeak_prototyping_convert"
+          }
+        ],
+        "version": "0.1.0"
+      }
+    ]
+  }
+}
