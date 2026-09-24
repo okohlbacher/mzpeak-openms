@@ -24,6 +24,8 @@ directory of this repository.
 #include <ranges>
 #include <span>
 #include <sstream>
+#include <cctype>
+#include <format>
 #include <string_view>
 #include <unordered_map>
 
@@ -691,6 +693,95 @@ void append_term_markers(const Facet& facet, int64_t row, std::vector<CvParam>& 
   }
 }
 
+/// Does @p text have the shape of a CURIE ("MS:1000422")?
+///
+/// Used to tell a column that names a CHILD TERM from one that carries an
+/// ordinary string value.  Shape only: resolving it to a real term would need
+/// a controlled vocabulary this library does not carry.
+bool looks_like_curie(std::string_view text)
+{
+  const auto colon = text.find(':');
+  if (colon == std::string_view::npos || colon == 0 || colon + 1 >= text.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < colon; ++i) {
+    if (!std::isalpha(static_cast<unsigned char>(text[i]))) return false;
+  }
+  for (std::size_t i = colon + 1; i < text.size(); ++i) {
+    if (!std::isdigit(static_cast<unsigned char>(text[i]))) return false;
+  }
+  return true;
+}
+
+/// Append the ACTIVATION facet's promoted columns as CV parameters.
+///
+/// Activation is the one facet this reader gives no typed fields at all, so
+/// everything a writer promotes out of `parameters` and into a column of its
+/// own -- `dissociation_method`, `collision_energy` -- simply disappeared.
+/// Confirmed on a real Bruker diaPASEF conversion, where both are columns and
+/// this reader reported an empty activation.
+///
+/// Deliberately scoped to activation rather than applied to every facet.  Every
+/// other facet surfaces its mapped columns as typed fields, so a general
+/// version would need a complete list of the accessions already typed, and a
+/// single omission from that list would silently report a term twice.  The
+/// narrow version cannot do that.
+void append_activation_columns(const Facet& facet,
+                               int64_t row,
+                               std::vector<CvParam>& out)
+{
+  if (facet.file == nullptr || !facet) return;
+
+  constexpr std::string_view kPrefix = "activation.";
+  for (const auto& column : facet.file->columns()) {
+    if (!std::string_view(column.path).starts_with(kPrefix)) continue;
+
+    const std::string_view leaf(
+        std::string_view(column.path).substr(kPrefix.size()));
+    if (leaf.empty() || leaf == "parameters") continue; // already read as a list
+
+    auto field = facet->GetFieldByName(std::string(leaf));
+    if (!field || row >= field->length() || field->IsNull(row)) continue;
+
+    CvParam param;
+    param.accession = column.accession;
+    if (!column.name.empty()) param.name = column.name;
+    if (column.unit.has_value() && !column.unit->empty()) param.unit = column.unit;
+
+    if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+      param.value = large->GetString(row);
+    } else if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+      param.value = str->GetString(row);
+    } else if (auto dbl = std::dynamic_pointer_cast<arrow::DoubleArray>(field)) {
+      // std::format, not std::to_string: the latter is %f with six decimals,
+      // which silently truncates anything with more resolution than that.
+      param.value = std::format("{}", dbl->Value(row));
+    } else if (auto flt = std::dynamic_pointer_cast<arrow::FloatArray>(field)) {
+      param.value = std::format("{}", flt->Value(row));
+    } else if (auto i64 = std::dynamic_pointer_cast<arrow::Int64Array>(field)) {
+      param.value = std::format("{}", i64->Value(row));
+    } else if (auto i32 = std::dynamic_pointer_cast<arrow::Int32Array>(field)) {
+      param.value = std::format("{}", i32->Value(row));
+    } else {
+      continue; // a shape this reader has no honest representation for
+    }
+
+    // A string column mapped to a parent term carries the CURIE of a CHILD --
+    // `dissociation_method` for MS:1000044 holds MS:1000422.  The term that
+    // applies to the row is the child, so report that, not the parent with the
+    // child's name sitting in `value` where nothing would look for it.  The
+    // specification asks for `term_marker` on such columns, but lets the
+    // standardised ones omit it, and this one does.
+    if (param.value.has_value() && looks_like_curie(*param.value)) {
+      param.accession = param.value;
+      param.value.reset();
+      param.unit.reset();
+    }
+
+    out.push_back(std::move(param));
+  }
+}
+
 std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
                                               const char* list_field_name,
                                               int64_t row)
@@ -808,6 +899,7 @@ void attach_precursors(Map& out,
         if (act_struct) {
           const Facet act{act_struct, prec.file};
           pi.activation_parameters = read_cv_params_from_list(act, "parameters", r);
+          append_activation_columns(act, r, pi.activation_parameters);
         }
       }
 

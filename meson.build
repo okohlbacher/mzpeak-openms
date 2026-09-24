@@ -255,6 +255,7 @@ test_names = [
     'term_marker',
     'sha512',
     'validation',
+    'ion_mobility',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the
