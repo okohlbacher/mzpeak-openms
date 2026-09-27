@@ -82,6 +82,16 @@ pyarrow BEFORE this reader was pointed at it.
   several windows over disjoint mobility ranges does not describe this file:
   the converter emits one spectrum per window, each with a single precursor.
   A file that genuinely uses limits is still needed.
+- **The reference's own canonical conversion reads correctly.** `74ff521`
+  committed `diaPASEF.ref.mzpeak` to the prototype, so there is now a reference
+  artifact rather than only a conversion produced here. This reader opens it,
+  reports all 9 spectra with mobility arrays parallel to m/z, and **verifies all
+  ten of its SHA-512 digests** -- an independent check of the checksum
+  implementation against an archive this project did not write. The converter
+  now also exports the TDF calibration models as spectrum parameters under
+  PROVISIONAL accessions (`MS:9999001`, `MS:9999002`) whose value slots are all
+  null, so they are markers rather than coefficients; they surface through
+  `SpectrumMetadata::parameters` as-is.
 - **Bruker TDF "ims-compact" — STILL NOT VALIDATED.** The conversion declares
   no `ims_calibration` and stores explicit m/z, so the `(a + b*tof)^2`
   reconstruction never ran. Having a real `.d` is not sufficient; the converter
