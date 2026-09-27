@@ -152,6 +152,14 @@ reference corpus or a well-formed archive from the reference writer.
   `small.unpacked.mzpeak` reproduce as a plain SHA-512 over each file's raw
   bytes, no salt, no header exclusions -- and `test/sha512_test.cpp` recomputes
   that same digest so the two implementations are checked against each other.
+- **Provenance and column-chunk checksums — not an obligation yet.** The
+  prototype gained per-column-chunk SHA-512 digests and a `write_provenance_table`
+  (`85ff6af`), which is the start of the specification's draft *Provenance*
+  section. Nothing calls that writer, the specification's index schema declares
+  no place for the table, and the section itself still says only that the file
+  "MUST be encrypted using a proprietary secret key". So there is nothing to
+  implement against and no member for a reader to encounter; recorded here only
+  so the mechanism's location is known when it is formalised.
 - **Grid encoding is refused, not read** — the prototype added a `grid` buffer
   encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
   maps anything it does not know to `Layout::Unknown`, and the decoder raises
