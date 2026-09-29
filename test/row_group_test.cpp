@@ -391,6 +391,34 @@ BOOST_AUTO_TEST_CASE(readers_over_one_archive_decode_each_group_once)
 }
 
 /******************************************************************************/
+// A reader asking again for the group it asked for last is answered by its own
+// memo and never reaches the shared cache: a forward pass enters the cache
+// once per GROUP, not once per spectrum -- 12 calls here, not 60 -- and still
+// decodes each group exactly once.
+BOOST_AUTO_TEST_CASE(a_forward_pass_enters_the_shared_cache_once_per_group)
+{
+  Scratch scratch("mzp-test-rowgroups-memo");
+  auto index = MzPeak::open(write_fixture(scratch));
+  auto spectra = index.spectra();
+
+  for (uint64_t s = 0; s < kSpectra; ++s) {
+    auto spectrum = spectra[s];
+    BOOST_TEST_REQUIRE(spectrum.mz().size() == kPoints, "spectrum " << s);
+    BOOST_TEST(spectrum.mz().front() == expected_mz(s, 0),
+               boost::test_tools::tolerance(1e-12));
+  }
+
+  const auto data = index.find_file(MzPeak::Schema::EntityType::Spectrum,
+                                    MzPeak::Schema::DataKind::Type::DataArray);
+  BOOST_TEST_REQUIRE((data != index.files().end()));
+  const int groups = index.manager()->parquet(*data)->file_metadata()->num_row_groups();
+  const auto stats = index.manager()->row_group_cache().stats();
+  BOOST_TEST(groups > 1);
+  BOOST_TEST(stats.decodes == static_cast<std::size_t>(groups));
+  BOOST_TEST(stats.hits + stats.waits == 0u);
+}
+
+/******************************************************************************/
 // An array index whose `prefix` names a layout this reader does not implement
 // must be REFUSED, not guessed at.
 //
