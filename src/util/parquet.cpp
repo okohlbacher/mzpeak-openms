@@ -47,7 +47,12 @@ class RecyclingPool final : public arrow::MemoryPool {
 public:
   static RecyclingPool* get()
   {
-    static RecyclingPool* p = new RecyclingPool; // ponytail: never destroyed; exit reclaims it
+    static RecyclingPool* p = [] {
+      auto* q = new RecyclingPool; // ponytail: never destroyed; exit reclaims it
+      if (std::getenv("MZPEAK_POOL_REPORT"))
+        std::atexit([] { auto* r = get(); std::fprintf(stderr, "MZPEAK_POOL reused=%ld peak_free_mb=%lld\n", r->reused(), static_cast<long long>(r->peak_free() >> 20)); });
+      return q;
+    }();
     return p;
   }
   arrow::Status Allocate(int64_t size, int64_t alignment, uint8_t** out) override
@@ -80,7 +85,7 @@ public:
     const int64_t cls = round_up(size);
     {
       std::lock_guard<std::mutex> g(mu_);
-      if (free_bytes_ + cls <= kCap) { free_[cls].push_back(buffer); free_bytes_ += cls; return; }
+      if (free_bytes_ + cls <= cap_) { free_[cls].push_back(buffer); free_bytes_ += cls; peak_free_ = std::max(peak_free_, free_bytes_); return; }
     }
     sys_->Free(buffer, cls, kAlign);
   }
@@ -92,7 +97,15 @@ public:
 private:
   static constexpr int64_t kMin = int64_t{64} << 10;   // smaller buffers: plain malloc
   static constexpr int64_t kAlign = 64;                 // arrow::kDefaultBufferAlignment
-  static constexpr int64_t kCap = int64_t{1} << 30;     // ponytail: keep at most 1 GB free
+  const int64_t cap_ = [] { const char* e = std::getenv("MZPEAK_POOL_CAP_MB"); return (e ? std::atoll(e) : 1024) << 20; }();
+  int64_t peak_free_ = 0;
+
+public:
+  ~RecyclingPool() override = default;
+  int64_t peak_free() const { return peak_free_; }
+  long reused() const { return reused_; }
+
+private:
   static int64_t round_up(int64_t s) { return (s + 65535) & ~int64_t{65535}; }
   arrow::MemoryPool* sys_ = arrow::system_memory_pool();
   std::mutex mu_;
