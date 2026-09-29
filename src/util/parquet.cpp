@@ -287,8 +287,20 @@ Parquet::Impl::row_group(int32_t index)
     }
     // Outside the lock: get() can wait on another reader's decode, and a
     // thread sharing this object must not be held up behind that.
+    //
+    // With what lets this reader decode AHEAD, on its own file handle, where
+    // it would otherwise wait for another reader's decode of `index`.  The
+    // callbacks take cache_mutex_ and decode_mutex_; neither is held here.
+    RowGroupCache::Ahead ahead;
+    ahead.groups = static_cast<int32_t>(group_bytes_.size());
+    ahead.bytes = [this](int32_t g) {
+      std::lock_guard<std::mutex> guard(cache_mutex_);
+      return group_bytes_locked_(g);
+    };
+    ahead.decode = [this](int32_t g) { return decode_group_(g); };
     auto batches = shared_cache_->get(file_.file_name(), index, bytes,
-                                      [this, index] { return decode_group_(index); });
+                                      [this, index] { return decode_group_(index); },
+                                      &ahead);
     std::lock_guard<std::mutex> guard(cache_mutex_);
     memo_group_ = index;
     memo_batches_ = batches;

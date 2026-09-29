@@ -88,10 +88,26 @@ struct RowGroupBatches {
 ///
 /// A budget smaller than the working set thrashes (a group is decoded again
 /// each time a reader comes back to it) but stays correct.
+///
+/// A reader that finds its group IN FLIGHT does not simply wait for it when it
+/// can decode AHEAD instead: it claims the next group of the same file that
+/// nobody has claimed, decodes that, and only then comes back for its own.
+/// See get().
 class RowGroupCache final {
 public:
   using Batches = std::shared_ptr<const RowGroupBatches>;
   using Decode = std::function<Batches()>;
+
+  /// What a reader needs to decode groups OTHER than the one it asked for:
+  /// the file's group count, and each group's budget size and decode, on the
+  /// reader's own file handle.  Handed to get() by readers that walk a file
+  /// forward; get() calls these under the cache's lock (bytes) and outside
+  /// it (decode).
+  struct Ahead {
+    int32_t groups = 0;
+    std::function<std::size_t(int32_t)> bytes;
+    std::function<Batches(int32_t)> decode;
+  };
 
   /// 1 GiB: room for ~30 groups of a typical archive, two of a chunked Astral
   /// one.  Consumers that know their thread count set their own.
@@ -104,10 +120,16 @@ public:
   /// budget; Parquet's uncompressed row-group size is the right estimate.
   /// Rethrows whatever @p decode threw, for waiters too, and forgets the
   /// entry so a later call tries again.
+  ///
+  /// With @p ahead, a call that would wait for another reader's decode of
+  /// @p group first decodes later groups of @p file that nobody has claimed,
+  /// within the budget.  A failed decode AHEAD is not this call's error: it
+  /// reaches that group's own waiters and is forgotten like any other.
   Batches get(const std::string& file,
               int32_t group,
               std::size_t bytes,
-              const Decode& decode);
+              const Decode& decode,
+              const Ahead* ahead = nullptr);
 
   void set_budget(std::size_t bytes);
   std::size_t budget() const;
@@ -117,8 +139,14 @@ public:
     std::size_t hits = 0;      ///< served from a decoded group
     std::size_t waits = 0;     ///< served by waiting for another reader's decode
     std::size_t admission_waits = 0; ///< decodes held back to stay in budget
+    std::size_t ahead_decodes = 0; ///< of decodes, those done AHEAD by a reader that would have waited
     std::size_t evictions = 0;
     std::size_t held_bytes = 0; ///< budget currently accounted for
+    /// Thread-nanoseconds spent decoding, waiting for another reader's decode,
+    /// and waiting for admission.  Timed per cache call, never per row.
+    std::uint64_t decode_ns = 0;
+    std::uint64_t wait_ns = 0;
+    std::uint64_t admission_ns = 0;
   };
   Stats stats() const;
 
@@ -129,10 +157,41 @@ private:
     std::size_t bytes = 0;
     std::uint64_t used = 0;
     bool ready = false;
+    bool ahead = false; ///< decoded ahead, and no reader has asked for it yet
   };
 
-  /// Evict least-recently-used READY entries, never @p keep, until the budget
-  /// holds or nothing evictable is left.  Caller holds mutex_.
+  /// Is a READY entry still held by a reader (its per-reader memo, or a read
+  /// in progress)?  Evicting such an entry frees nothing -- the reader keeps
+  /// the batches alive -- and sends the next reader that asks back to decode
+  /// it again.
+  static bool held_by_reader_(const Entry& e) { return e.future.get().use_count() > 1; }
+
+  /// Claim @p key for a decode by the caller.  Caller holds mutex_.
+  std::promise<Batches> claim_locked_(const Key& key, std::size_t bytes, bool ahead);
+
+  /// Run @p decode for a claimed @p key outside the lock and publish it (or
+  /// its exception) to every waiter.
+  Batches decode_claimed_(const Key& key,
+                          std::size_t bytes,
+                          std::promise<Batches>& promise,
+                          const Decode& decode);
+
+  /// Decode groups after @p group of @p file that nobody has claimed, while
+  /// the budget has room for them and @p group is still in flight.  Returns
+  /// with mutex_ held, as it was called.
+  void decode_ahead_locked_(std::unique_lock<std::mutex>& lock,
+                            const std::string& file,
+                            int32_t group,
+                            const Ahead& ahead);
+
+  /// Bytes eviction cannot or must not reclaim: groups in flight, groups a
+  /// reader holds, and groups decoded ahead that nobody has asked for yet.
+  /// Caller holds mutex_.
+  std::size_t resident_locked_() const;
+
+  /// Evict least-recently-used READY entries, never @p keep and never one a
+  /// reader still holds, until the budget holds or nothing evictable is left;
+  /// groups decoded ahead and not yet asked for go last.  Caller holds mutex_.
   void evict_locked_(const Key& keep);
 
   mutable std::mutex mutex_;
