@@ -17,7 +17,9 @@ directory of this repository.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <future>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
@@ -872,10 +874,16 @@ std::vector<Facet> facets_of(const std::shared_ptr<arrow::Table>& table,
 ///
 /// H1: join by source_index VALUE, NEVER by row position — the facet has its
 /// own row count and ordering, and chunk boundaries differ per column.
+///
+/// Only rows whose source_index lies in [@p first, @p last] are attached, so
+/// disjoint ranges can be attached on threads of their own: every entity's
+/// rows then stay on one thread, in file order.
 template <typename Map>
 void attach_precursors(Map& out,
                        const std::vector<Facet>& facets,
-                       MetadataDetail detail = MetadataDetail::Full)
+                       MetadataDetail detail = MetadataDetail::Full,
+                       uint64_t first = 0,
+                       uint64_t last = std::numeric_limits<uint64_t>::max())
 {
   for (const auto& prec : facets) {
     // Columns resolved once per facet, not per row: see PASS 1 of
@@ -914,7 +922,7 @@ void attach_precursors(Map& out,
       if (prec->IsNull(r)) continue;
       // source_index NULL => MS1 row, skip (Pitfall 2).
       auto si = opt_int<uint64_t>(source_index, r);
-      if (!si) continue;
+      if (!si || *si < first || *si > last) continue;
 
       auto it = out.find(*si);
       if (it == out.end()) {
@@ -958,10 +966,14 @@ void attach_precursors(Map& out,
 /// precursor has not been seen gets a holder of its own rather than being
 /// attached to an arbitrary precursor — with several precursors per entity,
 /// `precursors.back()` silently mis-assigns the transition.
+///
+/// [@p first, @p last] as in @ref attach_precursors.
 template <typename Map>
 void attach_selected_ions(Map& out,
                           const std::vector<Facet>& facets,
-                          MetadataDetail detail = MetadataDetail::Full)
+                          MetadataDetail detail = MetadataDetail::Full,
+                          uint64_t first = 0,
+                          uint64_t last = std::numeric_limits<uint64_t>::max())
 {
   for (const auto& si : facets) {
     // Columns resolved once per facet, not per row: see PASS 1 of
@@ -985,7 +997,7 @@ void attach_selected_ions(Map& out,
       if (si->IsNull(r)) continue;
       // source_index NULL => MS1 row, skip.
       auto src_idx = opt_int<uint64_t>(source_index, r);
-      if (!src_idx) continue;
+      if (!src_idx || *src_idx < first || *src_idx > last) continue;
 
       auto it = out.find(*src_idx);
       if (it == out.end()) {
@@ -1168,22 +1180,35 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // from this list, and Lean's extras are appended rather than re-typed.
   if (lean) skip_scan.insert(skip_scan.end(), {"parameters", "scan_windows"});
 
+  // The three facet tables are read on threads of their own while this one
+  // reads the primary table and builds the map from it (PASS 1), which needs
+  // nothing else.  Each is a separate archive member with its own handle and
+  // Parquet reader, so nothing is shared but the (locked) footer cache.
+  // Opening a 717,924-spectrum run read them one after another, 0.11 s before
+  // PASS 1 could start; now they are done before it ends.
+  //
+  // Plain threads, not Arrow's use_threads: that starts Arrow's process-wide
+  // CPU pool, one thread per core, for the rest of the process.
+  // ponytail: three short-lived threads per open, whatever the caller's thread
+  // count; get() below is the join and carries a read error back here.
+  auto scans_read = std::async(std::launch::async, [&] {
+    return files.scans ? read_metadata_table(*files.scans, skip_scan) : nullptr;
+  });
+  auto precursors_read = std::async(std::launch::async, [&] {
+    return files.precursors
+               ? (lean ? read_metadata_table(*files.precursors, {"activation"})
+                       : read_metadata_table(*files.precursors))
+               : nullptr;
+  });
+  auto selected_ions_read = std::async(std::launch::async, [&] {
+    return files.selected_ions ? (lean ? read_metadata_table(*files.selected_ions,
+                                                             {"parameters"})
+                                       : read_metadata_table(*files.selected_ions))
+                               : nullptr;
+  });
   auto table = lean ? read_metadata_table(*files.primary,
                                           {"parameters", "auxiliary_arrays"})
                     : read_metadata_table(*files.primary);
-  auto scans_table =
-      files.scans ? read_metadata_table(*files.scans, skip_scan) : nullptr;
-  auto precursors_table =
-      files.precursors
-          ? (lean ? read_metadata_table(*files.precursors, {"activation"})
-                  : read_metadata_table(*files.precursors))
-          : nullptr;
-  auto selected_ions_table =
-      files.selected_ions ? (lean ? read_metadata_table(*files.selected_ions,
-                                                        {"parameters"})
-                                  : read_metadata_table(*files.selected_ions))
-                          : nullptr;
-
   // -------------------------------------------------------------------
   // PASS 1: spectrum column — build `out` keyed by spectrum.index VALUE.
   // -------------------------------------------------------------------
@@ -1268,7 +1293,11 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
       if (spectrum->IsNull(r)) continue;
       if (index.IsNull(r)) continue;
 
-      SpectrumMetadata m;
+      // append + one sort, rather than an insert per row: the rows arrive in
+      // file order (ascending in practice, but the sort does not rely on it)
+      // and nothing looks anything up until PASS 2.  Filled in place: a
+      // local moved in at the end copied all 432 bytes once more per row.
+      SpectrumMetadata& m = out.append(index.Value(r));
       m.index = index.Value(r);
       m.id = get_string(id, r);
       m.ms_level = opt_int<int>(ms_level, r);
@@ -1487,34 +1516,19 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
               std::to_string(m.index) + ")");
         }
       }
-
-      // append + one sort, rather than an insert per row: the rows arrive in
-      // file order (ascending in practice, but the sort does not rely on it)
-      // and nothing looks anything up until PASS 2.
-      const uint64_t key = m.index;
-      out.append(key, std::move(m));
     }
   }
   out.sort();
-
-  // -------------------------------------------------------------------
-  // PASS 2 and 3: precursor, then selected_ion.  Both are shared with the
-  // chromatogram reader -- see attach_precursors / attach_selected_ions.
-  // Order matters: ions attach to the precursors pass 2 created.
-  // -------------------------------------------------------------------
-  attach_precursors(out,
-                    facets_for("precursor", precursors_table, files.precursors),
-                    detail);
-  attach_selected_ions(
-      out, facets_for("selected_ion", selected_ions_table, files.selected_ions),
-      detail);
+  const auto scans_table = scans_read.get();
+  const auto precursors_table = precursors_read.get();
+  const auto selected_ions_table = selected_ions_read.get();
 
   // -------------------------------------------------------------------
   // PASS 4: scan column — scan_parameters + scan_windows (accepted add-on).
   // Same H1 source_index VALUE join.  scan ion_mobility is NULL in all
   // fixtures and is DEFERRED (same as selected_ion IM above).
   // -------------------------------------------------------------------
-  {
+  auto scan_pass = [&] {
     // Earliest scan seen per spectrum, so a multi-scan spectrum reports the
     // representative (earliest) scan rather than the last row read.  The outer
     // optional is "seen at all".
@@ -1633,7 +1647,49 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
         }
       }
     }
+  };
+  // PASS 4 runs beside PASS 2 and 3, which never touch the fields it writes:
+  // they build `precursors`, it sets the scan fields.  Both only look entries
+  // up; nothing is inserted, so `out` itself does not move.  0.04 s off
+  // opening a 717,924-spectrum run.  Unmatched-row notes may now interleave.
+  auto scans_done = std::async(std::launch::async, scan_pass);
+  // -------------------------------------------------------------------
+  // PASS 2 and 3: precursor, then selected_ion.  Both are shared with the
+  // chromatogram reader -- see attach_precursors / attach_selected_ions.
+  // Order matters: ions attach to the precursors pass 2 created.
+  //
+  // Split by spectrum into contiguous index ranges, each attached on a
+  // thread of its own: a spectrum's rows all land on one thread, in file
+  // order, so the result is the serial one.  Every thread walks every row
+  // and keeps its own; that walk is a few ms, the attaching (an allocation
+  // per precursor and per ion) 0.19 s on a 717,924-spectrum run, 0.12 s in
+  // four.  Each thread gets its own copy of the facets, whose column memo is
+  // not shared.
+  // ponytail: four ranges, fixed, whatever the caller's thread count; eight
+  // measured no faster, since the page faults of all those new allocations
+  // do not spread across threads.
+  // -------------------------------------------------------------------
+  {
+    const auto precursor_facets = facets_for("precursor", precursors_table, files.precursors);
+    const auto ion_facets = facets_for("selected_ion", selected_ions_table, files.selected_ions);
+    const auto n = static_cast<std::size_t>(std::ranges::distance(out));
+    const std::size_t parts = n >= 1024 ? 4 : 1;
+    // First index of range t; the last range runs to the end of uint64.
+    const auto bound = [&](std::size_t t) -> uint64_t {
+      return t == 0 || t == parts ? 0 : (out.begin() + static_cast<std::ptrdiff_t>(t * n / parts))->first;
+    };
+    const auto attach = [&](std::size_t t) {
+      const std::vector<Facet> precursors = precursor_facets, ions = ion_facets;
+      attach_precursors(out, precursors, detail, bound(t), bound(t + 1) - 1);
+      attach_selected_ions(out, ions, detail, bound(t), bound(t + 1) - 1);
+    };
+    std::vector<std::future<void>> others;
+    for (std::size_t t = 1; t < parts; ++t)
+      others.push_back(std::async(std::launch::async, attach, t));
+    attach(0);
+    for (auto& f : others) f.get();
   }
+  scans_done.get();
 
   return out;
 }

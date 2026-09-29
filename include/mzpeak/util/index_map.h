@@ -10,8 +10,14 @@ directory of this repository.
 
 #include <algorithm>
 #include <cstdint>
+#include <tuple>
 #include <utility>
 #include <vector>
+
+#ifdef __linux__
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 namespace MzPeak::Util {
 
@@ -48,10 +54,43 @@ public:
   iterator end() { return data_.end(); }
   const_iterator begin() const { return data_.begin(); }
   const_iterator end() const { return data_.end(); }
-  void reserve(std::size_t n) { data_.reserve(n); }
+  /// Reserve room for @p n entries -- on Linux, backed by transparent huge
+  /// pages when that is large.
+  ///
+  /// WHY: the map is filled once, front to back, right after this, and on
+  /// 4 KB pages that fill is mostly page faults: 76k of them for a
+  /// 717,924-spectrum run (310 MB), which made PASS 1 of the metadata read
+  /// 0.30 s instead of 0.16 s on kim.  2 MB pages take 512x fewer, and
+  /// unmapping the map at the end gets the same factor.
+  ///
+  /// ponytail: advice, never a requirement -- a kernel that declines it (THP
+  /// "never", or no huge page free) keeps 4 KB pages and loses nothing, and
+  /// below 32 MB the faults are not worth a syscall.
+  void reserve(std::size_t n)
+  {
+    data_.reserve(n);
+#ifdef __linux__
+    const std::size_t bytes = data_.capacity() * sizeof(value_type);
+    if (bytes < (std::size_t(32) << 20)) return;
+    const auto page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
+    const auto begin = reinterpret_cast<std::uintptr_t>(data_.data());
+    const std::uintptr_t first = (begin + page - 1) & ~(page - 1);
+    const std::uintptr_t last = (begin + bytes) & ~(page - 1);
+    if (last > first) madvise(reinterpret_cast<void*>(first), last - first, MADV_HUGEPAGE);
+#endif
+  }
 
   /// Append in file order; sort() must follow before any find().
   void append(uint64_t key, T value) { data_.emplace_back(key, std::move(value)); }
+
+  /// Append a default value in file order and return it, to be filled in
+  /// place: building a large value on the side and moving it in costs a
+  /// copy of it per entry.
+  T& append(uint64_t key)
+  {
+    return data_.emplace_back(std::piecewise_construct, std::forward_as_tuple(key),
+                              std::forward_as_tuple()).second;
+  }
 
   /// Order by key, keeping the FIRST entry for a duplicated key.
   ///
