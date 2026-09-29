@@ -73,9 +73,14 @@ public:
   /// @param cache  shared with every other Parquet over the same archive, so a
   ///   row group is decoded once for all of them; without it this object keeps
   ///   a private two-group cache.
+  /// @param footer  this file's footer, already parsed by another Parquet over
+  ///   the same member (see Manager::parquet()), so it is not read and parsed
+  ///   again.  Null reads it from the file.  Read-only once parsed, so any
+  ///   number of readers may share one, on any threads.
   Parquet(std::unique_ptr<MzPeak::IO::File>,
           Schema::File,
-          std::shared_ptr<RowGroupCache> cache = nullptr);
+          std::shared_ptr<RowGroupCache> cache = nullptr,
+          file_metadata_t footer = nullptr);
 
   /// Destructor.
   ~Parquet();

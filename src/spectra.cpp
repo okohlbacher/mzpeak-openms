@@ -89,8 +89,12 @@ void Spectra::resize_from_metadata_()
   // missing rows already gets.
   if (!md_map_ || md_map_->begin() == md_map_->end()) return;
 
-  uint64_t last = 0;
-  for (const auto& [index, unused] : *md_map_) last = std::max(last, index);
+  // The map is sorted by index and free of duplicates (IndexMap::sort(), which
+  // every map is built through before any lookup), so its last entry holds the
+  // largest index.  Walking all of them instead read one cache line per
+  // spectrum of a map shared by every reader: 3 ms per Spectra on a
+  // 717,924-spectrum run, paid again by each per-thread copy.
+  const uint64_t last = std::prev(md_map_->end())->first;
   if (last == std::numeric_limits<uint64_t>::max()) return; // last + 1 would wrap
   const std::size_t from_metadata = static_cast<std::size_t>(last) + 1;
   if (from_metadata > size()) resize(from_metadata);

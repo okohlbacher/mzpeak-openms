@@ -14,6 +14,7 @@ directory of this repository.
 #include "mzpeak/exception.h"
 #include "mzpeak/index.h"
 #include "mzpeak/open.h"
+#include "mzpeak/util/manager.h"
 
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(can_parse_json)
@@ -169,5 +170,35 @@ BOOST_AUTO_TEST_CASE(split_metadata_layout_decodes_peaks)
         break;
       }
     }
+  }
+}
+
+/******************************************************************************/
+// Every Parquet over one member shares the footer the first one parsed, so a
+// per-thread reader does not read and parse it again -- while still reading
+// through a handle of its own, since a file position cannot be shared.  And
+// the readers built that way read the same values.
+BOOST_AUTO_TEST_CASE(readers_over_one_member_share_its_parsed_footer)
+{
+  using enum MzPeak::Schema::DataKind::Type;
+  auto index = MzPeak::open("../test/files/small.mzpeak");
+  const auto manager = index.manager();
+
+  const auto file = manager->find_file(MzPeak::Schema::EntityType::Spectrum, Peaks);
+  BOOST_TEST_REQUIRE((file != manager->files().end()));
+  auto first = manager->parquet(*file);
+  auto second = manager->parquet(*file);
+  BOOST_TEST(first->file_metadata() == second->file_metadata());
+  BOOST_TEST(&first->reader() != &second->reader());
+
+  auto a = index.spectra();
+  auto b = index.spectra();
+  BOOST_TEST_REQUIRE(a.size() == b.size());
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    auto x = a[i];
+    auto y = b[i];
+    BOOST_TEST_REQUIRE(x.mz().size() == y.mz().size());
+    BOOST_TEST((x.mz() == y.mz()));
+    BOOST_TEST((x.intensity() == y.intensity()));
   }
 }
