@@ -27,6 +27,8 @@ class RecordBatch;
 
 namespace MzPeak::Util {
 
+struct KeyRuns;
+
 /// A decoded row group: the record batches Parquet hands back for it, plus
 /// what a reader needs to find a row in them WITHOUT touching Arrow.
 ///
@@ -54,6 +56,12 @@ struct RowGroupBatches {
   /// and searching one column's spans with another's value silently returns
   /// the wrong rows.
   int32_t key_leaf = -1;
+
+  /// Set when the group's declared-sorted key column was verified sorted and
+  /// NOT kept: its values are these runs, and its place in every batch holds a
+  /// zero-byte null placeholder.  A reader must check this before touching
+  /// that column.  See key_runs.h.
+  std::shared_ptr<const KeyRuns> key_runs;
 
   bool has_keys() const { return !key_first.empty(); }
 };

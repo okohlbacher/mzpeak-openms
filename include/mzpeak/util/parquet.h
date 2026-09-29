@@ -144,6 +144,11 @@ public:
    * Spectrum copies its values out and drops the slice; Chromatogram keeps its
    * decoder, and so keeps a group resident for as long as the caller holds it.
    * That is bounded by how many entities the caller holds, not by the run.
+   *
+   * @note A group whose declared-sorted key proves sorted is decoded WITHOUT
+   * that column: RowGroupBatches::key_runs holds it as runs and a null
+   * placeholder takes its place in the batches (key_runs.h).  The Executor
+   * handles this; a direct caller must check key_runs before reading the key.
    */
   using RowGroupBatches = Util::RowGroupBatches;
   std::shared_ptr<const RowGroupBatches> row_group(int32_t);

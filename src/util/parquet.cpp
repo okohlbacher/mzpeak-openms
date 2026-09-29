@@ -25,6 +25,7 @@ directory of this repository.
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/arrow.h"
+#include "mzpeak/util/key_runs.h"
 
 namespace MzPeak::Util {
 
@@ -227,8 +228,14 @@ std::size_t decoded_row_group_bytes(const parquet::RowGroupMetaData& group,
   const auto rows = static_cast<std::size_t>(group.num_rows());
   std::size_t width = 0;
   bool exact = true;
+  // A key the decode will hold as runs costs nothing per row (KeyRuns).
+  // ponytail: judged from the footer, so a file that declares a sorted key it
+  // does not have is under-counted by that key; its runs (~16 B a spectrum)
+  // are not counted at all.
+  const std::optional<int32_t> runs = run_key_leaf(group, schema);
 
   for (int i : std::views::iota(0, schema.num_columns())) {
+    if (runs && i == *runs) continue;
     const parquet::ColumnDescriptor* column = schema.Column(i);
     switch (column->physical_type()) {
       case parquet::Type::BOOLEAN: width += 1; break;
@@ -363,13 +370,51 @@ Parquet::Impl::decode_group_(int32_t index)
   // way.
   std::unique_lock<std::recursive_mutex> guard(decode_mutex_);
 
-  auto reader_result = reader_->GetRecordBatchReader({index});
-  if (!reader_result.ok()) {
-    throw ParquetError("read row group " + std::to_string(index) + ": " +
-                       reader_result.status().ToString());
-  }
-
   auto batches = std::make_shared<Parquet::RowGroupBatches>();
+
+  // Read the batches: without the declared-sorted key when that column proves
+  // sorted (KeyRuns: ~40% of a point group, held as runs instead), in full
+  // otherwise.  `strip` is null for a full read; false means the batches did
+  // not come back in the shape the runs describe.
+  auto read = [&](const KeyRuns* strip) -> bool {
+    batches->batches.clear();
+    std::vector<int> leaves;
+    for (int c = 0; strip && c < reader_->parquet_reader()->metadata()->num_columns(); ++c) {
+      if (c != strip->leaf) leaves.push_back(c);
+    }
+    auto reader_result = strip ? reader_->GetRecordBatchReader({index}, leaves)
+                               : reader_->GetRecordBatchReader({index});
+    if (!reader_result.ok()) {
+      throw ParquetError("read row group " + std::to_string(index) + ": " +
+                         reader_result.status().ToString());
+    }
+    int64_t rows = 0;
+    for (auto maybe_batch : **reader_result) {
+      if (!maybe_batch.ok()) {
+        throw ParquetError("read row group " + std::to_string(index) + ": " +
+                           maybe_batch.status().ToString());
+      }
+      std::shared_ptr<arrow::RecordBatch> batch = *maybe_batch;
+      if (strip && !(batch = insert_key_placeholder(batch, *strip))) return false;
+      rows += batch->num_rows();
+      batches->batches.push_back(std::move(batch));
+    }
+    return strip == nullptr || rows == strip->start.back();
+  };
+  std::shared_ptr<KeyRuns> runs = scan_key_runs(*reader_, index);
+  bool stripped = false;
+  if (runs) {
+    try {
+      stripped = read(runs.get());
+    } catch (const ParquetError&) {
+      // The full read below meets the same fault, if it is one, and reports it.
+    }
+  }
+  if (!stripped) {
+    runs.reset();
+    read(nullptr);
+  }
+  batches->key_runs = std::move(runs);
 
   // The leaf index of the column this file declares sorted, if any.
   int32_t sort_leaf = -1;
@@ -382,13 +427,6 @@ Parquet::Impl::decode_group_(int32_t index)
   }
   int64_t rows_seen = 0;
   std::vector<std::pair<int64_t, int64_t>> keyed;
-  for (auto maybe_batch : **reader_result) {
-    if (!maybe_batch.ok()) {
-      throw ParquetError("read row group " + std::to_string(index) + ": " +
-                         maybe_batch.status().ToString());
-    }
-    batches->batches.push_back(*maybe_batch);
-  }
 
   // Materialise Arrow's LAZY per-array boxing while this group is still
   // private to the decoding thread.
