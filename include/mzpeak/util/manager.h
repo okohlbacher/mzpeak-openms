@@ -12,6 +12,7 @@ directory of this repository.
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -58,7 +59,8 @@ public:
    * Open a Parquet file from the mzPeak archive.
    */
   /// A reader over @p file.  Every Parquet from one Manager shares the
-  /// row-group cache below, so a group is decoded once for all of them.
+  /// row-group cache below, so a group is decoded once for all of them, and
+  /// every Parquet over one member shares its parsed footer.  Thread-safe.
   std::unique_ptr<Util::Parquet> parquet(const Schema::File&) const;
 
   /**
@@ -137,6 +139,11 @@ private:
   mutable std::map<MetadataDetail, std::shared_ptr<const SpectrumMetadataMap>>
       spectrum_metadata_;
   mutable std::mutex spectrum_metadata_mutex_;
+
+  // Each member's parsed Parquet footer, by file name, from the first Parquet
+  // opened over it; see parquet().  Mutable for the same reason as above.
+  mutable std::map<std::string, Parquet::file_metadata_t, std::less<>> footers_;
+  mutable std::mutex footers_mutex_;
 };
 
 } // namespace MzPeak::Util

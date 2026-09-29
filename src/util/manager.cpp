@@ -191,8 +191,40 @@ Manager::spectrum_metadata(MetadataDetail detail,
 /******************************************************************************/
 std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
 {
+  // Every Parquet opens its OWN handle -- the file position is per reader and
+  // cannot be shared -- but the footer is the same for every handle on one
+  // member, and reading and parsing it was most of opening one.  A per-thread
+  // Spectra over a 717,924-spectrum run took ~2.5 ms to open its six members,
+  // 1.0 ms of it for the 341-row-group peaks footer alone, and kept a parsed
+  // copy of every footer.  So the first Parquet over a member parses it and
+  // every later one reuses that: ~1 ms per Spectra now.
+  //
+  // Sharing is safe because a parsed FileMetaData is only ever read: every
+  // accessor builds its row-group and column-chunk views afresh from it, and
+  // Arrow's own dataset scanner hands one to concurrent readers the same way.
+  // The lock covers only this map.  Two threads that open the same member for
+  // the first time at once both parse it; the first result is kept, and the
+  // other lives only as long as its reader.
+  //
+  // Only the footer.  The StatsIndex built from it stays per Parquet: its
+  // sorted-column lookups take its mutex on every query and its group hint is
+  // per-reader state, so sharing it would turn an uncontended lock per thread
+  // into one that every reader thread contends for.
+  Parquet::file_metadata_t footer;
+  {
+    std::lock_guard<std::mutex> guard(footers_mutex_);
+    if (auto it = footers_.find(file.file_name()); it != footers_.end())
+      footer = it->second;
+  }
+
   std::unique_ptr<IO::File> data(archive_->read_file(file.file_name()));
-  return std::make_unique<Util::Parquet>(std::move(data), file, row_group_cache_);
+  auto parquet = std::make_unique<Util::Parquet>(std::move(data), file,
+                                                 row_group_cache_, footer);
+  if (!footer) {
+    std::lock_guard<std::mutex> guard(footers_mutex_);
+    footers_.emplace(file.file_name(), parquet->file_metadata());
+  }
+  return parquet;
 }
 
 /******************************************************************************/

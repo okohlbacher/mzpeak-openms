@@ -65,7 +65,8 @@ std::optional<std::size_t> get_kv_uint(const Parquet::file_metadata_t& fmd,
 struct Parquet::Impl {
   Impl(std::unique_ptr<IO::File> data,
        Schema::File file,
-       std::shared_ptr<RowGroupCache> shared_cache)
+       std::shared_ptr<RowGroupCache> shared_cache,
+       Parquet::file_metadata_t footer)
       : file_(std::move(file))
       , arrow_(std::make_unique<Arrow>(std::move(data)))
       , reader_(nullptr)
@@ -88,7 +89,10 @@ struct Parquet::Impl {
     // peak RSS (185 -> 180 MB at 16 threads).  Revisit if a later Arrow
     // fixes the allocator.
     reader_builder.memory_pool(arrow::system_memory_pool());
-    auto status = reader_builder.Open(std::move(raf));
+    // A footer parsed before is handed in rather than read and parsed again;
+    // see Manager::parquet().
+    auto status = reader_builder.Open(
+        std::move(raf), parquet::default_reader_properties(), std::move(footer));
 
     if (!status.ok()) {
       std::string msg("while opening file: " + file_.file_name() + ": ");
@@ -450,8 +454,10 @@ Parquet::Impl::decode_group_(int32_t index)
 /******************************************************************************/
 Parquet::Parquet(std::unique_ptr<IO::File> data,
                  Schema::File file,
-                 std::shared_ptr<RowGroupCache> cache)
-    : impl_(std::make_unique<Impl>(std::move(data), std::move(file), std::move(cache)))
+                 std::shared_ptr<RowGroupCache> cache,
+                 file_metadata_t footer)
+    : impl_(std::make_unique<Impl>(
+          std::move(data), std::move(file), std::move(cache), std::move(footer)))
 {
 }
 
