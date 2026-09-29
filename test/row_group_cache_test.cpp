@@ -155,3 +155,113 @@ BOOST_AUTO_TEST_CASE(failed_decode_releases_admission)
   });
   BOOST_CHECK(retried);
 }
+
+/******************************************************************************/
+namespace {
+RowGroupCache::Batches empty_group() { return std::make_shared<const RowGroupBatches>(); }
+
+/// Readers of a file whose groups decode instantly, counting decodes ahead.
+RowGroupCache::Ahead instant_ahead(int32_t groups, std::size_t bytes, std::atomic<int>& calls)
+{
+  RowGroupCache::Ahead ahead;
+  ahead.groups = groups;
+  ahead.bytes = [bytes](int32_t) { return bytes; };
+  ahead.decode = [&calls](int32_t) {
+    ++calls;
+    return empty_group();
+  };
+  return ahead;
+}
+
+/// Starts decoding group 0 of "f" on another thread and returns once it is in
+/// flight; the decode finishes after @p hold.
+std::thread slow_first_decode(RowGroupCache& cache, std::size_t bytes,
+                              std::chrono::milliseconds hold)
+{
+  std::atomic<bool> started{false};
+  std::thread first([&cache, &started, bytes, hold] {
+    cache.get("f", 0, bytes, [&] {
+      started = true;
+      std::this_thread::sleep_for(hold);
+      return empty_group();
+    });
+  });
+  while (!started) std::this_thread::yield();
+  return first;
+}
+} // namespace
+
+/******************************************************************************/
+/// A reader that finds its group IN FLIGHT decodes the next groups nobody has
+/// claimed instead of idling, and a later reader of one of those finds it
+/// ready rather than decoding it again.
+BOOST_AUTO_TEST_CASE(waiting_reader_decodes_ahead)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(64 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(4, kGroup, calls);
+
+  std::thread first = slow_first_decode(cache, kGroup, std::chrono::milliseconds(200));
+  cache.get("f", 0, kGroup,
+            []() -> RowGroupCache::Batches { throw std::logic_error("decoded twice"); },
+            &ahead);
+  first.join();
+
+  BOOST_CHECK_EQUAL(calls.load(), 3); // groups 1, 2 and 3: the rest of the file
+  BOOST_CHECK_EQUAL(cache.stats().ahead_decodes, 3u);
+  BOOST_CHECK_EQUAL(cache.stats().decodes, 4u);
+
+  bool decoded = false;
+  cache.get("f", 2, kGroup, [&] {
+    decoded = true;
+    return empty_group();
+  });
+  BOOST_CHECK(!decoded);
+}
+
+/******************************************************************************/
+/// Decoding ahead stays inside the budget, and never by evicting what it
+/// decoded ahead before: a waiting reader stops once the groups it would add
+/// no longer fit next to the ones in flight or not yet asked for.
+BOOST_AUTO_TEST_CASE(decoding_ahead_stays_within_budget)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(4 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(10, kGroup, calls);
+
+  std::thread first = slow_first_decode(cache, kGroup, std::chrono::milliseconds(200));
+  cache.get("f", 0, kGroup, []() -> RowGroupCache::Batches { return empty_group(); }, &ahead);
+  first.join();
+
+  // Group 0 in flight plus three decoded ahead fill the four-group budget.
+  BOOST_CHECK_EQUAL(calls.load(), 3);
+  BOOST_CHECK_EQUAL(cache.stats().evictions, 0u);
+  BOOST_CHECK_LE(cache.stats().held_bytes, 4 * kGroup);
+}
+
+/******************************************************************************/
+/// A group a reader still holds is never the one evicted: dropping it frees
+/// nothing (the reader keeps it alive) and makes the next reader decode it
+/// again.
+BOOST_AUTO_TEST_CASE(held_groups_are_not_evicted)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(kGroup); // room for one
+
+  auto a = cache.get("f", 0, kGroup, empty_group);
+  auto b = cache.get("f", 1, kGroup, empty_group);
+  BOOST_CHECK_EQUAL(cache.stats().evictions, 0u); // both held: overshoot instead
+
+  a.reset();
+  cache.get("f", 2, kGroup, empty_group); // evicts the released group 0, not 1
+  BOOST_CHECK_EQUAL(cache.stats().evictions, 1u);
+
+  bool decoded = false;
+  cache.get("f", 1, kGroup, [&] {
+    decoded = true;
+    return empty_group();
+  });
+  BOOST_CHECK(!decoded);
+}
