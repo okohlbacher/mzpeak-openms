@@ -25,6 +25,7 @@ directory of this repository.
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/arrow.h"
+#include "mzpeak/util/decode_pool.h"
 #include "mzpeak/util/key_runs.h"
 
 namespace MzPeak::Util {
@@ -77,23 +78,22 @@ struct Parquet::Impl {
     auto raf = arrow_->reader();
 
     auto reader_builder = parquet::arrow::FileReaderBuilder();
-    // Decoded row groups come from the SYSTEM pool, not Arrow's default.
+    // Decoded row groups come from the DecodePool, not Arrow's default.
     //
     // A decoded group outlives the thread that decoded it: the cache is
     // shared across readers (RowGroupCache), so a buffer allocated on a
     // worker is routinely freed later, often after that worker has exited --
     // a consumer using OpenMP tears its workers down at the end of each
     // parallel region.  Arrow 25's bundled mimalloc/jemalloc crash on that
-    // free (EXC_BAD_ACCESS in _mi_arenas_page_abandon); plain malloc/free
-    // does not care which thread frees, or whether it still exists.
-    // Measured cost on a 7,534-spectrum archive: none, and slightly less
-    // peak RSS (185 -> 180 MB at 16 threads).  Revisit if a later Arrow
-    // fixes the allocator.
-    reader_builder.memory_pool(arrow::system_memory_pool());
+    // free (EXC_BAD_ACCESS in _mi_arenas_page_abandon).  Plain malloc
+    // survives it but strands the freed group in the decoding thread's arena
+    // (3.56 GB at 128 threads); the DecodePool recycles it across threads.
+    reader_builder.memory_pool(&decode_pool());
     // A footer parsed before is handed in rather than read and parsed again;
-    // see Manager::parquet().
+    // see Manager::parquet().  The page and decompression buffers come from
+    // the same pool; every other reader property keeps its default.
     auto status = reader_builder.Open(
-        std::move(raf), parquet::default_reader_properties(), std::move(footer));
+        std::move(raf), parquet::ReaderProperties(&decode_pool()), std::move(footer));
 
     if (!status.ok()) {
       std::string msg("while opening file: " + file_.file_name() + ": ");

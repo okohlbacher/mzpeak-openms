@@ -14,6 +14,7 @@ directory of this repository.
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/arrow.h"
+#include "mzpeak/util/decode_pool.h"
 
 namespace MzPeak::Util {
 
@@ -83,8 +84,13 @@ public:
     // Each buffer-returning read MUST own its storage.  Returning a shared
     // scratch buffer that a later read overwrites would corrupt data Arrow
     // still holds (e.g. a footer buffer kept while metadata is read).
+    //
+    // From the DecodePool: these are the column chunks Parquet pre-buffers,
+    // read on Arrow's I/O threads, freed on a reader's, and kept by each
+    // reader until its next decode (~4 MB each).  In Arrow's default pool
+    // (jemalloc) they cost ~1 GB of RSS beyond the live ones at 128 threads.
     arrow::Result<std::unique_ptr<arrow::ResizableBuffer>> alloc(
-        arrow::AllocateResizableBuffer(nbytes));
+        arrow::AllocateResizableBuffer(nbytes, &decode_pool()));
     if (!alloc.ok()) throw ParquetError(alloc.status().ToString());
     std::shared_ptr<arrow::ResizableBuffer> buffer(std::move(alloc.ValueOrDie()));
 
