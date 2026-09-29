@@ -32,6 +32,7 @@ top-level directory of this repository.
 #include <type_traits>
 
 #include "mzpeak/util/algorithm.h"
+#include "mzpeak/util/key_runs.h"
 #include "mzpeak/util/parquet.h"
 #include "mzpeak/util/types.h"
 
@@ -158,6 +159,13 @@ struct Executor::Impl {
 
   /// Capture the requested columns.
   void project(std::shared_ptr<arrow::RecordBatch>&);
+
+  /// The rows [first, last) of a group held as runs that @p plan selects --
+  /// only when the plan is the one the sorted binary search below would answer
+  /// (an equality on this key, declared sorted in this group, in the key's own
+  /// type) and nothing projects the key.  Otherwise nothing.
+  std::optional<std::pair<int64_t, int64_t>>
+  key_run(const Planner::Plan&, const KeyRuns&, bool sorted_column) const;
 
   /// Return the array associated with the given field.
   std::shared_ptr<arrow::Array> array(std::shared_ptr<arrow::RecordBatch>& batch,
@@ -310,6 +318,29 @@ std::vector<bool> Executor::Impl::filter(const Planner::Plan& plan,
 }
 
 /******************************************************************************/
+std::optional<std::pair<int64_t, int64_t>>
+Executor::Impl::key_run(const Planner::Plan& plan, const KeyRuns& runs,
+                        bool sorted_column) const
+{
+  if (!sorted_column) return std::nullopt;
+  auto equality = plan.query.as_equality();
+  if (!equality) return std::nullopt;
+  const auto& [field, wanted] = *equality;
+  if (field.second->absolute_index() != runs.leaf) return std::nullopt;
+
+  // The type the binary search would compare in (EqualityScan), which must be
+  // the order the runs were verified in.
+  const auto& type = field.second->type();
+  if (!type.has_value() || *type != (runs.is_unsigned ? Type::UInt64 : Type::Int64)) {
+    return std::nullopt;
+  }
+  for (const auto& column : projection_.get()) {
+    if (column.second->absolute_index() == runs.leaf) return std::nullopt;
+  }
+  return runs.rows(wanted);
+}
+
+/******************************************************************************/
 void Executor::Impl::project(std::shared_ptr<arrow::RecordBatch>& batch)
 {
   for (const auto& field : slice_->fields()) {
@@ -434,6 +465,45 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
                           std::chrono::steady_clock::now() - t_rg0)
                           .count());
 #endif
+
+    // A group decoded WITHOUT its sorted key (KeyRuns): the runs name the
+    // wanted rows directly.  The walk below is the sorted-equality path further
+    // down, run for run -- same batches, same ranges, same order, same slices
+    // -- with the run found in the group's runs instead of by a binary search
+    // over the column it replaces.  Any other query, or one that projects the
+    // key itself, gets the group back as a full decode would have produced it.
+    if (batches->key_runs) {
+      if (auto run = impl_->key_run(plan, *batches->key_runs, sorted_column)) {
+        const auto [first, last] = *run;
+        const auto& offsets = batches->row_offset;
+        auto bi = static_cast<std::size_t>(
+            std::upper_bound(offsets.begin(), offsets.end(), first) - offsets.begin());
+        for (bi = bi > 0 ? bi - 1 : 0;
+             first < last && bi < batches->batches.size() && offsets[bi] < last; ++bi) {
+          const std::shared_ptr<arrow::RecordBatch>& batch = batches->batches[bi];
+          const int64_t start = offsets[bi];
+          const int64_t rows = batch->num_rows();
+          MZPEAK_COUNT(g_batches_visited);
+          for (const auto& range : row_group.second) {
+            if (range.offset + range.length <= start || range.offset >= start + rows) {
+              continue;
+            }
+            const auto [offset, length] =
+                Algorithm::intersect_range(range.offset, range.length, start, rows);
+            if (length == 0) continue;
+            const int64_t lo = std::max(first - start, offset);
+            const int64_t hi = std::min(last - start, offset + length);
+            if (hi > lo) {
+              MZPEAK_COUNT(g_slices_made);
+              auto matched = batch->Slice(lo, hi - lo);
+              impl_->project(matched);
+            }
+          }
+        }
+        continue;
+      }
+      batches = restore_key_column(*batches);
+    }
 
     // WHICH batches can hold the wanted key, decided arithmetically.
     //
