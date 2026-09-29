@@ -31,10 +31,12 @@ Spectrum::Spectrum(
     std::vector<Data::ArrayIndex::Dimension> dims,
     std::shared_ptr<Metadata::Table> metadata,
     std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
-    ImsCalibration ims)
+    ImsCalibration ims,
+    std::shared_ptr<const SpectrumMetadata> md_own)
     : index_(index)
     , md_table_(std::move(metadata))
     , md_map_(std::move(md_map))
+    , md_own_(std::move(md_own))
     , signals_(std::move(data))
     , dims_(std::move(dims))
     , ims_(ims)
@@ -213,6 +215,7 @@ const std::vector<double>& Spectrum::ion_mobility_array() const
 const SpectrumMetadata& Spectrum::metadata() const
 {
   static const SpectrumMetadata empty{};
+  if (md_own_) return *md_own_;
   if (!md_map_) return empty;
   auto it = md_map_->find(index_);
   return it == md_map_->end() ? empty : it->second;
