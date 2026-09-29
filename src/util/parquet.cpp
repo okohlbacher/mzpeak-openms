@@ -109,6 +109,9 @@ struct Parquet::Impl {
 
     reader_ = std::move(reader);
     stats_ = std::make_shared<StatsIndex>(reader_->parquet_reader()->metadata());
+    group_bytes_.assign(
+        static_cast<std::size_t>(reader_->parquet_reader()->metadata()->num_row_groups()),
+        0);
     parse_schema();
   }
 
@@ -131,6 +134,11 @@ struct Parquet::Impl {
   /// The decode itself, under this object's lock; see decode_group_().
   std::shared_ptr<const Parquet::RowGroupBatches> decode_group_(int32_t index);
 
+  /// decoded_row_group_bytes() of @p index, worked out once per group: it
+  /// walks every column of the schema and cannot change.  Caller holds
+  /// cache_mutex_.
+  std::size_t group_bytes_locked_(int32_t index);
+
   Schema::File file_;
   std::unique_ptr<Arrow> arrow_;
   std::shared_ptr<parquet::arrow::FileReader> reader_;
@@ -141,6 +149,13 @@ struct Parquet::Impl {
   /// object was built outside a Manager; then cache_ below is used.
   std::shared_ptr<RowGroupCache> shared_cache_;
 
+  /// The group this object last took from shared_cache_, HELD, so asking for
+  /// it again does not go back to the cache.  See row_group().
+  int32_t memo_group_ = -1;
+  std::shared_ptr<const Parquet::RowGroupBatches> memo_batches_;
+
+  /// group_bytes_locked_()'s answers, one per row group; 0 until asked.
+  std::vector<std::size_t> group_bytes_;
 
   /// Private fallback: most-recently-decoded row groups, newest last.  Bounded
   /// because a decoded group is tens of megabytes; two is enough for a forward
@@ -150,7 +165,8 @@ struct Parquet::Impl {
   std::vector<std::pair<int32_t, std::shared_ptr<const Parquet::RowGroupBatches>>>
       cache_;
 
-  /// Guards cache_ (private path).  See row_group().
+  /// Guards cache_ (private path), and the memo and group_bytes_ (shared
+  /// path).  See row_group().
   std::mutex cache_mutex_;
   /// Guards the decode, which shares one file position; taken on both paths.
   std::recursive_mutex decode_mutex_;
@@ -235,13 +251,43 @@ std::shared_ptr<const Parquet::RowGroupBatches>
 Parquet::Impl::row_group(int32_t index)
 {
   if (shared_cache_) {
-    // Also out of the per-spectrum path: computing the group's decoded size
-    // walks every column of the schema, and it cannot change between calls.
-    const auto metadata = reader_->parquet_reader()->metadata();
-    const std::size_t bytes =
-        decoded_row_group_bytes(*metadata->RowGroup(index), *metadata->schema());
+    // A memo in front of the shared cache.  A group holds thousands of
+    // spectra and a reader walks a contiguous range, so nearly every call asks
+    // for the group the previous one did -- and without the memo each such
+    // call took the cache's one archive-wide mutex and copied a shared_future
+    // every other thread in that group was copying too.  On a 347-group,
+    // 717,924-spectrum archive that grew user CPU per spectrum 57% from 16 to
+    // 128 threads, and voluntary context switches fivefold.
+    //
+    // Under THIS object's lock, not in plain members: e066604 memoised the
+    // same thing unsynchronised and cbabd65 had to drop it, because one reader
+    // shared across threads (one_shared_reader_across_threads_agrees) could be
+    // handed another group's batches.  With one Spectra per thread, the
+    // documented pattern, the lock is private to that thread and uncontended.
+    //
+    // HELD, not the weak_ptr e066604 used: a memo hit skips get(), so it does
+    // not refresh the group's LRU recency, and a weak handle could lose the
+    // group a reader is still walking and send it back to decode it again.
+    //
+    // ponytail: the memo keeps its group alive past the cache's budget -- one
+    // group per Parquet that reads through the shared cache, i.e. per reader
+    // thread (two with a separate peaks file).  Bounded by the thread count,
+    // and in practice the groups the cache holds anyway; accounting for it
+    // would need the very mutex this avoids.  Memo hits are not counted in
+    // stats().hits; stats().decodes still counts every decode.
+    std::size_t bytes = 0;
+    {
+      std::lock_guard<std::mutex> guard(cache_mutex_);
+      if (index == memo_group_) return memo_batches_;
+      bytes = group_bytes_locked_(index);
+    }
+    // Outside the lock: get() can wait on another reader's decode, and a
+    // thread sharing this object must not be held up behind that.
     auto batches = shared_cache_->get(file_.file_name(), index, bytes,
                                       [this, index] { return decode_group_(index); });
+    std::lock_guard<std::mutex> guard(cache_mutex_);
+    memo_group_ = index;
+    memo_batches_ = batches;
     return batches;
   }
 
@@ -274,6 +320,22 @@ Parquet::Impl::row_group(int32_t index)
   auto batches = decode_group_(index);
   cache_.emplace_back(index, batches);
   return batches;
+}
+
+/******************************************************************************/
+std::size_t Parquet::Impl::group_bytes_locked_(int32_t index)
+{
+  // Out of range: no slot, and RowGroup() below throws as it always did.
+  const bool slot = index >= 0 && static_cast<std::size_t>(index) < group_bytes_.size();
+  if (slot && group_bytes_[static_cast<std::size_t>(index)] != 0) {
+    return group_bytes_[static_cast<std::size_t>(index)];
+  }
+
+  const auto metadata = reader_->parquet_reader()->metadata();
+  const std::size_t bytes =
+      decoded_row_group_bytes(*metadata->RowGroup(index), *metadata->schema());
+  if (slot) group_bytes_[static_cast<std::size_t>(index)] = bytes;
+  return bytes;
 }
 
 /******************************************************************************/
