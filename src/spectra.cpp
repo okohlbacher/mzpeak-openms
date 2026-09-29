@@ -28,12 +28,14 @@ namespace MzPeak {
 Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Metadata::Table> meta,
                  ImsCalibration ims,
-                 std::shared_ptr<const MetadataMap> md)
+                 std::shared_ptr<const MetadataMap> md,
+                 std::shared_ptr<const MinimalMetadataMap> minimal)
     : EnumerableProxy(0)
     , data_(std::move(data))
     , peaks_()
     , meta_(std::move(meta))
     , ims_(ims)
+    , md_minimal_(std::move(minimal))
 {
   resize(data_->record_count());
   load_metadata_(std::move(md));
@@ -45,12 +47,14 @@ Spectra::Spectra(std::unique_ptr<Data::Signals> data,
                  std::unique_ptr<Data::Signals> peaks,
                  std::unique_ptr<Metadata::Table> meta,
                  ImsCalibration ims,
-                 std::shared_ptr<const MetadataMap> md)
+                 std::shared_ptr<const MetadataMap> md,
+                 std::shared_ptr<const MinimalMetadataMap> minimal)
     : EnumerableProxy(0)
     , data_(std::move(data))
     , peaks_(std::move(peaks))
     , meta_(std::move(meta))
     , ims_(ims)
+    , md_minimal_(std::move(minimal))
 {
   // Size from BOTH tables, not just the profile one.  The two normally share a
   // spectrum_count KV, but when that is absent the count falls back to the
@@ -87,14 +91,18 @@ void Spectra::resize_from_metadata_()
   // the enumeration contract here is numeric, so a sparse index set yields
   // default-constructed spectra in the gaps -- the same behaviour a file with
   // missing rows already gets.
-  if (!md_map_ || md_map_->begin() == md_map_->end()) return;
-
   // The map is sorted by index and free of duplicates (IndexMap::sort(), which
   // every map is built through before any lookup), so its last entry holds the
   // largest index.  Walking all of them instead read one cache line per
   // spectrum of a map shared by every reader: 3 ms per Spectra on a
   // 717,924-spectrum run, paid again by each per-thread copy.
-  const uint64_t last = std::prev(md_map_->end())->first;
+  uint64_t last = 0;
+  if (md_map_ && md_map_->begin() != md_map_->end())
+    last = std::prev(md_map_->end())->first;
+  else if (md_minimal_ && md_minimal_->begin() != md_minimal_->end())
+    last = std::prev(md_minimal_->end())->first;
+  else
+    return;
   if (last == std::numeric_limits<uint64_t>::max()) return; // last + 1 would wrap
   const std::size_t from_metadata = static_cast<std::size_t>(last) + 1;
   if (from_metadata > size()) resize(from_metadata);
@@ -110,6 +118,7 @@ void Spectra::load_metadata_(std::shared_ptr<const MetadataMap> md)
     md_map_ = std::move(md);
     return;
   }
+  if (md_minimal_) return;
 
   // Built here rather than lazily on first fetch(): almost every access path
   // needs it, and a lazily-published cache was a data race between concurrent
@@ -126,11 +135,10 @@ void Spectra::build_id_index_() const
   // remapping an id to a later spectrum would be worse than ignoring the
   // duplicate.
   std::call_once(id_index_once_, [this] {
-    if (!md_map_) return;
-    for (const auto& [index, md] : *md_map_) {
-      if (md.id.empty()) continue;
+    for_each_metadata_([this](uint64_t index, const auto& md) {
+      if (md.id.empty()) return;
       id_to_index_.emplace(md.id, static_cast<std::size_t>(index));
-    }
+    });
   });
 }
 
@@ -156,18 +164,18 @@ std::vector<std::size_t> Spectra::indices_in_time_range(double rt_low,
                                                         double rt_high) const
 {
   std::vector<std::size_t> result;
-  if (!md_map_) return result;
+  if (!md_map_ && !md_minimal_) return result;
   if (rt_low > rt_high) std::swap(rt_low, rt_high);
 
   // Collect (time, index) then sort by time: the map is keyed by index, and
   // acquisition order is not guaranteed to be time order.
   std::vector<std::pair<double, std::size_t>> selected;
-  for (const auto& [index, md] : *md_map_) {
-    if (!md.retention_time.has_value()) continue;
+  for_each_metadata_([&](uint64_t index, const auto& md) {
+    if (!md.retention_time.has_value()) return;
     const double t = *md.retention_time;
-    if (t < rt_low || t > rt_high) continue; // inclusive on both ends
+    if (t < rt_low || t > rt_high) return; // inclusive on both ends
     selected.emplace_back(t, static_cast<std::size_t>(index));
-  }
+  });
 
   std::ranges::sort(selected);
   result.reserve(selected.size());
@@ -192,15 +200,14 @@ Spectra::extract_ion_chromatogram(double mz_low,
 
   for (std::size_t index : indices) {
     double time = 0.0;
-    if (md_map_) {
-      auto it = md_map_->find(static_cast<uint64_t>(index));
-      if (it != md_map_->end()) {
+    if (md_map_ || md_minimal_) {
+      bool wrong_level = false;
+      const bool found = with_metadata_(static_cast<uint64_t>(index), [&](const auto& md) {
         // ms-level filter is decided from metadata, before any peak decode.
-        if (ms_level.has_value() && it->second.ms_level != ms_level) continue;
-        time = it->second.retention_time.value_or(0.0);
-      } else if (ms_level.has_value()) {
-        continue;
-      }
+        wrong_level = ms_level.has_value() && md.ms_level != ms_level;
+        time = md.retention_time.value_or(0.0);
+      });
+      if (wrong_level || (!found && ms_level.has_value())) continue;
     }
 
     Spectrum spectrum = fetch_(static_cast<uint64_t>(index));
@@ -266,10 +273,8 @@ Spectrum Spectra::fetch_(uint64_t index) const
   // peak count alone handed back 1612 centroids for a profile spectrum: the
   // wrong array, silently, and with a plausible length.
   std::shared_ptr<Data::Signals> signals = data_;
-  if (peaks_ && md_map_) {
-    auto it = md_map_->find(index);
-    if (it != md_map_->end()) {
-      const SpectrumMetadata& md = it->second;
+  if (peaks_) {
+    with_metadata_(index, [&](const auto& md) {
       const bool centroid = md.representation == "MS:1000127";
       const bool profile = md.representation == "MS:1000128";
 
@@ -282,7 +287,7 @@ Spectrum Spectra::fetch_(uint64_t index) const
           signals = peaks_;
         }
       }
-    }
+    });
   }
 
   // A plain copy_if rather than views::filter | ranges::to: ranges::to is a
@@ -302,7 +307,15 @@ Spectrum Spectra::fetch_(uint64_t index) const
                d.name.find("tof") != std::string::npos;
                        });
 
-  return Spectrum(index, signals, std::move(dims), meta_, md_map_, ims_);
+  // A Minimal entry is expanded here, once per Spectrum: that is the
+  // SpectrumMetadata its metadata() hands out, and what the decode reads.
+  std::shared_ptr<const SpectrumMetadata> own;
+  if (md_minimal_) {
+    auto it = md_minimal_->find(index);
+    if (it != md_minimal_->end())
+      own = std::make_shared<const SpectrumMetadata>(it->second.expand());
+  }
+  return Spectrum(index, signals, std::move(dims), meta_, md_map_, ims_, std::move(own));
 }
 
 } // namespace MzPeak

@@ -138,4 +138,16 @@ Table::read_spectrum_metadata(MetadataDetail detail) const
   return Util::read_spectra_metadata(files, detail);
 }
 
+/******************************************************************************/
+std::optional<Util::IndexMap<MinimalSpectrumMetadata>>
+Table::read_minimal_spectrum_metadata() const
+{
+  Util::SpectraMetadataFiles files;
+  files.primary = impl_->parquet_.get();
+  files.scans = impl_->scans_.get();
+  files.precursors = impl_->precursors_.get();
+  files.selected_ions = impl_->selected_ions_.get();
+  return Util::read_minimal_spectra_metadata(files);
+}
+
 } // namespace MzPeak::Metadata
