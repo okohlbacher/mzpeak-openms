@@ -26,17 +26,23 @@ directory of this repository.
 #define BOOST_TEST_MODULE SpectrumMetadata
 #include <boost/test/included/unit_test.hpp>
 
+#include <arrow/array/builder_primitive.h>
+#include <arrow/io/file.h>
+#include <arrow/table.h>
 #include <boost/json.hpp>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <parquet/arrow/reader.h>
+#include <parquet/arrow/writer.h>
 #include <string>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/open.h"
 #include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/spectra.h"
+#include "mzpeak/util/arrow.h"
 
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(opens_and_reads_metadata)
@@ -870,4 +876,80 @@ BOOST_AUTO_TEST_CASE(uint32_index_and_narrow_strings_read)
   auto uv = MzPeak::open("../test/files/uint32_index.dir").wavelength_spectra();
   BOOST_TEST_REQUIRE(uv.size() == 520u);
   BOOST_TEST(uv[0].metadata().id == "merged=212 row=0");
+}
+
+/******************************************************************************/
+// A spectrum with several scans takes its scalar scan fields from the EARLIEST
+// one, whatever order its rows arrive in, and still accumulates every scan's
+// windows.  A scan without a time never displaces one that has a time.
+//
+// Every bundled fixture has one scan per spectrum, so this appends three more
+// rows for spectrum 0 to a copy of small.dir: an earlier scan, a later one and
+// one with no time, in that order -- so neither the first nor the last scan
+// with a time is the earliest.
+BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
+{
+  namespace fs = std::filesystem;
+  const fs::path scratch(fs::temp_directory_path() / "mzp-test-multi-scan");
+  fs::remove_all(scratch);
+  fs::copy("../test/files/small.dir", scratch, fs::copy_options::recursive);
+
+  const fs::path table_path(scratch / "spectra_metadata_scans.parquet");
+  std::shared_ptr<arrow::Table> scans;
+  {
+    auto file = arrow::io::ReadableFile::Open(table_path.string()).ValueOrDie();
+    auto reader =
+        parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
+    scans = MzPeak::Util::read_table(*reader).ValueOrDie();
+    BOOST_TEST_REQUIRE(file->Close().ok());
+  }
+
+  // Row 0 is spectrum 0's scan, at 0.004935 min (pyarrow).
+  const int time_column = scans->schema()->GetFieldIndex("scan_start_time");
+  BOOST_TEST_REQUIRE(time_column >= 0);
+  const auto scan0_at = [&](std::optional<float> minutes) {
+    arrow::FloatBuilder builder;
+    BOOST_TEST_REQUIRE(
+        (minutes ? builder.Append(*minutes) : builder.AppendNull()).ok());
+    auto time = std::make_shared<arrow::ChunkedArray>(builder.Finish().ValueOrDie());
+    return scans->Slice(0, 1)
+        ->SetColumn(time_column, scans->schema()->field(time_column), time)
+        .ValueOrDie();
+  };
+  const float later = 0.5f, earlier = 0.002935f;
+  auto extended = arrow::ConcatenateTables({scans, scan0_at(earlier),
+                                            scan0_at(later), scan0_at(std::nullopt)})
+                      .ValueOrDie();
+  {
+    auto sink = arrow::io::FileOutputStream::Open(table_path.string()).ValueOrDie();
+    BOOST_TEST_REQUIRE(
+        parquet::arrow::WriteTable(*extended, arrow::default_memory_pool(), sink)
+            .ok());
+    BOOST_TEST_REQUIRE(sink->Close().ok());
+  }
+
+  for (auto detail : {MzPeak::MetadataDetail::Full, MzPeak::MetadataDetail::Lean}) {
+    auto spectra = MzPeak::open(scratch).spectra(detail);
+    std::optional<MzPeak::SpectrumMetadata> s0, s1;
+    for (std::size_t i = 0; i < spectra.size(); ++i) {
+      auto s = spectra[i];
+      if (s.metadata().index == 0) s0 = s.metadata();
+      if (s.metadata().index == 1) s1 = s.metadata();
+    }
+    BOOST_TEST_REQUIRE(s0.has_value());
+    BOOST_TEST_REQUIRE(s1.has_value());
+
+    BOOST_TEST_REQUIRE(s0->retention_time.has_value());
+    BOOST_TEST(*s0->retention_time == static_cast<double>(earlier) * 60.0);
+    // Scan windows come from every scan, not only the representative one.
+    // Lean leaves them out altogether.
+    BOOST_TEST(s0->scan_windows.size() ==
+               (detail == MzPeak::MetadataDetail::Full ? 4u : 0u));
+
+    // A spectrum with its one scan is untouched: 0.007896666667 min.
+    BOOST_TEST_REQUIRE(s1->retention_time.has_value());
+    BOOST_TEST(std::abs(*s1->retention_time - 0.4738) < 1e-9);
+  }
+
+  fs::remove_all(scratch);
 }

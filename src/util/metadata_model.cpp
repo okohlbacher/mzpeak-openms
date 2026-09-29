@@ -330,39 +330,43 @@ std::optional<ListSlice> list_slice(const std::shared_ptr<arrow::Array>& field,
 
 /// Optional integer field of any stored width (uint8/int8/uint64/...),
 /// returned as the caller's integer type T.
+///
+/// These accessors take a column already resolved, so that a row loop can
+/// resolve each column once per facet (see @ref resolve_field) and pay per row
+/// only for the value.  The casts are on the raw pointer for the same reason:
+/// a shared_ptr cast is two atomic refcount operations per field per row.  The
+/// `(facet, name, row)` overloads resolve on every call, through the facet's
+/// memo; they remain for the paths off the spectrum passes' row loops.
 template <typename T>
-std::optional<T> opt_int(const Facet& s, const char* name, int64_t row)
+std::optional<T> opt_int(const arrow::Array* field, int64_t row)
 {
-  const auto& field = resolve_field(s, name);
   if (!field || field->IsNull(row)) return std::nullopt;
   switch (field->type_id()) {
   case arrow::Type::UINT8:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::UInt8Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::UInt8Array*>(field)->Value(row));
   case arrow::Type::INT8:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::Int8Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::Int8Array*>(field)->Value(row));
   case arrow::Type::UINT16:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::UInt16Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::UInt16Array*>(field)->Value(row));
   case arrow::Type::INT16:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::Int16Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::Int16Array*>(field)->Value(row));
   case arrow::Type::UINT32:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::UInt32Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::UInt32Array*>(field)->Value(row));
   case arrow::Type::INT32:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::Int32Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::Int32Array*>(field)->Value(row));
   case arrow::Type::UINT64:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::UInt64Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::UInt64Array*>(field)->Value(row));
   case arrow::Type::INT64:
-    return static_cast<T>(
-        std::static_pointer_cast<arrow::Int64Array>(field)->Value(row));
+    return static_cast<T>(static_cast<const arrow::Int64Array*>(field)->Value(row));
   default:
     return std::nullopt;
   }
+}
+
+template <typename T>
+std::optional<T> opt_int(const Facet& s, const char* name, int64_t row)
+{
+  return opt_int<T>(resolve_field(s, name).get(), row);
 }
 
 /// Optional float64 field.
@@ -373,67 +377,90 @@ std::optional<T> opt_int(const Facet& s, const char* name, int64_t row)
 /// promoted numeric type, so a producer writing an isolation-window target as
 /// float64 where the reference writes float32 loses it silently.  Integers are
 /// accepted too -- a whole-numbered quantity is legitimately stored that way.
-std::optional<double> opt_double(const Facet& s, const char* name, int64_t row)
+std::optional<double> opt_double(const arrow::Array* field, int64_t row)
 {
-  const auto& field = resolve_field(s, name);
   if (!field || field->IsNull(row)) return std::nullopt;
 
   switch (field->type_id()) {
   case arrow::Type::DOUBLE:
-    return std::static_pointer_cast<arrow::DoubleArray>(field)->Value(row);
+    return static_cast<const arrow::DoubleArray*>(field)->Value(row);
   case arrow::Type::FLOAT:
     return static_cast<double>(
-        std::static_pointer_cast<arrow::FloatArray>(field)->Value(row));
+        static_cast<const arrow::FloatArray*>(field)->Value(row));
   case arrow::Type::HALF_FLOAT:
     return std::nullopt; // no lossless path, and nothing emits it
   default:
     break;
   }
   // Fall back to the integer widths, which opt_int already understands.
-  if (auto whole = opt_int<int64_t>(s, name, row)) {
+  if (auto whole = opt_int<int64_t>(field, row)) {
     return static_cast<double>(*whole);
   }
   return std::nullopt;
 }
 
+std::optional<double> opt_double(const Facet& s, const char* name, int64_t row)
+{
+  return opt_double(resolve_field(s, name).get(), row);
+}
+
 /// Optional float32 field.
 /// Optional real-valued field narrowed to float.  See @ref opt_double for why
 /// the stored width is not assumed.
-std::optional<float> opt_float(const Facet& s, const char* name, int64_t row)
+std::optional<float> opt_float(const arrow::Array* field, int64_t row)
 {
-  auto value = opt_double(s, name, row);
+  auto value = opt_double(field, row);
   if (!value) return std::nullopt;
   return static_cast<float>(*value);
 }
 
+std::optional<float> opt_float(const Facet& s, const char* name, int64_t row)
+{
+  return opt_float(resolve_field(s, name).get(), row);
+}
+
+/// A `string` or `large_string` column (R3), its width settled once.
+///
+/// Which of the two a column is does not change between rows, so the casts are
+/// made here rather than by every row: a dynamic_cast per string field per row
+/// was a visible share of PASS 1 once the name lookups were gone.  A column
+/// that is absent, or neither width, leaves both null and reads as absent.
+struct StringColumn {
+  const arrow::LargeStringArray* large = nullptr;
+  const arrow::StringArray* narrow = nullptr;
+
+  explicit StringColumn(const arrow::Array* field)
+      : large(dynamic_cast<const arrow::LargeStringArray*>(field))
+      , narrow(dynamic_cast<const arrow::StringArray*>(field))
+  {
+  }
+};
+
 /// Optional string field (large_string or string); nullopt if absent/null.
 /// Distinct from get_string (which flattens null to empty) because ion-mobility
 /// type must preserve the null-vs-empty distinction.
-std::optional<std::string> opt_string(const Facet& s, const char* name, int64_t row)
+std::optional<std::string> opt_string(const StringColumn& field, int64_t row)
 {
-  const auto& field = resolve_field(s, name);
-  if (!field || field->IsNull(row)) return std::nullopt;
-  if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
-    return large->GetString(row);
+  if (field.large) {
+    if (field.large->IsNull(row)) return std::nullopt;
+    return field.large->GetString(row);
   }
-  if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
-    return str->GetString(row);
+  if (field.narrow) {
+    if (field.narrow->IsNull(row)) return std::nullopt;
+    return field.narrow->GetString(row);
   }
   return std::nullopt;
 }
 
 /// String field (large_string or string); empty string if absent/null.
+std::string get_string(const StringColumn& field, int64_t row)
+{
+  return opt_string(field, row).value_or(std::string());
+}
+
 std::string get_string(const Facet& s, const char* name, int64_t row)
 {
-  const auto& field = resolve_field(s, name);
-  if (!field || field->IsNull(row)) return {};
-  if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
-    return large->GetString(row);
-  }
-  if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
-    return str->GetString(row);
-  }
-  return {};
+  return get_string(StringColumn(resolve_field(s, name).get()), row);
 }
 
 /// M2 — deterministic double-to-string conversion used for CvParam values.
@@ -487,19 +514,21 @@ struct IndexColumn {
 
   int64_t length() const { return array->length(); }
   bool IsNull(int64_t r) const { return array->IsNull(r); }
+  /// Raw-pointer casts: this runs once per row, and a shared_ptr cast would
+  /// add two atomic refcount operations to every one.
   uint64_t Value(int64_t r) const
   {
     switch (array->type_id()) {
     case arrow::Type::UINT64:
-      return std::static_pointer_cast<arrow::UInt64Array>(array)->Value(r);
+      return static_cast<const arrow::UInt64Array&>(*array).Value(r);
     case arrow::Type::UINT32:
-      return std::static_pointer_cast<arrow::UInt32Array>(array)->Value(r);
+      return static_cast<const arrow::UInt32Array&>(*array).Value(r);
     case arrow::Type::INT64:
       return static_cast<uint64_t>(
-          std::static_pointer_cast<arrow::Int64Array>(array)->Value(r));
+          static_cast<const arrow::Int64Array&>(*array).Value(r));
     case arrow::Type::INT32:
       return static_cast<uint64_t>(
-          std::static_pointer_cast<arrow::Int32Array>(array)->Value(r));
+          static_cast<const arrow::Int32Array&>(*array).Value(r));
     default:
       return 0;
     }
@@ -849,11 +878,42 @@ void attach_precursors(Map& out,
                        MetadataDetail detail = MetadataDetail::Full)
 {
   for (const auto& prec : facets) {
+    // Columns resolved once per facet, not per row: see PASS 1 of
+    // read_spectra_metadata.
+    const arrow::Array* source_index = resolve_field(prec, "source_index").get();
+    const arrow::Array* precursor_index =
+        resolve_field(prec, "precursor_index").get();
+    const StringColumn precursor_id(resolve_field(prec, "precursor_id").get());
+
+    // Isolation window and activation: nested struct fields, whose Facets are
+    // built here once as well.  Built per row, each started with an empty memo,
+    // so every member was resolved from scratch on every row -- failed exact
+    // lookups, the name rewrite, the alias table, and a malloc per memo entry:
+    // a quarter of opening a 717,924-spectrum archive.  Only Full reads
+    // activation, so Lean skips resolving the struct.
+    const Facet iw{std::dynamic_pointer_cast<arrow::StructArray>(
+                       resolve_field(prec, "isolation_window")),
+                   prec.file};
+    const Facet act{detail == MetadataDetail::Full
+                        ? std::dynamic_pointer_cast<arrow::StructArray>(
+                              resolve_field(prec, "activation"))
+                        : nullptr,
+                    prec.file};
+    const auto iw_column = [&iw](const char* name) {
+      return iw ? resolve_field(iw, name).get() : nullptr;
+    };
+    const arrow::Array* iw_target =
+        iw_column("MS_1000827_isolation_window_target_mz");
+    const arrow::Array* iw_lower =
+        iw_column("MS_1000828_isolation_window_lower_offset");
+    const arrow::Array* iw_upper =
+        iw_column("MS_1000829_isolation_window_upper_offset");
+
     for (int64_t r = 0; r < prec->length(); ++r) {
       // F7: outer struct null => row carries no precursor data, skip.
       if (prec->IsNull(r)) continue;
       // source_index NULL => MS1 row, skip (Pitfall 2).
-      auto si = opt_int<uint64_t>(prec, "source_index", r);
+      auto si = opt_int<uint64_t>(source_index, r);
       if (!si) continue;
 
       auto it = out.find(*si);
@@ -868,39 +928,22 @@ void attach_precursors(Map& out,
       }
 
       PrecursorInfo pi;
-      pi.precursor_index = opt_int<uint64_t>(prec, "precursor_index", r);
-      pi.precursor_id = get_string(prec, "precursor_id", r);
+      pi.precursor_index = opt_int<uint64_t>(precursor_index, r);
+      pi.precursor_id = get_string(precursor_id, r);
 
-      // Isolation window: nested struct field.
-      auto iw_field = resolve_field(prec, "isolation_window");
-      if (iw_field && !iw_field->IsNull(r)) {
-        auto iw_struct = std::dynamic_pointer_cast<arrow::StructArray>(iw_field);
-        if (iw_struct) {
-          const Facet iw{iw_struct, prec.file};
-          pi.isolation_window.target_mz =
-              opt_float(iw, "MS_1000827_isolation_window_target_mz", r);
-          pi.isolation_window.lower_offset =
-              opt_float(iw, "MS_1000828_isolation_window_lower_offset", r);
-          pi.isolation_window.upper_offset =
-              opt_float(iw, "MS_1000829_isolation_window_upper_offset", r);
-          if (detail == MetadataDetail::Full) {
-            pi.isolation_window.parameters =
-                read_cv_params_from_list(iw, "parameters", r);
-          }
+      if (iw && !iw->IsNull(r)) {
+        pi.isolation_window.target_mz = opt_float(iw_target, r);
+        pi.isolation_window.lower_offset = opt_float(iw_lower, r);
+        pi.isolation_window.upper_offset = opt_float(iw_upper, r);
+        if (detail == MetadataDetail::Full) {
+          pi.isolation_window.parameters =
+              read_cv_params_from_list(iw, "parameters", r);
         }
       }
 
-      // Activation: nested struct carrying a parameters list.  Nothing but
-      // the list is in there, so Lean skips resolving the struct at all.
-      auto act_field = detail == MetadataDetail::Full ? resolve_field(prec, "activation")
-                                                      : nullptr;
-      if (act_field && !act_field->IsNull(r)) {
-        auto act_struct = std::dynamic_pointer_cast<arrow::StructArray>(act_field);
-        if (act_struct) {
-          const Facet act{act_struct, prec.file};
-          pi.activation_parameters = read_cv_params_from_list(act, "parameters", r);
-          append_activation_columns(act, r, pi.activation_parameters);
-        }
+      if (act && !act->IsNull(r)) {
+        pi.activation_parameters = read_cv_params_from_list(act, "parameters", r);
+        append_activation_columns(act, r, pi.activation_parameters);
       }
 
       it->second.precursors.push_back(std::move(pi));
@@ -921,11 +964,27 @@ void attach_selected_ions(Map& out,
                           MetadataDetail detail = MetadataDetail::Full)
 {
   for (const auto& si : facets) {
+    // Columns resolved once per facet, not per row: see PASS 1 of
+    // read_spectra_metadata.
+    const auto column = [&si](const char* name) {
+      return resolve_field(si, name).get();
+    };
+    const arrow::Array* source_index = column("source_index");
+    const arrow::Array* precursor_index = column("precursor_index");
+    const arrow::Array* ion_mz =
+        column("MS_1000744_selected_ion_mz_unit_MS_1000040");
+    const arrow::Array* charge = column("MS_1000041_charge_state");
+    const arrow::Array* intensity = column("MS_1000042_intensity_unit_MS_1000131");
+    const arrow::Array* im_value = column("ion_mobility_value");
+    const StringColumn im_type(column("ion_mobility_type"));
+    const arrow::Array* im_lower = column("ion_mobility_lower_limit");
+    const arrow::Array* im_upper = column("ion_mobility_upper_limit");
+
     for (int64_t r = 0; r < si->length(); ++r) {
       // F7: outer struct null => row carries no selected-ion data, skip.
       if (si->IsNull(r)) continue;
       // source_index NULL => MS1 row, skip.
-      auto src_idx = opt_int<uint64_t>(si, "source_index", r);
+      auto src_idx = opt_int<uint64_t>(source_index, r);
       if (!src_idx) continue;
 
       auto it = out.find(*src_idx);
@@ -937,11 +996,10 @@ void attach_selected_ions(Map& out,
         continue;
       }
 
-      auto pi_idx = opt_int<uint64_t>(si, "precursor_index", r);
+      auto pi_idx = opt_int<uint64_t>(precursor_index, r);
 
       SelectedIonInfo ion;
-      ion.selected_ion_mz =
-          opt_double(si, "MS_1000744_selected_ion_mz_unit_MS_1000040", r);
+      ion.selected_ion_mz = opt_double(ion_mz, r);
       // A stored 0 (or any non-finite value) means the writer had no selected
       // ion m/z, not that the ion sits at m/z 0.
       //
@@ -964,18 +1022,18 @@ void attach_selected_ions(Map& out,
           !(std::isfinite(*ion.selected_ion_mz) && *ion.selected_ion_mz > 0.0)) {
         ion.selected_ion_mz.reset();
       }
-      ion.charge_state = opt_int<int>(si, "MS_1000041_charge_state", r);
-      ion.intensity = opt_float(si, "MS_1000042_intensity_unit_MS_1000131", r);
+      ion.charge_state = opt_int<int>(charge, r);
+      ion.intensity = opt_float(intensity, r);
       // Ion mobility: null in all bundled fixtures, so this reads as nullopt
       // everywhere today — the decode is null-safe and value-level correctness
       // is fixture-gated on a real IM run (handoff P1).
-      ion.ion_mobility_value = opt_double(si, "ion_mobility_value", r);
-      ion.ion_mobility_type = opt_string(si, "ion_mobility_type", r);
+      ion.ion_mobility_value = opt_double(im_value, r);
+      ion.ion_mobility_type = opt_string(im_type, r);
       // The mobility BAND, when the writer records it.  See SelectedIonInfo:
       // for diaPASEF the value above is only the midpoint, and the band is what
       // separates one isolation window from the next.
-      ion.ion_mobility_lower_limit = opt_double(si, "ion_mobility_lower_limit", r);
-      ion.ion_mobility_upper_limit = opt_double(si, "ion_mobility_upper_limit", r);
+      ion.ion_mobility_lower_limit = opt_double(im_lower, r);
+      ion.ion_mobility_upper_limit = opt_double(im_upper, r);
       if (detail == MetadataDetail::Full)
         ion.parameters = read_cv_params_from_list(si, "parameters", r);
 
@@ -1173,6 +1231,38 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
     if (!index_col) continue;
     const IndexColumn& index = *index_col;
 
+    // Every column the row loop reads, resolved ONCE for the facet.  The
+    // facet's memo made a repeat lookup cheap, not free: it still hashed the
+    // name for every field of every row, 15 of them here.  A null column is one
+    // this file does not carry, which every accessor reads as absent, exactly
+    // as it read a failed lookup.  The same holds in the passes below.
+    const auto column = [&spectrum](const char* name) {
+      return resolve_field(spectrum, name).get();
+    };
+    const StringColumn id(column("id"));
+    const arrow::Array* ms_level = column("MS_1000511_ms_level");
+    const arrow::Array* minutes = column("time");
+    const arrow::Array* polarity = column("MS_1000465_scan_polarity");
+    const StringColumn representation(column("MS_1000525_spectrum_representation"));
+    const arrow::Array* data_points = column("MS_1003060_number_of_data_points");
+    const arrow::Array* peaks = column("MS_1003059_number_of_peaks");
+    const arrow::Array* base_peak_mz =
+        column("MS_1000504_base_peak_mz_unit_MS_1000040");
+    const arrow::Array* base_peak_intensity =
+        column("MS_1000505_base_peak_intensity_unit_MS_1000131");
+    const arrow::Array* tic = column("MS_1000285_total_ion_current_unit_MS_1000131");
+    const StringColumn spectrum_type(column("MS_1000559_spectrum_type"));
+    const arrow::Array* lowest_mz =
+        column("MS_1000528_lowest_observed_mz_unit_MS_1000040");
+    const arrow::Array* highest_mz =
+        column("MS_1000527_highest_observed_mz_unit_MS_1000040");
+    const StringColumn data_processing(column("data_processing_ref"));
+    // The delta model is a list or a large_list of float64 -- which one is a
+    // property of the column, so it is cast once here too.
+    const arrow::Array* delta_model = column("mz_delta_model");
+    const auto* dm_large = dynamic_cast<const arrow::LargeListArray*>(delta_model);
+    const auto* dm_list = dynamic_cast<const arrow::ListArray*>(delta_model);
+
     for (int64_t r = 0; r < spectrum->length(); ++r) {
       // F7: outer struct null => children are unreliable, skip the row.
       if (spectrum->IsNull(r)) continue;
@@ -1180,56 +1270,44 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
 
       SpectrumMetadata m;
       m.index = index.Value(r);
-      m.id = get_string(spectrum, "id", r);
-      m.ms_level = opt_int<int>(spectrum, "MS_1000511_ms_level", r);
+      m.id = get_string(id, r);
+      m.ms_level = opt_int<int>(ms_level, r);
       // RT: `spectrum.time` is in minutes — the spec makes this normative
       // ("The time unit MUST be minutes", UO_0000031; docs/schemas/spectra.md),
       // and it holds the same value as scan.MS_1000016_scan_start_time.
       // Convert to seconds here as a fallback; PASS 4 overrides from the
       // unit-annotated scan field when present.
       // ponytail: single ×60 site per pass, no unit-conversion class.
-      if (auto t = opt_double(spectrum, "time", r)) m.retention_time = *t * 60.0;
-      m.polarity = opt_int<int>(spectrum, "MS_1000465_scan_polarity", r);
-      m.representation =
-          get_string(spectrum, "MS_1000525_spectrum_representation", r);
-      m.number_of_data_points =
-          opt_int<uint64_t>(spectrum, "MS_1003060_number_of_data_points", r);
-      m.number_of_peaks =
-          opt_int<uint64_t>(spectrum, "MS_1003059_number_of_peaks", r);
-      m.base_peak_mz =
-          opt_double(spectrum, "MS_1000504_base_peak_mz_unit_MS_1000040", r);
-      m.base_peak_intensity =
-          opt_float(spectrum, "MS_1000505_base_peak_intensity_unit_MS_1000131", r);
-      m.total_ion_current =
-          opt_float(spectrum, "MS_1000285_total_ion_current_unit_MS_1000131", r);
+      if (auto t = opt_double(minutes, r)) m.retention_time = *t * 60.0;
+      m.polarity = opt_int<int>(polarity, r);
+      m.representation = get_string(representation, r);
+      m.number_of_data_points = opt_int<uint64_t>(data_points, r);
+      m.number_of_peaks = opt_int<uint64_t>(peaks, r);
+      m.base_peak_mz = opt_double(base_peak_mz, r);
+      m.base_peak_intensity = opt_float(base_peak_intensity, r);
+      m.total_ion_current = opt_float(tic, r);
 
       // RDR-10b scalar fields.
-      m.spectrum_type = get_string(spectrum, "MS_1000559_spectrum_type", r);
-      m.lowest_observed_mz =
-          opt_double(spectrum, "MS_1000528_lowest_observed_mz_unit_MS_1000040", r);
-      m.highest_observed_mz =
-          opt_double(spectrum, "MS_1000527_highest_observed_mz_unit_MS_1000040", r);
-      m.data_processing_ref = get_string(spectrum, "data_processing_ref", r);
+      m.spectrum_type = get_string(spectrum_type, r);
+      m.lowest_observed_mz = opt_double(lowest_mz, r);
+      m.highest_observed_mz = opt_double(highest_mz, r);
+      m.data_processing_ref = get_string(data_processing, r);
 
       // RDR-10b CvParam list.
       if (detail == MetadataDetail::Full)
         m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
 
       // Delta model for null-marking reconstruction (large_list<double>).
-      if (auto dm = resolve_field(spectrum, "mz_delta_model")) {
-        if (!dm->IsNull(r)) {
-          auto ll = std::dynamic_pointer_cast<arrow::LargeListArray>(dm);
-          auto sl = std::dynamic_pointer_cast<arrow::ListArray>(dm);
-          if (ll || sl) {
-            auto vals = std::static_pointer_cast<arrow::DoubleArray>(
-                ll ? ll->values() : sl->values());
-            int64_t off = ll ? ll->value_offset(r) : sl->value_offset(r);
-            int64_t len = ll ? ll->value_length(r) : sl->value_length(r);
-            m.mz_delta_model.reserve(static_cast<std::size_t>(len));
-            for (int64_t k = 0; k < len; ++k)
-              m.mz_delta_model.push_back(vals->Value(off + k));
-          }
-        }
+      if ((dm_large || dm_list) && !delta_model->IsNull(r)) {
+        const auto& vals = static_cast<const arrow::DoubleArray&>(
+            dm_large ? *dm_large->values() : *dm_list->values());
+        int64_t off =
+            dm_large ? dm_large->value_offset(r) : dm_list->value_offset(r);
+        int64_t len =
+            dm_large ? dm_large->value_length(r) : dm_list->value_length(r);
+        m.mz_delta_model.reserve(static_cast<std::size_t>(len));
+        for (int64_t k = 0; k < len; ++k)
+          m.mz_delta_model.push_back(vals.Value(off + k));
       }
 
       // -------------------------------------------------------------------
@@ -1438,15 +1516,29 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // -------------------------------------------------------------------
   {
     // Earliest scan seen per spectrum, so a multi-scan spectrum reports the
-    // representative (earliest) scan rather than the last row read.
-    std::map<uint64_t, std::optional<double>> earliest_scan;
+    // representative (earliest) scan rather than the last row read.  The outer
+    // optional is "seen at all".
+    //
+    // Indexed by the spectrum's slot in `out`, which is one-to-one with its
+    // source_index, rather than a std::map keyed by source_index: the map paid
+    // a node allocation and two tree walks per scan row, most of this pass.
+    std::vector<std::optional<std::optional<double>>> earliest_scan(
+        static_cast<std::size_t>(std::ranges::distance(out)));
 
     for (const auto& scan : facets_for("scan", scans_table, files.scans)) {
       {
+        // Columns resolved once per facet, not per row: see PASS 1.
+        const arrow::Array* source_index = resolve_field(scan, "source_index").get();
+        const arrow::Array* start_time =
+            resolve_field(scan, "MS_1000016_scan_start_time_unit_UO_0000031").get();
+        const arrow::Array* im_value =
+            resolve_field(scan, "ion_mobility_value").get();
+        const StringColumn im_type(resolve_field(scan, "ion_mobility_type").get());
+
         for (int64_t r = 0; r < scan->length(); ++r) {
           // F7: outer struct null => row carries no scan data, skip.
           if (scan->IsNull(r)) continue;
-          auto src_idx = opt_int<uint64_t>(scan, "source_index", r);
+          auto src_idx = opt_int<uint64_t>(source_index, r);
           if (!src_idx) continue;
 
           auto it = out.find(*src_idx);
@@ -1465,21 +1557,19 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
           // start time for a multi-scan spectrum; taking the last row's instead
           // reports a spectrum later than it is, so an RT-range query silently
           // misses it.  Scan windows still accumulate across every scan.
-          auto sst =
-              opt_double(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
+          auto sst = opt_double(start_time, r);
 
+          auto& seen = earliest_scan[static_cast<std::size_t>(it - out.begin())];
           bool representative = true;
-          if (auto seen = earliest_scan.find(*src_idx);
-              seen != earliest_scan.end()) {
+          if (seen) {
             // Already have a scan for this spectrum: only replace when this one
             // is genuinely earlier.  A scan with no time never displaces one
             // that has a time.
-            representative =
-                sst.has_value() && seen->second.has_value() && *sst < *seen->second;
+            representative = sst.has_value() && seen->has_value() && *sst < **seen;
           }
 
           if (representative) {
-            earliest_scan[*src_idx] = sst;
+            seen.emplace(sst);
 
             if (detail == MetadataDetail::Full) {
               it->second.scan_parameters =
@@ -1508,8 +1598,8 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
             // Scan-level ion mobility (handoff P1): null in all bundled
             // fixtures, so null-safe today; value-level correctness is
             // fixture-gated.
-            it->second.ion_mobility = opt_double(scan, "ion_mobility_value", r);
-            it->second.ion_mobility_type = opt_string(scan, "ion_mobility_type", r);
+            it->second.ion_mobility = opt_double(im_value, r);
+            it->second.ion_mobility_type = opt_string(im_type, r);
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
