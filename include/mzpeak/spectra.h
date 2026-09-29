@@ -82,6 +82,8 @@ public:
 
   /// The cached per-spectrum descriptive metadata, keyed by spectrum index.
   using MetadataMap = Util::IndexMap<SpectrumMetadata>;
+  /// MetadataDetail::Minimal's compact map; a Spectra holds this or the above.
+  using MinimalMetadataMap = Util::IndexMap<MinimalSpectrumMetadata>;
 
   /// Constructor for profile-only or centroid-only data.
   ///
@@ -92,10 +94,12 @@ public:
   ///   `Spectra` per thread -- so without sharing, N threads mean N copies of
   ///   one table.  Null means "read it from @p meta", which is what a caller
   ///   with a single reader wants.
+  /// @param minimal  the MetadataDetail::Minimal map, held in place of @p md.
   explicit Spectra(std::unique_ptr<Data::Signals>,
                    std::unique_ptr<Metadata::Table>,
                    ImsCalibration ims = {},
-                   std::shared_ptr<const MetadataMap> md = nullptr);
+                   std::shared_ptr<const MetadataMap> md = nullptr,
+                   std::shared_ptr<const MinimalMetadataMap> minimal = nullptr);
 
   /// Constructor for mixed profile+centroid data (data = profile file, peaks =
   /// centroid file).  @p md as above.
@@ -103,7 +107,8 @@ public:
                    std::unique_ptr<Data::Signals> peaks,
                    std::unique_ptr<Metadata::Table>,
                    ImsCalibration ims = {},
-                   std::shared_ptr<const MetadataMap> md = nullptr);
+                   std::shared_ptr<const MetadataMap> md = nullptr,
+                   std::shared_ptr<const MinimalMetadataMap> minimal = nullptr);
 
   /**
    * Resolve a native spectrum id (e.g. "controllerType=0 controllerNumber=1
@@ -176,6 +181,7 @@ private:
   // read once at construction and shared into every Spectrum.  Stays null when
   // there is no metadata table.
   std::shared_ptr<const MetadataMap> md_map_;
+  std::shared_ptr<const MinimalMetadataMap> md_minimal_;
 
   // Native id -> index, for by_id().  Ids are not guaranteed unique; the FIRST
   // spectrum carrying an id wins.
@@ -191,6 +197,34 @@ private:
   // Populate md_map_ from meta_, or adopt the shared map the caller passed.
   // Called from the constructors so that fetch() never publishes it lazily.
   void load_metadata_(std::shared_ptr<const MetadataMap> md);
+
+  /// f(index, entry) for every entry of whichever map this holds.  The two
+  /// entry types share the fields these loops read, by name and type.
+  template <typename F> void for_each_metadata_(F&& f) const
+  {
+    if (md_map_)
+      for (const auto& [index, md] : *md_map_) f(index, md);
+    else if (md_minimal_)
+      for (const auto& [index, md] : *md_minimal_) f(index, md);
+  }
+
+  /// f(entry) for @p index's entry, if either map has one; whether it did.
+  template <typename F> bool with_metadata_(uint64_t index, F&& f) const
+  {
+    if (md_map_) {
+      auto it = md_map_->find(index);
+      if (it == md_map_->end()) return false;
+      f(it->second);
+      return true;
+    }
+    if (md_minimal_) {
+      auto it = md_minimal_->find(index);
+      if (it == md_minimal_->end()) return false;
+      f(it->second);
+      return true;
+    }
+    return false;
+  }
 
   // Grow the run to cover the metadata's highest spectrum index.  Called from
   // the constructors AFTER load_metadata_ and on BOTH of its paths -- a caller

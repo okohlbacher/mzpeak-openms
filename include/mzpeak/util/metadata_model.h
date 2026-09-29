@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -94,6 +95,14 @@ read_spectra_metadata(const SpectraMetadataFiles&);
  */
 IndexMap<SpectrumMetadata>
 read_spectra_metadata(const SpectraMetadataFiles&, MetadataDetail detail);
+
+/**
+ * The same read at @ref MzPeak::MetadataDetail::Minimal, into compact
+ * records.  nullopt when a spectrum has more than one precursor, or more than
+ * one selected ion on its precursor: read the archive as `Lean` then.
+ */
+std::optional<IndexMap<MinimalSpectrumMetadata>>
+read_minimal_spectra_metadata(const SpectraMetadataFiles&);
 
 /**
  * The Parquet files carrying one chromatogram set's metadata.  As with

@@ -166,11 +166,23 @@ Spectra Index::spectra(MetadataDetail detail, SpectraSource source) const
   // safety rules require -- shares the map instead of re-reading it.  The
   // Table is still handed to the Spectra: Spectrum keeps it for the queries
   // that go past the cached map.
+  //
+  // Minimal falls back to Lean, shared under Lean, for an archive it cannot
+  // hold (Manager caches that verdict too).
   std::shared_ptr<const Spectra::MetadataMap> md;
+  std::shared_ptr<const Spectra::MinimalMetadataMap> minimal;
   if (meta) {
     Metadata::Table* table = meta.get();
-    md = manager_->spectrum_metadata(
-        detail, [table, detail] { return table->read_spectrum_metadata(detail); });
+    if (detail == MetadataDetail::Minimal) {
+      minimal = manager_->minimal_spectrum_metadata(
+          [table] { return table->read_minimal_spectrum_metadata(); });
+    }
+    if (!minimal) {
+      const MetadataDetail d =
+          detail == MetadataDetail::Minimal ? MetadataDetail::Lean : detail;
+      md = manager_->spectrum_metadata(
+          d, [table, d] { return table->read_spectrum_metadata(d); });
+    }
   }
 
   std::unique_ptr<Data::Signals> data =
@@ -180,11 +192,11 @@ Spectra Index::spectra(MetadataDetail detail, SpectraSource source) const
     std::unique_ptr<Data::Signals> peaks =
         std::make_unique<Data::Signals>(manager_->parquet(*peaks_file));
     return Spectra(std::move(data), std::move(peaks), std::move(meta),
-                   manager_->ims_calibration(), std::move(md));
+                   manager_->ims_calibration(), std::move(md), std::move(minimal));
   }
 
   return Spectra(std::move(data), std::move(meta), manager_->ims_calibration(),
-                 std::move(md));
+                 std::move(md), std::move(minimal));
 }
 
 /******************************************************************************/

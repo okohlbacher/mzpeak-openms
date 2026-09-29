@@ -34,12 +34,26 @@ namespace MzPeak {
  * precursors with their isolation windows and selected ions, and the m/z delta
  * model -- is present in both modes.  Nothing the reader itself depends on is
  * behind this flag.
+ *
+ * `Minimal` keeps only what a peak reader consumes, in a compact record per
+ * spectrum (@ref MinimalSpectrumMetadata) that each Spectrum expands on
+ * access: id, ms_level, retention time, polarity, representation, point
+ * counts, the m/z delta model, and one precursor with its isolation window and
+ * one selected ion (m/z, charge, intensity).  Base peak, TIC, spectrum type,
+ * observed m/z range, data-processing ref, precursor id and ion mobility are
+ * left out.  An archive with a spectrum outside that shape -- several
+ * precursors, or several ions on one -- is read as `Lean` instead, so no
+ * precursor is ever dropped.  On a 717,924-spectrum run: 0.57 GB of map and
+ * per-spectrum allocations -> 0.20 GB of map alone, peak RSS of the open
+ * 0.97 -> 0.58 GB, and the open itself 0.42 -> 0.29 s.
  */
 enum class MetadataDetail {
   /// Everything the format carries.
   Full,
   /// No CV-parameter lists, scan windows or auxiliary arrays.
   Lean,
+  /// What a peak reader needs, compactly; falls back to Lean.  See above.
+  Minimal,
 };
 
 /**
@@ -357,6 +371,68 @@ struct SpectrumMetadata final {
   /// per-spectrum metadata query (that query relied on a `spectrum` struct
   /// group, which the flat layout does not have).  Empty when absent.
   std::vector<double> mz_delta_model;
+};
+
+/**
+ * One spectrum's metadata at MetadataDetail::Minimal: the fields a peak reader
+ * consumes, at most one precursor and one selected ion held inline, and no
+ * per-spectrum allocation beyond an id or representation too long for the
+ * string's own buffer: 264 bytes, against SpectrumMetadata's 464 plus a
+ * 144-byte PrecursorInfo and a 144-byte SelectedIonInfo on the heap per MS2
+ * spectrum.
+ *
+ * The shared fields carry SpectrumMetadata's names, types and meaning, so
+ * code that reads only those works on either.  expand() gives the
+ * SpectrumMetadata a Spectrum hands out.
+ */
+struct MinimalSpectrumMetadata final {
+  uint64_t index = 0;
+  std::string id;
+  std::optional<int> ms_level;
+  std::optional<double> retention_time;
+  std::optional<int> polarity;
+  std::string representation;
+  std::optional<uint64_t> number_of_data_points;
+  std::optional<uint64_t> number_of_peaks;
+  std::vector<double> mz_delta_model;
+
+  /// The one precursor (when has_precursor) and its one selected ion (when
+  /// has_selected_ion).
+  std::optional<uint64_t> precursor_index;
+  IsolationWindow isolation_window;  ///< its `parameters` stay empty
+  std::optional<double> selected_ion_mz;
+  std::optional<int> charge_state;
+  std::optional<float> intensity;
+  bool has_precursor = false;
+  bool has_selected_ion = false;
+
+  /// The same spectrum as a SpectrumMetadata, with everything Minimal leaves
+  /// out empty.
+  SpectrumMetadata expand() const
+  {
+    SpectrumMetadata m;
+    m.index = index;
+    m.id = id;
+    m.ms_level = ms_level;
+    m.retention_time = retention_time;
+    m.polarity = polarity;
+    m.representation = representation;
+    m.number_of_data_points = number_of_data_points;
+    m.number_of_peaks = number_of_peaks;
+    m.mz_delta_model = mz_delta_model;
+    if (has_precursor) {
+      PrecursorInfo& p = m.precursors.emplace_back();
+      p.precursor_index = precursor_index;
+      p.isolation_window = isolation_window;
+      if (has_selected_ion) {
+        SelectedIonInfo& ion = p.selected_ions.emplace_back();
+        ion.selected_ion_mz = selected_ion_mz;
+        ion.charge_state = charge_state;
+        ion.intensity = intensity;
+      }
+    }
+    return m;
+  }
 };
 
 } // namespace MzPeak

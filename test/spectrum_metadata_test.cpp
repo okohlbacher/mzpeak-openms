@@ -928,7 +928,8 @@ BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
     BOOST_TEST_REQUIRE(sink->Close().ok());
   }
 
-  for (auto detail : {MzPeak::MetadataDetail::Full, MzPeak::MetadataDetail::Lean}) {
+  for (auto detail : {MzPeak::MetadataDetail::Full, MzPeak::MetadataDetail::Lean,
+                      MzPeak::MetadataDetail::Minimal}) {
     auto spectra = MzPeak::open(scratch).spectra(detail);
     std::optional<MzPeak::SpectrumMetadata> s0, s1;
     for (std::size_t i = 0; i < spectra.size(); ++i) {
@@ -950,6 +951,134 @@ BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
     BOOST_TEST_REQUIRE(s1->retention_time.has_value());
     BOOST_TEST(std::abs(*s1->retention_time - 0.4738) < 1e-9);
   }
+
+  fs::remove_all(scratch);
+}
+
+/******************************************************************************/
+// MetadataDetail::Minimal keeps a subset in a compact record and expands it per
+// Spectrum.  Every field it keeps must equal Lean's, spectrum for spectrum, on
+// every bundled archive -- and so must the peaks, which the decode reads
+// through that metadata (representation, point counts, delta model).
+namespace {
+void require_minimal_equals_lean(const std::string& path)
+{
+  BOOST_TEST_CONTEXT(path)
+  {
+    auto lean_index = MzPeak::open(path);
+    auto minimal_index = MzPeak::open(path);
+    auto lean = lean_index.spectra(MzPeak::MetadataDetail::Lean);
+    auto minimal = minimal_index.spectra(MzPeak::MetadataDetail::Minimal);
+    BOOST_TEST_REQUIRE(minimal.size() == lean.size());
+    for (std::size_t i = 0; i < lean.size(); ++i) {
+      BOOST_TEST_CONTEXT("spectrum " << i)
+      {
+        auto l = lean[i];
+        auto m = minimal[i];
+        const MzPeak::SpectrumMetadata& a = l.metadata();
+        const MzPeak::SpectrumMetadata& b = m.metadata();
+        BOOST_TEST(a.index == b.index);
+        BOOST_TEST(a.id == b.id);
+        BOOST_TEST((a.ms_level == b.ms_level));
+        BOOST_TEST((a.retention_time == b.retention_time));
+        BOOST_TEST((a.polarity == b.polarity));
+        BOOST_TEST(a.representation == b.representation);
+        BOOST_TEST((a.number_of_data_points == b.number_of_data_points));
+        BOOST_TEST((a.number_of_peaks == b.number_of_peaks));
+        BOOST_TEST((a.mz_delta_model == b.mz_delta_model));
+        BOOST_TEST_REQUIRE(a.precursors.size() == b.precursors.size());
+        for (std::size_t p = 0; p < a.precursors.size(); ++p) {
+          const auto& pa = a.precursors[p];
+          const auto& pb = b.precursors[p];
+          BOOST_TEST((pa.precursor_index == pb.precursor_index));
+          BOOST_TEST((pa.isolation_window.target_mz == pb.isolation_window.target_mz));
+          BOOST_TEST((pa.isolation_window.lower_offset == pb.isolation_window.lower_offset));
+          BOOST_TEST((pa.isolation_window.upper_offset == pb.isolation_window.upper_offset));
+          BOOST_TEST_REQUIRE(pa.selected_ions.size() == pb.selected_ions.size());
+          for (std::size_t k = 0; k < pa.selected_ions.size(); ++k) {
+            BOOST_TEST((pa.selected_ions[k].selected_ion_mz == pb.selected_ions[k].selected_ion_mz));
+            BOOST_TEST((pa.selected_ions[k].charge_state == pb.selected_ions[k].charge_state));
+            BOOST_TEST((pa.selected_ions[k].intensity == pb.selected_ions[k].intensity));
+          }
+        }
+        BOOST_TEST((l.mz() == m.mz()));
+        BOOST_TEST((l.intensity() == m.intensity()));
+      }
+    }
+    // The queries that read the map directly see the same entries.
+    BOOST_TEST((lean.indices_in_time_range(0.0, 1e9) ==
+                minimal.indices_in_time_range(0.0, 1e9)));
+    if (lean.size() > 0) {
+      auto first = lean[0];
+      const std::string id = first.metadata().id;
+      BOOST_TEST((lean.index_for_id(id) == minimal.index_for_id(id)));
+    }
+  }
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
+{
+  for (const char* path :
+       {"../test/files/small.mzpeak", "../test/files/small.chunked.mzpeak",
+        "../test/files/small.numpress.mzpeak", "../test/files/has_uv.mzpeak",
+        "../test/files/small.dir", "../test/files/ims_compact.dir",
+        "../test/files/list32.dir", "../test/files/uint32_index.dir",
+        "../test/files/v2/small.mzpeak", "../test/files/v2/has_uv.mzpeak",
+        "../test/files/v2/small.chunked.mzpeak", "../test/files/legacy/small.mzpeak"})
+    require_minimal_equals_lean(path);
+}
+
+/******************************************************************************/
+// A spectrum with a second precursor row does not fit Minimal's one inline
+// precursor, so the archive is read as Lean instead -- both precursors kept.
+// No bundled archive has one, so this appends a copy of spectrum 2's precursor
+// row, under another precursor_index, to a copy of small.dir.
+BOOST_AUTO_TEST_CASE(minimal_reads_a_second_precursor_as_lean)
+{
+  namespace fs = std::filesystem;
+  const fs::path scratch(fs::temp_directory_path() / "mzp-test-minimal-fallback");
+  fs::remove_all(scratch);
+  fs::copy("../test/files/small.dir", scratch, fs::copy_options::recursive);
+
+  const fs::path table_path(scratch / "spectra_metadata_precursors.parquet");
+  std::shared_ptr<arrow::Table> precursors;
+  {
+    auto file = arrow::io::ReadableFile::Open(table_path.string()).ValueOrDie();
+    auto reader =
+        parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
+    precursors = MzPeak::Util::read_table(*reader).ValueOrDie();
+    BOOST_TEST_REQUIRE(file->Close().ok());
+  }
+  const auto source = std::static_pointer_cast<arrow::UInt64Array>(
+      precursors->GetColumnByName("source_index")->chunk(0));
+  int64_t row = -1;
+  for (int64_t r = 0; r < source->length(); ++r)
+    if (source->IsValid(r) && source->Value(r) == 2) row = r;
+  BOOST_TEST_REQUIRE(row >= 0);
+  const int pi_column = precursors->schema()->GetFieldIndex("precursor_index");
+  BOOST_TEST_REQUIRE(pi_column >= 0);
+  arrow::UInt64Builder builder;
+  BOOST_TEST_REQUIRE(builder.Append(99).ok());
+  auto second = precursors->Slice(row, 1)
+                    ->SetColumn(pi_column, precursors->schema()->field(pi_column),
+                                std::make_shared<arrow::ChunkedArray>(
+                                    builder.Finish().ValueOrDie()))
+                    .ValueOrDie();
+  auto extended = arrow::ConcatenateTables({precursors, second}).ValueOrDie();
+  {
+    auto sink = arrow::io::FileOutputStream::Open(table_path.string()).ValueOrDie();
+    BOOST_TEST_REQUIRE(
+        parquet::arrow::WriteTable(*extended, arrow::default_memory_pool(), sink)
+            .ok());
+    BOOST_TEST_REQUIRE(sink->Close().ok());
+  }
+
+  auto spectra = MzPeak::open(scratch).spectra(MzPeak::MetadataDetail::Minimal);
+  auto s2 = spectra[2];
+  BOOST_TEST_REQUIRE(s2.metadata().precursors.size() == 2u);
+  BOOST_TEST((s2.metadata().precursors[1].precursor_index == std::optional<uint64_t>(99)));
+  require_minimal_equals_lean(scratch.string());
 
   fs::remove_all(scratch);
 }

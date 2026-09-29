@@ -10,6 +10,7 @@ directory of this repository.
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <memory>
 
 #include "mzpeak/schema/data_kind.h"
@@ -64,6 +65,11 @@ public:
    */
   Util::IndexMap<SpectrumMetadata>
   read_spectrum_metadata(MetadataDetail = MetadataDetail::Full) const;
+
+  /// The map at MetadataDetail::Minimal, or nullopt when this archive does
+  /// not fit it; see Util::read_minimal_spectra_metadata().
+  std::optional<Util::IndexMap<MinimalSpectrumMetadata>>
+  read_minimal_spectrum_metadata() const;
 
 private:
   struct Impl;
