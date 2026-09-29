@@ -16,6 +16,10 @@ directory of this repository.
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <string>
+#include <vector>
+#include <cstring>
+#include <map>
 #include <mutex>
 #include <parquet/api/reader.h>
 #include <parquet/arrow/reader.h>
@@ -27,6 +31,82 @@ directory of this repository.
 #include "mzpeak/util/arrow.h"
 
 namespace MzPeak::Util {
+
+namespace {
+/// PROBE (branch probe/pool): recycle large decode buffers across threads.
+///
+/// A decoded row group is freed by whichever thread evicts it, usually not
+/// the one that decoded it. With glibc each decoding thread's arena then keeps
+/// the freed ~20 MB (measured: 3.56 GB stranded in 137 arenas at 128 threads),
+/// and mmap-ing big buffers instead costs a page-fault storm (+50% wall). Row
+/// groups share one schema, so buffer sizes repeat: a size-keyed free list
+/// shared by all threads hands the next decode the memory the last eviction
+/// released, whichever thread either ran on, and needs no allocator that cares
+/// about thread lifetime.  MZPEAK_POOL=recycle enables it (A/B in one binary).
+class RecyclingPool final : public arrow::MemoryPool {
+public:
+  static RecyclingPool* get()
+  {
+    static RecyclingPool* p = new RecyclingPool; // ponytail: never destroyed; exit reclaims it
+    return p;
+  }
+  arrow::Status Allocate(int64_t size, int64_t alignment, uint8_t** out) override
+  {
+    if (size < kMin || alignment > kAlign) return sys_->Allocate(size, alignment, out);
+    const int64_t cls = round_up(size);
+    {
+      std::lock_guard<std::mutex> g(mu_);
+      auto& v = free_[cls];
+      if (!v.empty()) {
+        *out = v.back(); v.pop_back(); free_bytes_ -= cls; ++reused_; return arrow::Status::OK();
+      }
+    }
+    return sys_->Allocate(cls, kAlign, out);
+  }
+  arrow::Status Reallocate(int64_t old_size, int64_t new_size, int64_t alignment, uint8_t** ptr) override
+  {
+    if ((old_size < kMin && new_size < kMin) || alignment > kAlign)
+      return sys_->Reallocate(old_size, new_size, alignment, ptr);
+    uint8_t* fresh = nullptr;
+    ARROW_RETURN_NOT_OK(Allocate(new_size, alignment, &fresh));
+    std::memcpy(fresh, *ptr, static_cast<size_t>(std::min(old_size, new_size)));
+    Free(*ptr, old_size, alignment);
+    *ptr = fresh;
+    return arrow::Status::OK();
+  }
+  void Free(uint8_t* buffer, int64_t size, int64_t alignment) override
+  {
+    if (size < kMin || alignment > kAlign) { sys_->Free(buffer, size, alignment); return; }
+    const int64_t cls = round_up(size);
+    {
+      std::lock_guard<std::mutex> g(mu_);
+      if (free_bytes_ + cls <= kCap) { free_[cls].push_back(buffer); free_bytes_ += cls; return; }
+    }
+    sys_->Free(buffer, cls, kAlign);
+  }
+  int64_t bytes_allocated() const override { return sys_->bytes_allocated(); }
+  int64_t total_bytes_allocated() const override { return sys_->total_bytes_allocated(); }
+  int64_t num_allocations() const override { return sys_->num_allocations(); }
+  std::string backend_name() const override { return "recycling(system)"; }
+
+private:
+  static constexpr int64_t kMin = int64_t{64} << 10;   // smaller buffers: plain malloc
+  static constexpr int64_t kAlign = 64;                 // arrow::kDefaultBufferAlignment
+  static constexpr int64_t kCap = int64_t{1} << 30;     // ponytail: keep at most 1 GB free
+  static int64_t round_up(int64_t s) { return (s + 65535) & ~int64_t{65535}; }
+  arrow::MemoryPool* sys_ = arrow::system_memory_pool();
+  std::mutex mu_;
+  std::map<int64_t, std::vector<uint8_t*>> free_;
+  int64_t free_bytes_ = 0;
+  long reused_ = 0;
+};
+
+arrow::MemoryPool* decode_pool()
+{
+  static const bool recycle = [] { const char* e = std::getenv("MZPEAK_POOL"); return e && std::string(e) == "recycle"; }();
+  return recycle ? static_cast<arrow::MemoryPool*>(RecyclingPool::get()) : arrow::system_memory_pool();
+}
+} // namespace
 
 /******************************************************************************/
 std::optional<std::string> get_kv_string(const Parquet::file_metadata_t& fmd,
@@ -88,11 +168,14 @@ struct Parquet::Impl {
     // Measured cost on a 7,534-spectrum archive: none, and slightly less
     // peak RSS (185 -> 180 MB at 16 threads).  Revisit if a later Arrow
     // fixes the allocator.
-    reader_builder.memory_pool(arrow::system_memory_pool());
+    reader_builder.memory_pool(decode_pool());
     // A footer parsed before is handed in rather than read and parsed again;
     // see Manager::parquet().
     auto status = reader_builder.Open(
-        std::move(raf), parquet::default_reader_properties(), std::move(footer));
+        std::move(raf),
+        decode_pool() == arrow::system_memory_pool() ? parquet::default_reader_properties()
+                                                      : parquet::ReaderProperties(decode_pool()),
+        std::move(footer));
 
     if (!status.ok()) {
       std::string msg("while opening file: " + file_.file_name() + ": ");
