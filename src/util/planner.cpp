@@ -153,13 +153,16 @@ struct StatsIndex::Impl {
   /// The row group that last satisfied a query through this reader.  A reader
   /// walks a contiguous run of entities, so the next query almost always wants
   /// the same group or the one after it.
-  int32_t group_hint() const { return group_hint_; }
-  void set_group_hint(int32_t g) { group_hint_ = g; }
+  int32_t group_hint() const { return group_hint_.load(std::memory_order_relaxed); }
+  void set_group_hint(int32_t g) { group_hint_.store(g, std::memory_order_relaxed); }
 
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::vector<int64_t> rows_;
   std::map<int32_t, bool> all_sorted_;
-  int32_t group_hint_ = 0;
+  // Atomic because one reader may be shared across threads (the library supports
+  // it; see one_shared_reader_across_threads_agrees). Relaxed is enough: the hint
+  // only chooses where a search starts, never what it finds.
+  std::atomic<int32_t> group_hint_{0};
   int32_t columns_ = 0;
   std::deque<Slot> slots_; ///< (row group, column) -> statistics; see get()
   std::map<std::pair<int32_t, int32_t>, bool> sorted_;
