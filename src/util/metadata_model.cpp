@@ -9,6 +9,7 @@ directory of this repository.
 #include "mzpeak/util/metadata_model.h"
 
 #include <algorithm>
+#include <atomic>
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
@@ -29,6 +30,7 @@ directory of this repository.
 #include <cctype>
 #include <format>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 
 #include "mzpeak/exception.h"
@@ -91,14 +93,6 @@ read_metadata_table(Parquet& metadata, std::span<const std::string_view> skip = 
     throw ParquetError("read metadata table: " + result.status().ToString());
   }
   return std::move(result).ValueOrDie();
-}
-
-/// Braced-list convenience: `{"a", "b"}` does not deduce to a span.
-std::shared_ptr<arrow::Table>
-read_metadata_table(Parquet& metadata, std::initializer_list<std::string_view> skip)
-{
-  return read_metadata_table(metadata,
-                             std::span<const std::string_view>(skip.begin(), skip.size()));
 }
 
 /// Read the `spectrum` struct column from an already-read table.  Returns null
@@ -959,6 +953,33 @@ void attach_precursors(Map& out,
   }
 }
 
+/// A selected ion's m/z, or none.
+///
+/// A stored 0 (or any non-finite value) means the writer had no selected
+/// ion m/z, not that the ion sits at m/z 0.
+///
+/// mzpeak-convert materialises an absent MS:1000744 as 0.0 rather than
+/// null -- its SelectedIon model holds a bare f64 -- and Bruker diaTracer
+/// mzML routinely omits that term, carrying only charge and peak
+/// intensity.  Measured on a 3,086,644-spectrum diaPASEF archive: every
+/// selected_ion_mz is a non-null 0.0.  A consumer that prefers a PRESENT
+/// ion m/z over the isolation-window target (OpenMS does, and so does
+/// this format's own precedence) then works from precursor m/z 0 and
+/// finds nothing, silently: 0 tags where the same run as mzML gives
+/// 62 million.  Reporting the value as absent puts such a file back on
+/// the isolation window, which is what the mzML reader would have used.
+///
+/// Deliberately NOT generalised to the other numeric fields: intensity 0
+/// is a real measurement, retention time 0 is a real acquisition time,
+/// and charge 0 already means "unknown" to consumers that read it.  Only
+/// an m/z has no meaningful zero.
+std::optional<double> selected_ion_mz(const arrow::Array* column, int64_t row)
+{
+  std::optional<double> mz = opt_double(column, row);
+  if (mz && !(std::isfinite(*mz) && *mz > 0.0)) mz.reset();
+  return mz;
+}
+
 /// Attach selected-ion rows to their owning precursor.
 ///
 /// H2: match on (source_index, precursor_index).  Run AFTER
@@ -1011,29 +1032,7 @@ void attach_selected_ions(Map& out,
       auto pi_idx = opt_int<uint64_t>(precursor_index, r);
 
       SelectedIonInfo ion;
-      ion.selected_ion_mz = opt_double(ion_mz, r);
-      // A stored 0 (or any non-finite value) means the writer had no selected
-      // ion m/z, not that the ion sits at m/z 0.
-      //
-      // mzpeak-convert materialises an absent MS:1000744 as 0.0 rather than
-      // null -- its SelectedIon model holds a bare f64 -- and Bruker diaTracer
-      // mzML routinely omits that term, carrying only charge and peak
-      // intensity.  Measured on a 3,086,644-spectrum diaPASEF archive: every
-      // selected_ion_mz is a non-null 0.0.  A consumer that prefers a PRESENT
-      // ion m/z over the isolation-window target (OpenMS does, and so does
-      // this format's own precedence) then works from precursor m/z 0 and
-      // finds nothing, silently: 0 tags where the same run as mzML gives
-      // 62 million.  Reporting the value as absent puts such a file back on
-      // the isolation window, which is what the mzML reader would have used.
-      //
-      // Deliberately NOT generalised to the other numeric fields: intensity 0
-      // is a real measurement, retention time 0 is a real acquisition time,
-      // and charge 0 already means "unknown" to consumers that read it.  Only
-      // an m/z has no meaningful zero.
-      if (ion.selected_ion_mz &&
-          !(std::isfinite(*ion.selected_ion_mz) && *ion.selected_ion_mz > 0.0)) {
-        ion.selected_ion_mz.reset();
-      }
+      ion.selected_ion_mz = selected_ion_mz(ion_mz, r);
       ion.charge_state = opt_int<int>(charge, r);
       ion.intensity = opt_float(intensity, r);
       // Ion mobility: null in all bundled fixtures, so this reads as nullopt
@@ -1068,6 +1067,101 @@ void attach_selected_ions(Map& out,
       target->selected_ions.push_back(std::move(ion));
     }
   }
+}
+
+/// PASS 2 and 3 for MetadataDetail::Minimal: the joins of attach_precursors
+/// and attach_selected_ions, into the one precursor and ion a
+/// MinimalSpectrumMetadata holds inline.  False as soon as a spectrum needs
+/// more than that -- a second precursor row, a second ion, or an ion for a
+/// precursor it does not have (attach_selected_ions would add a holder beside
+/// it) -- and the caller then reads the archive as Lean.  An ion on a spectrum
+/// with no precursor gets the same holder attach_selected_ions would make.
+/// [@p first, @p last] as in @ref attach_precursors.
+bool attach_minimal(IndexMap<MinimalSpectrumMetadata>& out,
+                    const std::vector<Facet>& precursor_facets,
+                    const std::vector<Facet>& ion_facets,
+                    uint64_t first,
+                    uint64_t last)
+{
+  for (const auto& prec : precursor_facets) {
+    const arrow::Array* source_index = resolve_field(prec, "source_index").get();
+    const arrow::Array* precursor_index =
+        resolve_field(prec, "precursor_index").get();
+    const Facet iw{std::dynamic_pointer_cast<arrow::StructArray>(
+                       resolve_field(prec, "isolation_window")),
+                   prec.file};
+    const auto iw_column = [&iw](const char* name) {
+      return iw ? resolve_field(iw, name).get() : nullptr;
+    };
+    const arrow::Array* iw_target =
+        iw_column("MS_1000827_isolation_window_target_mz");
+    const arrow::Array* iw_lower =
+        iw_column("MS_1000828_isolation_window_lower_offset");
+    const arrow::Array* iw_upper =
+        iw_column("MS_1000829_isolation_window_upper_offset");
+
+    for (int64_t r = 0; r < prec->length(); ++r) {
+      if (prec->IsNull(r)) continue;
+      auto si = opt_int<uint64_t>(source_index, r);
+      if (!si || *si < first || *si > last) continue;
+      auto it = out.find(*si);
+      if (it == out.end()) {
+        std::fprintf(stderr,
+                     "mzpeak: precursor source_index %llu has no matching "
+                     "entity — skipped\n",
+                     static_cast<unsigned long long>(*si));
+        continue;
+      }
+      MinimalSpectrumMetadata& m = it->second;
+      if (m.has_precursor) return false;
+      m.has_precursor = true;
+      m.precursor_index = opt_int<uint64_t>(precursor_index, r);
+      if (iw && !iw->IsNull(r)) {
+        m.isolation_window.target_mz = opt_float(iw_target, r);
+        m.isolation_window.lower_offset = opt_float(iw_lower, r);
+        m.isolation_window.upper_offset = opt_float(iw_upper, r);
+      }
+    }
+  }
+
+  for (const auto& si : ion_facets) {
+    const auto column = [&si](const char* name) {
+      return resolve_field(si, name).get();
+    };
+    const arrow::Array* source_index = column("source_index");
+    const arrow::Array* precursor_index = column("precursor_index");
+    const arrow::Array* ion_mz =
+        column("MS_1000744_selected_ion_mz_unit_MS_1000040");
+    const arrow::Array* charge = column("MS_1000041_charge_state");
+    const arrow::Array* intensity = column("MS_1000042_intensity_unit_MS_1000131");
+
+    for (int64_t r = 0; r < si->length(); ++r) {
+      if (si->IsNull(r)) continue;
+      auto src_idx = opt_int<uint64_t>(source_index, r);
+      if (!src_idx || *src_idx < first || *src_idx > last) continue;
+      auto it = out.find(*src_idx);
+      if (it == out.end()) {
+        std::fprintf(stderr,
+                     "mzpeak: selected_ion source_index %llu has no matching "
+                     "entity — skipped\n",
+                     static_cast<unsigned long long>(*src_idx));
+        continue;
+      }
+      MinimalSpectrumMetadata& m = it->second;
+      const auto pi_idx = opt_int<uint64_t>(precursor_index, r);
+      if (!m.has_precursor) {
+        m.has_precursor = true;
+        m.precursor_index = pi_idx;
+      } else if (m.precursor_index != pi_idx || m.has_selected_ion) {
+        return false;
+      }
+      m.has_selected_ion = true;
+      m.selected_ion_mz = selected_ion_mz(ion_mz, r);
+      m.charge_state = opt_int<int>(charge, r);
+      m.intensity = opt_float(intensity, r);
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -1138,10 +1232,19 @@ read_spectra_metadata(const SpectraMetadataFiles& files)
 }
 
 /******************************************************************************/
-IndexMap<SpectrumMetadata>
-read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
+namespace {
+
+/// read_spectra_metadata() into @p Record: SpectrumMetadata, or
+/// MinimalSpectrumMetadata (MetadataDetail::Minimal), which lacks the fields
+/// guarded by `full_record` below and yields nullopt for an archive whose
+/// precursors it cannot hold.  One body for both, so the joins, the RT rules
+/// and the null handling cannot drift apart.
+template <typename Record>
+std::optional<IndexMap<Record>>
+read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
 {
-  IndexMap<SpectrumMetadata> out;
+  constexpr bool full_record = std::is_same_v<Record, SpectrumMetadata>;
+  IndexMap<Record> out;
   if (!files.primary) return out;
 
   // Each facet resolves its columns through its OWN index entry: the mapping
@@ -1156,7 +1259,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // Parquet for the columns, so the decode itself is skipped.  On this corpus
   // that is 1.9 MB of 4.7 MB decoded, `activation` alone being 1.0 MB of a
   // 1.5 MB precursor table for a CV-parameter list Lean does not keep.
-  const bool lean = detail == MetadataDetail::Lean;
+  const bool lean = detail != MetadataDetail::Full;
 
   // Columns this reader NEVER extracts, in either mode.  Skipping them changes
   // nothing observable -- no field of SpectrumMetadata is sourced from any of
@@ -1180,6 +1283,30 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // from this list, and Lean's extras are appended rather than re-typed.
   if (lean) skip_scan.insert(skip_scan.end(), {"parameters", "scan_windows"});
 
+  // Minimal decodes none of the columns it does not keep either, under the
+  // reference writer's names and the long CV forms alike.  Only ever a SKIP:
+  // a name no archive uses skips nothing.
+  std::vector<std::string_view> skip_primary = {"parameters", "auxiliary_arrays"};
+  std::vector<std::string_view> skip_precursors = {"activation"};
+  std::vector<std::string_view> skip_ions = {"parameters"};
+  if constexpr (!full_record) {
+    skip_primary.insert(
+        skip_primary.end(),
+        {"base_peak_mz", "base_peak_intensity", "total_ion_current", "spectrum_type",
+         "lowest_observed_mz", "highest_observed_mz", "data_processing_id",
+         "data_processing_ref", "number_of_auxiliary_arrays",
+         "MS_1000504_base_peak_mz_unit_MS_1000040",
+         "MS_1000505_base_peak_intensity_unit_MS_1000131",
+         "MS_1000285_total_ion_current_unit_MS_1000131", "MS_1000559_spectrum_type",
+         "MS_1000528_lowest_observed_mz_unit_MS_1000040",
+         "MS_1000527_highest_observed_mz_unit_MS_1000040"});
+    skip_scan.insert(skip_scan.end(), {"ion_mobility_value", "ion_mobility_type"});
+    skip_precursors.push_back("precursor_id");
+    skip_ions.insert(skip_ions.end(),
+                     {"ion_mobility_value", "ion_mobility_type",
+                      "ion_mobility_lower_limit", "ion_mobility_upper_limit"});
+  }
+
   // The three facet tables are read on threads of their own while this one
   // reads the primary table and builds the map from it (PASS 1), which needs
   // nothing else.  Each is a separate archive member with its own handle and
@@ -1196,18 +1323,17 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   });
   auto precursors_read = std::async(std::launch::async, [&] {
     return files.precursors
-               ? (lean ? read_metadata_table(*files.precursors, {"activation"})
+               ? (lean ? read_metadata_table(*files.precursors, skip_precursors)
                        : read_metadata_table(*files.precursors))
                : nullptr;
   });
   auto selected_ions_read = std::async(std::launch::async, [&] {
     return files.selected_ions ? (lean ? read_metadata_table(*files.selected_ions,
-                                                             {"parameters"})
+                                                             skip_ions)
                                        : read_metadata_table(*files.selected_ions))
                                : nullptr;
   });
-  auto table = lean ? read_metadata_table(*files.primary,
-                                          {"parameters", "auxiliary_arrays"})
+  auto table = lean ? read_metadata_table(*files.primary, skip_primary)
                     : read_metadata_table(*files.primary);
   // -------------------------------------------------------------------
   // PASS 1: spectrum column — build `out` keyed by spectrum.index VALUE.
@@ -1297,7 +1423,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
       // file order (ascending in practice, but the sort does not rely on it)
       // and nothing looks anything up until PASS 2.  Filled in place: a
       // local moved in at the end copied all 432 bytes once more per row.
-      SpectrumMetadata& m = out.append(index.Value(r));
+      Record& m = out.append(index.Value(r));
       m.index = index.Value(r);
       m.id = get_string(id, r);
       m.ms_level = opt_int<int>(ms_level, r);
@@ -1312,19 +1438,21 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
       m.representation = get_string(representation, r);
       m.number_of_data_points = opt_int<uint64_t>(data_points, r);
       m.number_of_peaks = opt_int<uint64_t>(peaks, r);
-      m.base_peak_mz = opt_double(base_peak_mz, r);
-      m.base_peak_intensity = opt_float(base_peak_intensity, r);
-      m.total_ion_current = opt_float(tic, r);
+      if constexpr (full_record) {
+        m.base_peak_mz = opt_double(base_peak_mz, r);
+        m.base_peak_intensity = opt_float(base_peak_intensity, r);
+        m.total_ion_current = opt_float(tic, r);
 
-      // RDR-10b scalar fields.
-      m.spectrum_type = get_string(spectrum_type, r);
-      m.lowest_observed_mz = opt_double(lowest_mz, r);
-      m.highest_observed_mz = opt_double(highest_mz, r);
-      m.data_processing_ref = get_string(data_processing, r);
+        // RDR-10b scalar fields.
+        m.spectrum_type = get_string(spectrum_type, r);
+        m.lowest_observed_mz = opt_double(lowest_mz, r);
+        m.highest_observed_mz = opt_double(highest_mz, r);
+        m.data_processing_ref = get_string(data_processing, r);
 
-      // RDR-10b CvParam list.
-      if (detail == MetadataDetail::Full)
-        m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
+        // RDR-10b CvParam list.
+        if (detail == MetadataDetail::Full)
+          m.parameters = read_cv_params_from_list(spectrum, "parameters", r);
+      }
 
       // Delta model for null-marking reconstruction (large_list<double>).
       if ((dm_large || dm_list) && !delta_model->IsNull(r)) {
@@ -1352,7 +1480,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
       // below: that check is a CONFORMANCE assertion about the file, not
       // something any decode depends on, so a caller that opted out of
       // auxiliary arrays is not owed it.  Full still performs it.
-      if (detail == MetadataDetail::Full) {
+      if constexpr (full_record) if (detail == MetadataDetail::Full) {
         // Read number_of_auxiliary_arrays (uint32) for the count-consistency
         // assert (T-03-02 mitigation).  Absent/null counts as 0.
         uint64_t declared_count = 0;
@@ -1585,7 +1713,7 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
           if (representative) {
             seen.emplace(sst);
 
-            if (detail == MetadataDetail::Full) {
+            if constexpr (full_record) if (detail == MetadataDetail::Full) {
               it->second.scan_parameters =
                   read_cv_params_from_list(scan, "parameters", r);
             }
@@ -1611,16 +1739,18 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
 
             // Scan-level ion mobility (handoff P1): null in all bundled
             // fixtures, so null-safe today; value-level correctness is
-            // fixture-gated.
-            it->second.ion_mobility = opt_double(im_value, r);
-            it->second.ion_mobility_type = opt_string(im_type, r);
+            // fixture-gated.  Not kept by Minimal.
+            if constexpr (full_record) {
+              it->second.ion_mobility = opt_double(im_value, r);
+              it->second.ion_mobility_type = opt_string(im_type, r);
+            }
           }
 
           // scan_windows: large_list<struct<lower_limit, upper_limit, parameters>>
           auto sw_slice = detail == MetadataDetail::Full
                               ? list_slice(resolve_field(scan, "scan_windows"), r)
                               : std::nullopt;
-          if (sw_slice) {
+          if constexpr (full_record) if (sw_slice) {
             {
               auto sw_items =
                   std::dynamic_pointer_cast<arrow::StructArray>(sw_slice->values);
@@ -1664,11 +1794,14 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
   // and keeps its own; that walk is a few ms, the attaching (an allocation
   // per precursor and per ion) 0.19 s on a 717,924-spectrum run, 0.12 s in
   // four.  Each thread gets its own copy of the facets, whose column memo is
-  // not shared.
+  // not shared.  Minimal attaches into its inline record instead, 0.10 s
+  // serially for no allocation at all, and an archive it cannot hold is read
+  // as Lean by the caller (the scan pass is joined by its future on the way).
   // ponytail: four ranges, fixed, whatever the caller's thread count; eight
   // measured no faster, since the page faults of all those new allocations
   // do not spread across threads.
   // -------------------------------------------------------------------
+  std::atomic<bool> fits{true};
   {
     const auto precursor_facets = facets_for("precursor", precursors_table, files.precursors);
     const auto ion_facets = facets_for("selected_ion", selected_ions_table, files.selected_ions);
@@ -1680,8 +1813,12 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
     };
     const auto attach = [&](std::size_t t) {
       const std::vector<Facet> precursors = precursor_facets, ions = ion_facets;
-      attach_precursors(out, precursors, detail, bound(t), bound(t + 1) - 1);
-      attach_selected_ions(out, ions, detail, bound(t), bound(t + 1) - 1);
+      if constexpr (full_record) {
+        attach_precursors(out, precursors, detail, bound(t), bound(t + 1) - 1);
+        attach_selected_ions(out, ions, detail, bound(t), bound(t + 1) - 1);
+      } else if (!attach_minimal(out, precursors, ions, bound(t), bound(t + 1) - 1)) {
+        fits = false;
+      }
     };
     std::vector<std::future<void>> others;
     for (std::size_t t = 1; t < parts; ++t)
@@ -1689,9 +1826,26 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
     attach(0);
     for (auto& f : others) f.get();
   }
+  if (!fits) return std::nullopt;
   scans_done.get();
 
   return out;
+}
+
+} // namespace
+
+/******************************************************************************/
+IndexMap<SpectrumMetadata>
+read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
+{
+  return *read_spectra_metadata_<SpectrumMetadata>(files, detail);
+}
+
+/******************************************************************************/
+std::optional<IndexMap<MinimalSpectrumMetadata>>
+read_minimal_spectra_metadata(const SpectraMetadataFiles& files)
+{
+  return read_spectra_metadata_<MinimalSpectrumMetadata>(files, MetadataDetail::Minimal);
 }
 
 /******************************************************************************/

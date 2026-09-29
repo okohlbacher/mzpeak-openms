@@ -189,6 +189,22 @@ Manager::spectrum_metadata(MetadataDetail detail,
 }
 
 /******************************************************************************/
+std::shared_ptr<const Manager::MinimalSpectrumMetadataMap>
+Manager::minimal_spectrum_metadata(
+    const std::function<std::optional<MinimalSpectrumMetadataMap>()>& build) const
+{
+  // Locked across the build for the reason spectrum_metadata() gives.
+  std::lock_guard<std::mutex> guard(spectrum_metadata_mutex_);
+  if (!minimal_spectrum_metadata_) {
+    auto map = build();
+    minimal_spectrum_metadata_ =
+        map ? std::make_shared<const MinimalSpectrumMetadataMap>(std::move(*map))
+            : nullptr;
+  }
+  return *minimal_spectrum_metadata_;
+}
+
+/******************************************************************************/
 std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
 {
   // Every Parquet opens its OWN handle -- the file position is per reader and

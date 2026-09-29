@@ -133,7 +133,8 @@ protected:
            std::vector<Data::ArrayIndex::Dimension>,
            std::shared_ptr<Metadata::Table>,
            std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
-           ImsCalibration ims = {});
+           ImsCalibration ims = {},
+           std::shared_ptr<const SpectrumMetadata> md_own = nullptr);
 
 private:
   /// The lazily-decoded peak arrays, plus the flag that serialises the decode.
@@ -156,6 +157,8 @@ private:
   uint64_t index_;
   std::shared_ptr<Metadata::Table> md_table_;
   std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map_;
+  /// This spectrum's own metadata, when its Spectra holds a Minimal map.
+  std::shared_ptr<const SpectrumMetadata> md_own_;
 
   // Ingredients retained for the lazy peak read + decode.
   std::shared_ptr<Data::Signals> signals_;

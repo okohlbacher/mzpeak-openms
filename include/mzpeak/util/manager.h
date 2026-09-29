@@ -12,6 +12,7 @@ directory of this repository.
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -119,6 +120,12 @@ public:
   spectrum_metadata(MetadataDetail detail,
                     const std::function<SpectrumMetadataMap()>& build) const;
 
+  /// The same at MetadataDetail::Minimal.  Null when the archive does not
+  /// fit it (@p build returned nullopt), which is cached too.
+  using MinimalSpectrumMetadataMap = IndexMap<MinimalSpectrumMetadata>;
+  std::shared_ptr<const MinimalSpectrumMetadataMap> minimal_spectrum_metadata(
+      const std::function<std::optional<MinimalSpectrumMetadataMap>()>& build) const;
+
 private:
   std::shared_ptr<MzPeak::IO::Archive> archive_;
   std::shared_ptr<RowGroupCache> row_group_cache_ = std::make_shared<RowGroupCache>();
@@ -138,6 +145,8 @@ private:
   // that reaches it is logically const.
   mutable std::map<MetadataDetail, std::shared_ptr<const SpectrumMetadataMap>>
       spectrum_metadata_;
+  mutable std::optional<std::shared_ptr<const MinimalSpectrumMetadataMap>>
+      minimal_spectrum_metadata_;
   mutable std::mutex spectrum_metadata_mutex_;
 
   // Each member's parsed Parquet footer, by file name, from the first Parquet
