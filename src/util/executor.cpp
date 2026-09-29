@@ -322,18 +322,33 @@ std::shared_ptr<arrow::Array>
 Executor::Impl::array(std::shared_ptr<arrow::RecordBatch>& batch,
                       const Schema::Column& field)
 {
+  // Boxed here from the batch's ArrayData, NOT through RecordBatch::column()
+  // and StructArray::field().  Those two keep a boxed Array cached inside the
+  // batch and read that cache with std::atomic_load on a shared_ptr, which
+  // libstdc++ implements with a pool of sixteen PROCESS-WIDE mutexes: every
+  // reader thread took the same sixteen locks several times per spectrum,
+  // whatever group it read, and slept on them once enough threads did.
+  // Measured on a 717,924-spectrum archive with decode waits out of the way:
+  // a read cost ~12 us at 16 threads and 115-135 us at 256, with half a
+  // million voluntary context switches.  Boxing a fresh Array costs an
+  // allocation and takes no lock.
   if (field.first->is_root()) {
-    return batch->column(field.second->absolute_index());
-  } else {
-    std::shared_ptr<arrow::Array> col(batch->column(field.first->index()));
-
-    if (col && col->type_id() == arrow::Type::STRUCT) {
-      auto sa = std::static_pointer_cast<arrow::StructArray>(col);
-      return sa->field(field.second->relative_index());
-    } else {
-      throw ParquetError("column not in batch: " + field.first->path(*field.second));
-    }
+    return arrow::MakeArray(batch->column_data(field.second->absolute_index()));
   }
+
+  const std::shared_ptr<arrow::ArrayData>& col = batch->column_data(field.first->index());
+  if (!col || col->type->id() != arrow::Type::STRUCT) {
+    throw ParquetError("column not in batch: " + field.first->path(*field.second));
+  }
+
+  // Exactly what StructArray::field() does: a struct's children are not
+  // sliced along with it, so the struct's window is applied here.
+  std::shared_ptr<arrow::ArrayData> child =
+      col->child_data[static_cast<std::size_t>(field.second->relative_index())];
+  if (col->offset != 0 || child->length != col->length) {
+    child = child->Slice(col->offset, col->length);
+  }
+  return arrow::MakeArray(child);
 }
 
 /******************************************************************************/
