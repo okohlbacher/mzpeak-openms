@@ -25,6 +25,8 @@ ChunkEncoding::ChunkEncoding(const CV& cv)
       val_ = Delta;
     } else if (accession == "1002312") {
       val_ = NumpressLinear;
+    } else if (accession == "1003826") {
+      val_ = Grid;
     }
   }
 }
@@ -45,6 +47,8 @@ CV ChunkEncoding::to_cv() const
             return CV("MS", "1003089");
           case NumpressLinear:
             return CV("MS", "1002312");
+          case Grid:
+            return CV("MS", "1003826");
           }
 
           std::unreachable();

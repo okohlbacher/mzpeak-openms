@@ -82,6 +82,18 @@ pyarrow BEFORE this reader was pointed at it.
   several windows over disjoint mobility ranges does not describe this file:
   the converter emits one spectrum per window, each with a single precursor.
   A file that genuinely uses limits is still needed.
+
+  **This may be about to change.** mzdata `985c547` (2026-09-29) switched its
+  TDF reader from accession-less `Param::new_key_value("ion mobility lower
+  limit", ...)` to proper MS CV terms, and dropped the two grid-model params it
+  had been attaching. So a conversion made with that mzdata onwards should carry
+  the limits as real terms. Whether they reach the TYPED
+  `ion_mobility_lower_limit`/`_upper_limit` fields depends on something this
+  reader does not control: those are read from `selected_ion` COLUMNS, so the
+  prototype writer has to promote the terms to columns. If it leaves them in
+  `parameters`, the typed fields stay empty and the values arrive untyped --
+  which would look identical to today's "absent" from the API's point of view.
+  Worth re-checking as soon as the prototype picks up that mzdata release.
 - **The reference's own canonical conversion reads correctly.** `74ff521`
   committed `diaPASEF.ref.mzpeak` to the prototype, so there is now a reference
   artifact rather than only a conversion produced here. This reader opens it,
@@ -100,12 +112,15 @@ pyarrow BEFORE this reader was pointed at it.
 
 ## Backlog
 
-- **Grid encoding is not supported.** The prototype added a `grid` buffer
-  encoding (`e62e18c`) beside `point` and `chunk`. `group_name_to_layout` maps
-  it to `Layout::Unknown` and the decoder raises `UnknownLayoutError`, so such
-  an archive is refused cleanly rather than misread -- unstarted work, not a
-  latent defect. Worth starting only against an archive that actually uses it;
-  implementing from the prose alone would be guessing.
+- **Grid encoding: reading is DONE, writing is not.** See
+  `docs/spec-compliance.md`. The reader decodes all four models and validates
+  every chunk against the bounds the writer recorded. Writing grid-encoded
+  archives is unstarted and needs a decision first -- which model a given axis
+  should be fitted to -- that reading did not require.
+- **`cv_list` URIs must identify a fixed release.** W3 tightened in `840ba4a`;
+  see `docs/spec-compliance.md`. The blocker is that each vocabulary publishes
+  its snapshots under a different path shape, so the fix is a small registry of
+  release-URI patterns, not a format string.
 - **clang-format version skew makes the repository-wide style rule unsafe to
   apply.** Under clang-format 22.1.8, 48 of 151 tracked C++ files disagree with
   the repository's own `.clang-format`, so running `clang-format -i` on a file
