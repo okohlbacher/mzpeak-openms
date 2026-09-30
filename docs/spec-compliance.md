@@ -174,22 +174,54 @@ reference corpus or a well-formed archive from the reference writer.
   -- so this cannot be fixed by deriving one URL template; each vocabulary's
   release layout has to be recorded, and a guessed URL that 404s is worse than
   today's honest-but-unpinned one.
-- **Grid encoding (`MS:1003826`) — IMPLEMENTED.** A chunk encoding, not a
-  layout: `chunk_values` is null and the coordinates are integer indices into a
-  model carried in a sibling `<array>_grid` struct column. All four models are
-  decoded -- `MS:1003824` linear, `MS:1003825` square root, and the two Bruker
-  models the reference carries under the placeholder accessions `MS:9999002`
-  (timsTOF m/z) and `MS:9999001` (TIMS mobility) until PSI assigns terms. The
-  main axis's indices are delta-coded and a secondary axis's are not; both
-  directions are pinned, because getting it backwards yields a plausible
-  ascending array that is wrong from the second point on. Every row's decode is
-  checked against the `chunk_start`/`chunk_end` the writer recorded, which is
-  the writer's own evaluation of the same model, so a model transcribed with one
-  wrong operation is caught rather than trusted. Validated against a real Bruker
-  diaPASEF conversion with `C2 != 0` and `C4 != 0`: m/z is bit-identical to the
-  reference's explicitly-stored values on all 205,921 points of the MS1 frame.
-  Unimplemented still: WRITING grid-encoded archives, and the materialised grid
-  form the specification also allows.
+- **Grid encoding (`MS:1003826`) — IMPLEMENTED, reading.** A chunk
+  encoding, chosen PER CHUNK: `chunk_values` is null or empty and the
+  coordinates are integer indices into a model carried in a sibling
+  `<array>_grid` struct. All four models decode -- `MS:1003824` linear,
+  `MS:1003825` square root, and the Bruker models the reference carries under
+  the placeholder accessions `MS:9999002` (timsTOF m/z) and `MS:9999001` (TIMS
+  mobility). Main-axis indices are delta-coded, secondary ones absolute.
+
+  *Mixed dimensions.* The specification tells a writer that a model whose
+  error exceeds its threshold "SHOULD fall back to use a different encoding",
+  so one dimension may hold grid rows beside uncompressed, delta or Numpress
+  ones. Every row is decoded in order: grid rows through the model, plain rows
+  through exactly the transform the ordinary chunk decoder applies. On a
+  secondary axis a row is grid when its grid struct is present; a row carrying
+  both a plain list and a grid is refused. (An earlier version refused any
+  non-grid main-axis row, and on a secondary axis silently DROPPED the grid
+  rows when a plain column was also present.)
+
+  *Bounds.* Every grid row's first and last value is checked against the
+  `chunk_start`/`chunk_end` it recorded, with a tolerance of one grid step. The
+  specification calls grid encoding "likely to be a lossy transformation" and
+  does not say the bounds are the model's evaluation, so a writer may record
+  the original coordinate, which snapping to the grid moves by at most half a
+  step; wrong models are off by many. Non-finite coordinates are refused, and
+  a missing bound column is skipped rather than read.
+
+  *Arithmetic.* There is no single reference to be bit-identical to: the grid
+  codec `grid.rs` fuses the flight-time multiply-add, while mzdata 0.66.7's
+  scalar `convert_f64` does not, and the two differ in the last bit on about a
+  third of timsTOF coordinates. This follows `grid.rs`, because that is what
+  writes grid archives and so what their recorded bounds were computed with.
+  Implicit contraction is disabled per function for both Clang and GCC -- GCC
+  contracts by default even in ISO mode -- and verified on each: with the
+  guard, GCC 16.2 `-O2` on arm64 reproduces the reference exactly; without it,
+  it emits ten fused instructions and diverges. The tests assert EXACT
+  equality, so a contracting build fails them.
+
+  *Pre-fix archives.* Two reference writer bugs, since fixed upstream, are
+  read rather than refused: a one-point chunk whose `chunk_end` fell through to
+  0.0, and a `MS:9999001` pair written as `[c6, c7, slope, offset]`. The first
+  is excused only on one-point chunks; the second is resolved by magnitude
+  under stated physical assumptions and every result is checked against a
+  physical fence, so a misreading is refused rather than returned.
+
+  Validated on a real Bruker diaPASEF conversion (C2 != 0, C4 != 0): ion
+  mobility and intensity bit-identical on all 291,453 points; m/z within one
+  ulp on 151 of them, which is the fused/unfused split above. Unimplemented:
+  WRITING grid archives, and the materialised grid form.
 - **Imaging profile — ignored, as a Core reader must.** `840ba4a` added it,
   declared by `metadata.imaging.is_imaging`. Conformance requires a Core reader
   to read Core content and ignore profile content it does not implement.

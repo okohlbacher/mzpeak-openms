@@ -82,12 +82,14 @@ private:
   template <Util::Type From, typename V>
   void remap(const ArrayIndex::Dimension& dim, std::vector<V>& v) const;
 
-  /// Coordinate grid encoding (MS:1003826).  Its values column is a STRUCT of
-  /// model parameters and integer indices rather than a list of values, so it
-  /// cannot go through the list-shaped pipeline below and is decoded here.
-  template <typename V>
+  /// Coordinate grid encoding (MS:1003826).  A grid row stores a STRUCT of
+  /// model parameters and integer indices, not a list of values, so a dimension
+  /// holding any grid rows cannot go through the list-shaped pipeline below and
+  /// is decoded here -- all of its rows, grid and plain alike, because a
+  /// consuming read leaves the columns to exactly one reader.
+  template <typename N, typename V>
   void grid(const ArrayIndex::Dimension& dim,
-            const Schema::Column& column,
+            const N& null_decoder,
             std::vector<V>& v) const;
 
   void note_unit(const ArrayIndex::Dimension& dim, const std::string& unit) const
@@ -223,6 +225,14 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
                                    const N& null_decoder,
                                    std::vector<V>& v) const
 {
+  // Before `values_entry()`: on a secondary axis that mixes plain and grid rows
+  // it names the plain column, and dispatching on it alone dropped the grid
+  // rows without a word.
+  if (std::ranges::any_of(dim.entries, &Transformer::Grid::is_grid_encoded)) {
+    grid<N, V>(dim, null_decoder, v);
+    return;
+  }
+
   const auto& primary_entry = dim.values_entry();
   auto col = signals_->column(primary_entry);
 
@@ -231,11 +241,6 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
                              dim.name);
   } else if (!slice_->has_column(col.value())) {
     return; // No data to decode so we can exit early.
-  }
-
-  if (Transformer::Grid::is_grid_encoded(primary_entry)) {
-    grid<V>(dim, col.value(), v);
-    return;
   }
 
   auto go = [&](auto&& decoder) -> void { slice_->array(col.value(), v, decoder); };
@@ -262,51 +267,192 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
 
 /******************************************************************************/
 template <typename T>
-template <typename V>
+template <typename N, typename V>
 void Decoder<T>::grid(const ArrayIndex::Dimension& dim,
-                      const Schema::Column& column,
+                      const N& null_decoder,
                       std::vector<V>& v) const
 {
   namespace Grid = Transformer::Grid;
-  const bool main_axis = dim.is_main_axis();
+  using BF = Schema::BufferFormat;
+  using Encoding = Schema::PSI::ChunkEncoding;
 
-  // Slice::raw() is a CONSUMING read, so every column this path needs is taken
-  // exactly once, here, before anything else could.
-  std::optional<Grid::Bounds> bounds;
+  const bool main_axis = dim.is_main_axis();
+  const auto grid_entry = std::ranges::find_if(dim.entries, &Grid::is_grid_encoded);
+
+  // A plain secondary column with a transform of its own would need that
+  // transform applied row by row beside the grid rows.  Nothing writes such a
+  // dimension; refusing is better than guessing at one.
+  if (!main_axis) {
+    if (auto plain = dim.entry_with(BF::ChunkSecondary); plain && plain->transform) {
+      throw InvalidFormatError("dimension " + dim.name +
+                               " mixes grid rows with a transformed secondary "
+                               "column, which this reader does not decode");
+    }
+  }
+
+  // Every column is taken exactly once, here: a Slice read consumes it.
+  const auto take = [&](const std::optional<Schema::Column>& c) {
+    return (c && slice_->has_column(*c)) ? slice_->raw(*c)
+                                         : std::shared_ptr<Util::Slice::Raw>();
+  };
+  const std::shared_ptr<Util::Slice::Raw> grid_raw =
+      take(signals_->column(*grid_entry));
+  const std::shared_ptr<Util::Slice::Raw> plain_raw =
+      take(signals_->column(dim, main_axis ? BF::ChunkValues : BF::ChunkSecondary));
+  if (!grid_raw && !plain_raw) return;
+
+  std::vector<std::string> encodings;
+  std::vector<std::optional<double>> starts, ends;
   if (main_axis) {
-    // Every row of a grid-encoded dimension must say so.  A file that mixes
-    // encodings within one dimension cannot be represented by a per-dimension
-    // dispatch, and decoding its grid rows while silently dropping the others
-    // would be worse than refusing it.
-    if (auto enc = signals_->column(dim, Schema::BufferFormat::ChunkEncoding);
-        enc && slice_->has_column(*enc)) {
-      std::vector<std::string> encodings;
-      slice_->array(*enc, encodings, Util::Decoders::Scalar<std::string>());
-      for (const auto& e : encodings) {
-        auto cv = Schema::CV::from_string(e);
-        if (!cv || !(*cv == Grid::encoding_cv())) {
-          throw InvalidFormatError("dimension " + dim.name +
-                                   " is grid encoded but a chunk declares " + e);
+    if (auto c = signals_->column(dim, BF::ChunkEncoding);
+        c && slice_->has_column(*c)) {
+      slice_->array(*c, encodings, Util::Decoders::Scalar<std::string>());
+    }
+    if (auto raw = take(signals_->column(dim, BF::ChunkStart))) {
+      starts = Grid::detail::flatten(*raw);
+    }
+    if (auto raw = take(signals_->column(dim, BF::ChunkEnd))) {
+      ends = Grid::detail::flatten(*raw);
+    }
+  }
+
+  const auto encoding_of = [&](std::size_t flat) -> std::optional<Encoding::Type> {
+    if (flat >= encodings.size()) return std::nullopt;
+    const auto cv = Schema::CV::from_string(encodings[flat]);
+    if (!cv)
+      throw InvalidFormatError("invalid chunk encoding CV: " + encodings[flat]);
+    const auto type = Encoding(*cv).type();
+    if (!type) {
+      throw InvalidFormatError("while decoding " + dim.name +
+                               " unknown chunk encoding method: " + encodings[flat]);
+    }
+    return type;
+  };
+
+  const std::size_t batches = grid_raw ? grid_raw->size() : plain_raw->size();
+  if (grid_raw && plain_raw && plain_raw->size() != batches) {
+    throw InvalidFormatError("grid and value columns of " + dim.name +
+                             " are batched differently");
+  }
+
+  Util::Decoders::Scalar<V, std::vector<V>, N> scalar(null_decoder);
+  Grid::Row row;
+  std::vector<double> coords;
+  std::optional<double> previous_end;
+  std::size_t flat = 0;
+
+  for (std::size_t b = 0; b < batches; ++b) {
+    const arrow::StructArray* g = nullptr;
+    if (grid_raw) {
+      if ((*grid_raw)[b]->type_id() != arrow::Type::STRUCT) {
+        throw InvalidFormatError("grid column of " + dim.name + " is not a struct");
+      }
+      g = static_cast<const arrow::StructArray*>((*grid_raw)[b].get());
+    }
+    const arrow::Array* p = plain_raw ? (*plain_raw)[b].get() : nullptr;
+    const int64_t length = g ? g->length() : p->length();
+    if (g && p && p->length() != length) {
+      throw InvalidFormatError("grid and value columns of " + dim.name +
+                               " disagree on row count");
+    }
+
+    for (int64_t r = 0; r < length; ++r, ++flat) {
+      const std::size_t first = v.size();
+
+      // On the main axis the row's chunk_encoding says what it is.  A secondary
+      // axis has no encoding of its own, so a row is grid when its grid struct
+      // is present -- and a row carrying BOTH has no basis for preferring one.
+      std::optional<Encoding::Type> encoding =
+          main_axis ? encoding_of(flat) : std::nullopt;
+      bool is_grid = encoding == Encoding::Type::Grid;
+      if (!encoding) {
+        const bool has_grid = g && !g->IsNull(r);
+        const auto plain_row = p ? Grid::detail::list_row(*p, r) : nullptr;
+        if (has_grid && plain_row && plain_row->length() > 0) {
+          throw InvalidFormatError("chunk " + std::to_string(flat) + " of " +
+                                   dim.name +
+                                   " carries both plain values and a grid");
+        }
+        is_grid = has_grid;
+      }
+
+      if (is_grid) {
+        if (!g || !Grid::read_row(*g, r, dim.name, row)) {
+          if (main_axis) {
+            throw InvalidFormatError("chunk " + std::to_string(flat) + " of " +
+                                     dim.name +
+                                     " declares grid encoding but has no grid");
+          }
+          continue;
+        }
+        coords.clear();
+        Grid::evaluate(row, main_axis, dim.name, coords);
+        if (main_axis && !coords.empty()) {
+          Grid::check_bounds(coords.front(), coords.back(), coords.size(),
+                             Grid::detail::at(starts, flat),
+                             Grid::detail::at(ends, flat),
+                             Grid::step_at(row, row.indices.front()),
+                             Grid::step_at(row, row.indices.back()), dim.name, flat);
+        }
+        for (const double c : coords)
+          v.push_back(static_cast<V>(c));
+      } else if (p && !p->IsNull(r)) {
+        const std::shared_ptr<arrow::Array> src = Grid::detail::list_row(*p, r);
+        if (!main_axis) {
+          scalar.decode(src, v);
+        } else {
+          // Exactly what Transformer::Primary::Decoder::operator() and the
+          // Flattened decoder do with a row, so a plain row decodes the same
+          // here as it would in a dimension with no grid rows at all.
+          const auto start = Grid::detail::at(starts, flat);
+          if (!encoding || !start) {
+            throw InvalidFormatError("chunk " + std::to_string(flat) + " of " +
+                                     dim.name +
+                                     " lacks its chunk_encoding or chunk_start");
+          }
+          switch (*encoding) {
+          case Encoding::Type::NoCompression:
+            v.push_back(static_cast<V>(*start));
+            scalar.decode(src, v);
+            break;
+          case Encoding::Type::Delta:
+            scalar.decode(Util::Algorithm::null_delta_decode<Util::enum_type_v<V>>(
+                              static_cast<V>(*start), src),
+                          v);
+            break;
+          case Encoding::Type::NumpressLinear: {
+            const auto decoded = Util::Numpress::decode_linear_convert<V>(src);
+            v.insert(v.end(), decoded->begin(), decoded->end());
+            break;
+          }
+          case Encoding::Type::Grid:
+            std::unreachable(); // routed above
+          }
+        }
+      }
+
+      // The structural checks Primary::Decoder makes on every chunk, applied
+      // here to grid and plain rows alike: start <= end, and chunks ascending
+      // and non-overlapping.  A one-point chunk with a zero end is the writer
+      // bug check_bounds() describes, not a bound.
+      if (main_axis) {
+        const auto s = Grid::detail::at(starts, flat);
+        auto e = Grid::detail::at(ends, flat);
+        if (v.size() - first == 1 && e && *e == 0.0 && s && *s > 0.0) e.reset();
+        if (s && e && !(*s == 0.0 && *e == 0.0)) {
+          if (!(*s <= *e)) {
+            throw InvalidFormatError("chunk_start exceeds chunk_end (" + dim.name +
+                                     ")");
+          }
+          if (previous_end && *s < *previous_end) {
+            throw InvalidFormatError("chunks overlap or are out of order (" +
+                                     dim.name + ")");
+          }
+          previous_end = e;
         }
       }
     }
-
-    Grid::Bounds b;
-    if (auto c = signals_->column(dim, Schema::BufferFormat::ChunkStart);
-        c && slice_->has_column(*c)) {
-      if (auto raw = slice_->raw(*c)) b.start = Grid::detail::flatten(*raw);
-    }
-    if (auto c = signals_->column(dim, Schema::BufferFormat::ChunkEnd);
-        c && slice_->has_column(*c)) {
-      if (auto raw = slice_->raw(*c)) b.end = Grid::detail::flatten(*raw);
-    }
-    if (!b.start.empty() || !b.end.empty()) bounds = std::move(b);
   }
-
-  std::shared_ptr<Util::Slice::Raw> raw = slice_->raw(column);
-  if (raw == nullptr) return;
-
-  Grid::decode<V>(*raw, main_axis, bounds ? &*bounds : nullptr, dim.name, v);
 }
 
 /******************************************************************************/

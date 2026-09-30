@@ -147,6 +147,19 @@ void Spectrum::decode_() const
                          std::to_string(peaks_->intensity.size()) + " intensities");
     }
 
+    // The same holds for ion mobility, and it is the parallel array most likely
+    // to come up short: a chunk whose mobility is null, or a dimension that
+    // splits its mobility between a plain column and a grid, yields fewer
+    // mobilities than peaks without anything else noticing -- every value after
+    // the gap is then paired with the wrong peak.  An ABSENT mobility array is
+    // legitimate and left alone; a present one must be parallel.
+    if (!peaks_->mobility.empty() && peaks_->mobility.size() != peaks_->mz.size()) {
+      throw ParquetError("spectrum " + std::to_string(index_) + ": decoded " +
+                         std::to_string(peaks_->mz.size()) + " m/z values but " +
+                         std::to_string(peaks_->mobility.size()) +
+                         " ion mobilities");
+    }
+
     // Cross-check against the count the file states for itself.  Which count
     // applies depends on which array this spectrum is: profile spectra declare
     // number_of_data_points and centroid spectra number_of_peaks, and one file

@@ -35,6 +35,7 @@ Four variants follow, each differing from grid.dir in exactly one respect:
 
 import hashlib
 import json
+import math
 import shutil
 import sys
 import zipfile
@@ -143,12 +144,30 @@ def legacy(cols, si):
         p[2], p[3] = p[3], p[2]
     cols["mean_inverse_reduced_ion_mobility_grid"] = pa.array(rows, field.type)
 
+    # Only ONE-POINT chunks: the writer bug read start and end from a single
+    # iterator, so only a chunk whose one value was consumed for the start lost
+    # its end.  Zeroing a longer chunk would model a different, unreal defect --
+    # an earlier version of this generator did exactly that, and so demanded a
+    # reader tolerant enough to accept a genuinely contradictory bound.
     ends = cols["mz_chunk_end"].to_pylist()
-    last = [i for i in range(len(si)) if i + 1 == len(si) or si[i + 1] != si[i]]
-    for i in last:
+    points = [len(r["indices"]) if r else 0 for r in _rows(cols["mz_grid"])]
+    single = [i for i, n in enumerate(points) if n == 1]
+    for i in single:
         ends[i] = 0.0
     cols["mz_chunk_end"] = pa.array(ends, pa.float64())
-    return f"mobility pair swapped on every row; chunk_end = 0.0 on rows {last}"
+    return f"mobility pair swapped on every row; chunk_end = 0.0 on one-point rows {single}"
+
+
+def zero_end_multi(cols, si):
+    """chunk_end = 0.0 on a chunk of SEVERAL points.  That is not the writer bug,
+    whose trace is confined to one-point chunks, so it is a genuine contradiction
+    -- start far above end -- and must be refused rather than excused."""
+    points = [len(r["indices"]) if r else 0 for r in _rows(cols["mz_grid"])]
+    row = next(i for i, n in enumerate(points) if n > 1)
+    ends = cols["mz_chunk_end"].to_pylist()
+    ends[row] = 0.0
+    cols["mz_chunk_end"] = pa.array(ends, pa.float64())
+    return f"chunk_end = 0.0 on row {row}, which has {points[row]} points"
 
 
 def bad_mobility(cols, si):
@@ -164,7 +183,133 @@ def bad_mobility(cols, si):
     return "mobility c6 *= 1000"
 
 
-def write_variant(source: Path, name: str, mutate) -> None:
+# ---------------------------------------------------------------------------
+# Mixed dimensions.  The specification tells a writer to fall back per chunk
+# when a grid model's error is too large, so a dimension may hold grid rows
+# beside plain ones.  These variants rewrite some of grid.dir's rows into plain
+# encodings carrying the SAME values, so a correct reader decodes them to what
+# grid.dir decodes to.  The values are evaluated here with the reference
+# `grid.rs` arithmetic, independently of the reader under test.
+# ---------------------------------------------------------------------------
+
+def timstof_mz(p, i):
+    """grid.rs `timstof_mz`, operation for operation (math.fma is exact)."""
+    c0, beta, c2, c3, c4, timebase, delay = p
+    tof = math.fma(i, timebase, delay)
+    s0 = (tof - c0) / beta
+    refined = s0
+    if c3 != 0.0:
+        s = s0
+        c2_2, c3_3 = c2 * 2.0, c3 * 3.0
+        for _ in range(8):
+            s2 = s * s
+            f = math.fma(s, beta, c0) + s2 * c2 + math.fma(s2 * s, c3, -tof)
+            deriv = math.fma(s, c2_2, beta) + s2 * c3_3
+            if deriv == 0.0:
+                break
+            delta = f / deriv
+            s -= delta
+            if abs(delta) < 1e-12:
+                break
+        refined = s
+    elif c2 != 0.0:
+        d = beta * beta - 4.0 * c2 * (c0 - tof)
+        refined = s0 if d < 0.0 else (c0 - tof) / (-0.5 * (beta + math.sqrt(d)))
+    return refined * refined - c4
+
+
+def timstof_mobility(p, i):
+    c6, c7, offset, slope = p
+    return 1.0 / (c6 + c7 / (offset + slope * i))
+
+
+def mixed_main(cols, si):
+    """m/z rows cycle grid / uncompressed (MS:1000576) / delta (MS:1003089).
+
+    Uncompressed stores the values after the start, which the reader prepends;
+    delta stores successive differences.  Both carry the values the grid row
+    held, so the whole dimension must decode to what grid.dir decodes to --
+    exactly for the uncompressed rows, to rounding for the delta ones."""
+    grid = _rows(cols["mz_grid"])
+    enc = cols["chunk_encoding"].to_pylist()
+    values = cols["mz_chunk_values"].to_pylist()
+    kinds = []
+    for r, g in enumerate(grid):
+        kind = ("grid", "none", "delta")[r % 3]
+        kinds.append(kind)
+        if kind == "grid" or g is None:
+            continue
+        acc, coords = 0, []
+        for d in g["indices"]:
+            acc += d
+            coords.append(timstof_mz(g["parameters"], float(acc)))
+        if kind == "none":
+            enc[r] = "MS:1000576"
+            values[r] = coords[1:]
+        else:
+            enc[r] = "MS:1003089"
+            values[r] = [b - a for a, b in zip(coords, coords[1:])]
+        grid[r] = None
+    cols["mz_grid"] = pa.array(grid, cols["mz_grid"].type)
+    cols["chunk_encoding"] = pa.array(enc, cols["chunk_encoding"].type)
+    cols["mz_chunk_values"] = pa.array(values, cols["mz_chunk_values"].type)
+    n = {k: kinds.count(k) for k in ("grid", "none", "delta")}
+    return f"m/z rows grid/uncompressed/delta = {n['grid']}/{n['none']}/{n['delta']}"
+
+
+MOBILITY = "mean_inverse_reduced_ion_mobility"
+
+
+def mixed_secondary(cols, si):
+    """Ion mobility carried as a plain `chunk_secondary` list on odd rows and as
+    a grid on even ones, both registered as the same array.  This is the shape
+    that used to lose the grid rows SILENTLY: the dimension's values entry named
+    the plain column and the grid was never consulted."""
+    grid = _rows(cols[MOBILITY + "_grid"])
+    plain = []
+    for r, g in enumerate(grid):
+        if r % 2 == 1 and g is not None:
+            plain.append([timstof_mobility(g["parameters"], float(k)) for k in g["indices"]])
+            grid[r] = None
+        else:
+            plain.append(None)
+    cols[MOBILITY + "_grid"] = pa.array(grid, cols[MOBILITY + "_grid"].type)
+    cols[MOBILITY] = pa.array(plain, pa.large_list(pa.float64()))
+    return "mobility plain on odd rows, grid on even rows"
+
+
+def add_secondary_entry(entries):
+    grid = next(e for e in entries if e["path"].endswith(MOBILITY + "_grid"))
+    plain = dict(grid, path="chunk." + MOBILITY, buffer_format="chunk_secondary",
+                 transform=None)
+    return entries + [plain]
+
+
+def no_end(cols, si):
+    """No `chunk_end` column at all, and no array-index entry for it.  Nothing
+    requires one, and a reader that indexed the end bounds by the START column's
+    length read past the end of an empty vector -- undefined behaviour, found by
+    review, never by a test."""
+    del cols["mz_chunk_end"]
+    return "mz_chunk_end column and array-index entry removed"
+
+
+def drop_end_entry(entries):
+    return [e for e in entries if not e["path"].endswith("mz_chunk_end")]
+
+
+def short_mobility(cols, si):
+    """One chunk's mobility grid is null while its m/z and intensity are not, so
+    the mobility array comes up short by that chunk's points and every mobility
+    after it is paired with the wrong peak -- silently, unless the reader checks
+    that the parallel arrays really are parallel."""
+    grid = _rows(cols[MOBILITY + "_grid"])
+    grid[1] = None
+    cols[MOBILITY + "_grid"] = pa.array(grid, cols[MOBILITY + "_grid"].type)
+    return "mobility grid null on row 1"
+
+
+def write_variant(source: Path, name: str, mutate, edit_index=None) -> None:
     out_dir = source.parent / name
     shutil.rmtree(out_dir, ignore_errors=True)
     shutil.copytree(source, out_dir)
@@ -178,7 +323,13 @@ def write_variant(source: Path, name: str, mutate) -> None:
     cols = {n: st.field(n) for n in names}
     what = mutate(cols, st.field("spectrum_index").to_pylist())
 
-    out = pa.StructArray.from_arrays([cols[n] for n in names], names=names)
+    order = [n for n in names if n in cols] + [n for n in cols if n not in names]
+    out = pa.StructArray.from_arrays([cols[n] for n in order], names=order)
+    if edit_index is not None:
+        kv = dict(kv)
+        index = json.loads(kv[b"spectrum_array_index"])
+        index["entries"] = edit_index(index["entries"])
+        kv[b"spectrum_array_index"] = json.dumps(index).encode()
     schema = pa.schema([pa.field(table.schema.names[0], out.type)]).with_metadata(kv)
     pq.write_table(pa.Table.from_arrays([out], schema=schema), peaks,
                    write_statistics=True)
@@ -238,6 +389,12 @@ def main() -> int:
     write_variant(dest, "grid_bad_end.dir", bad_end)
     write_variant(dest, "grid_legacy.dir", legacy)
     write_variant(dest, "grid_bad_mobility.dir", bad_mobility)
+    write_variant(dest, "grid_zero_end_multi.dir", zero_end_multi)
+    write_variant(dest, "grid_mixed.dir", mixed_main)
+    write_variant(dest, "grid_mixed_secondary.dir", mixed_secondary,
+                  add_secondary_entry)
+    write_variant(dest, "grid_no_end.dir", no_end, drop_end_entry)
+    write_variant(dest, "grid_short_mobility.dir", short_mobility)
     return 0
 
 

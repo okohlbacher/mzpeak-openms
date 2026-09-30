@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <algorithm>
 #include <arrow/array.h>
 #include <cmath>
 #include <cstdint>
@@ -22,46 +23,60 @@ directory of this repository.
 #include "mzpeak/schema/cv.h"
 #include "mzpeak/util/slice.h"
 
-// The model arithmetic below mirrors the reference implementation operation
-// for operation.  Clang contracts `a*b + c` into a fused multiply-add by
-// default, which would fuse where the reference does not and unfuse nothing;
-// the contract here is bit-for-bit agreement, so contraction is switched off
-// for this header and every fusion is written out explicitly as std::fma.
-#if defined(__clang__)
-#pragma clang fp contract(off)
-#endif
-
-namespace MzPeak::Data::Transformer::Grid {
-
+// clang-format off
 /**
  * Coordinate grid encoding (`MS:1003826`).
  *
- * A grid-encoded chunk stores no coordinate values.  Its `chunk_values` list
- * is null and the coordinates are integer INDICES into a model whose
+ * A grid-encoded chunk stores no coordinate values.  Its `chunk_values` list is
+ * null (or empty) and the coordinates are integer INDICES into a model whose
  * parameters ride in the same row, in a struct column
  * `<array>_grid { grid_type, parameters, indices }` that the array index
- * registers with `buffer_format = chunk_transform` and
- * `transform = MS:1003826`.  The reader evaluates the model at each index.
+ * registers with `buffer_format = chunk_transform`, `transform = MS:1003826`.
+ * The reader evaluates the model at each index.
  *
- * On the MAIN axis the index list is delta-coded -- `[first, deltas...]`, the
- * start point included -- because a sorted axis compresses far better that
- * way.  A secondary axis (ion mobility) stores its indices as they are.
+ * Grid encoding is chosen PER CHUNK.  The specification tells a writer that a
+ * model whose error exceeds its threshold "SHOULD fall back to use a different
+ * encoding", so one dimension may hold grid rows beside delta, Numpress or
+ * uncompressed ones.  On the main axis each row's `chunk_encoding` says which;
+ * on a secondary axis a row is grid when its grid struct is non-null.
  *
- * Models, with the parameter order and the arithmetic of the reference
- * (mzpeak_prototyping `grid.rs`, mzdata `io::tdf::calibration.rs`), so that
- * a bound written by one implementation equals the value decoded by the
- * other bit for bit:
+ * MAIN-axis indices are delta-coded -- `[first, deltas...]`, the start point
+ * included; a secondary axis stores them as they are.
  *
- *   MS:1003824  linear       [intercept, slope, scale=1]   (i*slope + intercept) /
- * scale MS:1003825  square root  [intercept, slope, scale=1]   (i*slope +
- * intercept)^2 / scale MS:9999002  timsTOF m/z  [C0, beta, C2, C3, C4, timebase,
- * delay] t = fma(i, timebase, delay); solve t = C0 + beta*u + C2*u^2 (+ C3*u^3); m/z
- * = u^2 - C4 MS:9999001  TIMS 1/K0    [C6, C7, offset, slope]       1 / (C6 + C7 /
- * (offset + slope*i))
+ * Models and their parameter order:
  *
- * The two `MS:9999xxx` accessions are the reference's PLACEHOLDERS for the
- * Bruker models until PSI assigns terms; they are matched literally.
+ *   MS:1003824  linear       [intercept, slope, scale=1]    (i*slope + intercept) / scale
+ *   MS:1003825  square root  [intercept, slope, scale=1]    (i*slope + intercept)^2 / scale
+ *   MS:9999002  timsTOF m/z  [C0, beta, C2, C3, C4, timebase, delay]
+ *                            t = fma(i, timebase, delay);
+ *                            solve t = C0 + beta*u + C2*u^2 (+ C3*u^3) for u;
+ *                            m/z = u^2 - C4
+ *   MS:9999001  TIMS 1/K0    [C6, C7, offset, slope]        1 / (C6 + C7/(offset + slope*i))
+ *
+ * The `MS:9999xxx` accessions are the reference's PLACEHOLDERS for the Bruker
+ * models until PSI assigns terms; they are matched literally.
+ *
+ * WHICH ARITHMETIC.  There is no single reference to agree with bit for bit:
+ * the reference grid codec (mzpeak_prototyping `grid.rs`) computes the flight
+ * time with a fused multiply-add, while mzdata 0.66.7's scalar
+ * `MzCalibrationModel2::convert_f64` multiplies and adds separately, and the
+ * two differ in the last bit on roughly a third of timsTOF coordinates.  This
+ * header follows `grid.rs`, because that is what WRITES grid-encoded archives:
+ * a chunk's recorded bounds are its evaluation, so matching it is what makes
+ * those bounds agree.  Every fusion is explicit (std::fma) and implicit
+ * contraction is switched off per function below, so the result does not
+ * depend on the compiler's default -- GCC contracts by default even in ISO
+ * mode, and would otherwise fuse multiply-adds the reference keeps separate.
  */
+// clang-format on
+
+#if defined(__clang__)
+#define MZPEAK_GRID_NO_CONTRACT _Pragma("clang fp contract(off)")
+#else
+#define MZPEAK_GRID_NO_CONTRACT
+#endif
+
+namespace MzPeak::Data::Transformer::Grid {
 
 /// The chunk encoding this whole header exists for.
 inline const Schema::CV& encoding_cv()
@@ -77,10 +92,19 @@ inline bool is_grid_encoded(const ArrayIndex::Entry& entry)
          entry.transform.has_value() && entry.transform->to_cv() == encoding_cv();
 }
 
-/// Bruker timsTOF m/z at digitizer index @p i: mzdata's
-/// `MzCalibrationModel2::convert_f64`, operation for operation.
+// GCC honours neither `STDC FP_CONTRACT` nor Clang's pragma, but it does honour
+// an optimisation pragma scoped with push/pop, and that is all this needs: the
+// model functions below, and nothing parsed after them.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize("fp-contract=off")
+#endif
+
+/// Bruker timsTOF m/z at digitizer index @p i: the reference `grid.rs`
+/// `timstof_mz`, operation for operation.
 inline double timstof_mz(const std::vector<double>& p, double i)
 {
+  MZPEAK_GRID_NO_CONTRACT
   const double c0 = p[0], beta = p[1], c2 = p[2], c3 = p[3], c4 = p[4];
   const double timebase = p[5], delay = p[6];
 
@@ -110,40 +134,36 @@ inline double timstof_mz(const std::vector<double>& p, double i)
   return refined * refined - c4;
 }
 
-/// The physically possible band for inverse reduced ion mobility on a TIMS
-/// analyser, in Vs/cm^2.  Real acquisitions sit around 0.6-1.9; this is an
-/// order-of-magnitude fence, not a tolerance, and exists only to catch a
-/// mis-read parameter pair -- reading one with its offset and slope exchanged
-/// lands near 45, which is not a 1/K0 any instrument produces.
+/// An order-of-magnitude fence around physically possible inverse reduced ion
+/// mobility on a TIMS analyser, in Vs/cm^2.  Real acquisitions sit around
+/// 0.6-1.9.  Not a tolerance: it exists to catch a mis-read parameter pair,
+/// which lands near 45.
 inline constexpr double kMobilityFloor = 0.1;
 inline constexpr double kMobilityCeiling = 10.0;
 
 /// Bruker TIMS 1/K0 at scan @p i: mzdata's `TimsCalibrationModel2::convert`.
 ///
-/// `MS:9999001` carries `[c6, c7, offset, slope]`, which is the order mzdata's
-/// `TimsCalibrationModel2::as_param` writes and the reference's `from_param`
-/// reads.  Until upstream's `eb08ba0` the reference WRITER emitted
-/// `[c6, c7, slope, offset]`, so writer and reader disagreed and the reference
-/// gets its own older files wrong too.  Archives with the exchanged pair are in
-/// circulation and nothing in them says so.
+/// `MS:9999001` carries `[c6, c7, offset, slope]` -- the order mzdata's
+/// `as_param` writes and the reference's `from_param` reads.  Until upstream's
+/// `eb08ba0` the reference WRITER emitted `[c6, c7, slope, offset]`, so writer
+/// and reader disagreed, and nothing in such an archive says which it holds.
 ///
-/// The two are told apart by the model's own algebra rather than by a threshold.
-/// `slope = (C3 - C2)/C1` is a voltage difference divided by the ramp's length
-/// in mobility scans, while `offset = C2 - slope*(C4 + C0)` is a voltage; the
-/// offset therefore exceeds the slope by about the scan count, which is in the
-/// hundreds for any ramp longer than a single scan.  Ordering the pair by
-/// magnitude reads both spellings and leaves a conforming file untouched.
-///
-/// That is still an inference, so `decode` CHECKS it: every value it produces
-/// has to land in the physical band above.  A silent 45 Vs/cm^2 is the failure
-/// this whole function exists to prevent, and it would be perverse to trade it
-/// for a silent 45 produced a different way.
+/// The pair is ordered by magnitude.  With `slope = (C3 - C2)/C1` and
+/// `offset = C2 - slope*(C4 + C0)`, a real Bruker TIMS ramp -- decreasing
+/// voltage (C2 > C3 >= 0), at least one scan (C1 >= 1), non-negative
+/// C4 + C0 -- has |slope| <= C2 <= offset, so the larger magnitude is the
+/// offset.  Those are PHYSICAL assumptions, not algebra: an increasing ramp can
+/// violate them, and no acquisition seen uses one.  Because this is an
+/// inference, every value it produces is checked against the fence above
+/// rather than trusted; a wrong reading refuses the file instead of returning
+/// plausible-looking numbers.  Equal magnitudes keep the declared order.
 inline double timstof_mobility(const std::vector<double>& p, double i)
 {
+  MZPEAK_GRID_NO_CONTRACT
   const double c6 = p[0], c7 = p[1];
-  // Larger magnitude is the offset, whichever position the writer used.
-  const double offset = std::fabs(p[2]) >= std::fabs(p[3]) ? p[2] : p[3];
-  const double slope = std::fabs(p[2]) >= std::fabs(p[3]) ? p[3] : p[2];
+  const bool declared = std::fabs(p[2]) >= std::fabs(p[3]);
+  const double offset = declared ? p[2] : p[3];
+  const double slope = declared ? p[3] : p[2];
   return 1.0 / (c6 + c7 / (offset + slope * i));
 }
 
@@ -152,6 +172,7 @@ inline double timstof_mobility(const std::vector<double>& p, double i)
 inline std::optional<double>
 value_at(std::string_view grid_type, const std::vector<double>& p, std::uint32_t idx)
 {
+  MZPEAK_GRID_NO_CONTRACT
   const double i = static_cast<double>(idx);
   const std::size_t n = p.size();
 
@@ -166,6 +187,10 @@ value_at(std::string_view grid_type, const std::vector<double>& p, std::uint32_t
   if (grid_type == "MS:9999001" && n == 4) return timstof_mobility(p, i);
   return std::nullopt;
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif
 
 namespace detail {
 
@@ -196,7 +221,7 @@ inline std::shared_ptr<arrow::Array> list_row(const arrow::Array& a, int64_t i)
 }
 
 /// Read a numeric Arrow array as doubles (parameters are float64 by
-/// specification; any float width is accepted rather than refused).
+/// specification; float32 is accepted rather than refused).
 inline bool doubles_of(const arrow::Array& a, std::vector<double>& out)
 {
   out.clear();
@@ -247,158 +272,187 @@ inline bool indices_of(const arrow::Array& a, std::vector<std::uint32_t>& out)
   }
 }
 
-/// Flatten a per-row double column across record batches; null stays null.
+/// Flatten a per-row bound column across record batches; null stays null.
 inline std::vector<std::optional<double>> flatten(const Util::Slice::Raw& raw)
 {
   std::vector<std::optional<double>> out;
   for (const auto& chunk : raw) {
-    if (chunk->type_id() != arrow::Type::DOUBLE) {
-      throw InvalidFormatError("grid chunk bound column is not float64");
-    }
-    const auto& a = static_cast<const arrow::DoubleArray&>(*chunk);
+    const auto& a = *chunk;
     for (int64_t i = 0; i < a.length(); ++i) {
-      out.push_back(a.IsNull(i) ? std::nullopt : std::optional<double>(a.Value(i)));
+      if (a.IsNull(i)) {
+        out.emplace_back();
+      } else if (a.type_id() == arrow::Type::DOUBLE) {
+        out.emplace_back(static_cast<const arrow::DoubleArray&>(a).Value(i));
+      } else if (a.type_id() == arrow::Type::FLOAT) {
+        out.emplace_back(static_cast<const arrow::FloatArray&>(a).Value(i));
+      } else {
+        throw InvalidFormatError("grid chunk bound column is not floating point");
+      }
     }
   }
   return out;
 }
 
+/// Element @p i of @p v, or nullopt when the column was absent or shorter.
+/// The bound columns are independent and either may be missing; indexing one
+/// by the other's length is how a file without `chunk_end` read out of bounds.
+inline std::optional<double> at(const std::vector<std::optional<double>>& v,
+                                std::size_t i)
+{
+  return i < v.size() ? v[i] : std::nullopt;
+}
+
 } // namespace detail
 
-/// Bounds the file records for each chunk row, used to check the decode.
-struct Bounds {
-  std::vector<std::optional<double>> start;
-  std::vector<std::optional<double>> end;
+/// One grid row, as read from a `<array>_grid` struct.
+struct Row {
+  std::string type;
+  std::vector<double> parameters;
+  std::vector<std::uint32_t> indices;
 };
 
 /**
- * Decode every row of a `<array>_grid` struct column into @p out.
+ * Read row @p r of a grid struct batch into @p out.
  *
- * @param raw          the struct column's record batches, in row order
- * @param delta_coded  true on the main axis (indices are `[first, deltas...]`)
- * @param bounds       the row's `chunk_start`/`chunk_end` when the dimension
- *                     has them; each decoded chunk's first and last value is
- *                     checked against them.  A model ported with one wrong
- *                     operation still produces plausible numbers, and the file
- *                     hands us the means to catch that on every single row --
- *                     so it is checked rather than trusted.
+ * @returns false when the row is null, i.e. the chunk has no grid data.
+ * @throws InvalidFormatError when the row is present but malformed.
  */
-template <typename V>
-void decode(const Util::Slice::Raw& raw,
-            bool delta_coded,
-            const Bounds* bounds,
-            std::string_view dim_name,
-            std::vector<V>& out)
+inline bool
+read_row(const arrow::StructArray& rows, int64_t r, std::string_view dim, Row& out)
 {
-  // Relative slack for the bound check: the model is evaluated with the same
-  // operations as the writer, so agreement is normally exact; a few ulp of
-  // headroom keeps a platform without hardware fma from being refused.
-  constexpr double kRelativeTolerance = 1e-9;
+  if (rows.IsNull(r)) return false;
 
-  std::vector<double> parameters;
-  std::vector<std::uint32_t> indices;
-  std::size_t flat = 0;
+  auto grid_type = rows.GetFieldByName("grid_type");
+  auto params = rows.GetFieldByName("parameters");
+  auto idx = rows.GetFieldByName("indices");
+  if (!grid_type || !params || !idx) {
+    throw InvalidFormatError("grid column of " + std::string(dim) +
+                             " lacks grid_type, parameters or indices");
+  }
 
-  for (const auto& chunk : raw) {
-    if (chunk->type_id() != arrow::Type::STRUCT) {
-      throw InvalidFormatError("grid column of " + std::string(dim_name) +
-                               " is not a struct");
+  const std::optional<std::string> type = detail::string_at(*grid_type, r);
+  const std::shared_ptr<arrow::Array> p_row = detail::list_row(*params, r);
+  const std::shared_ptr<arrow::Array> i_row = detail::list_row(*idx, r);
+  if (!type || !p_row || !i_row || !detail::doubles_of(*p_row, out.parameters) ||
+      !detail::indices_of(*i_row, out.indices)) {
+    throw InvalidFormatError("malformed grid row in " + std::string(dim));
+  }
+  out.type = *type;
+  return true;
+}
+
+/**
+ * Evaluate a grid row, appending one coordinate per index to @p out.
+ *
+ * On return `row.indices` holds ABSOLUTE indices (the delta-coded main axis is
+ * accumulated in place), which is what `step_at` needs.
+ *
+ * @throws InvalidFormatError for a model this reader does not know, for any
+ *         non-finite coordinate, and for a `MS:9999001` mobility outside the
+ *         physical fence.  A NaN would otherwise sail through every later
+ *         check, since every comparison with it is false.
+ */
+inline void
+evaluate(Row& row, bool delta_coded, std::string_view dim, std::vector<double>& out)
+{
+  if (delta_coded) {
+    std::uint32_t acc = 0;
+    for (auto& v : row.indices) {
+      acc += v; // unsigned wrap-around, as the reference accumulates
+      v = acc;
     }
-    const auto& rows = static_cast<const arrow::StructArray&>(*chunk);
-    auto grid_type = rows.GetFieldByName("grid_type");
-    auto params = rows.GetFieldByName("parameters");
-    auto idx = rows.GetFieldByName("indices");
-    if (!grid_type || !params || !idx) {
-      throw InvalidFormatError("grid column of " + std::string(dim_name) +
-                               " lacks grid_type, parameters or indices");
+  }
+
+  const bool mobility = (row.type == "MS:9999001");
+  for (const std::uint32_t k : row.indices) {
+    const std::optional<double> value = value_at(row.type, row.parameters, k);
+    if (!value) {
+      throw InvalidFormatError("unknown grid model " + row.type + " with " +
+                               std::to_string(row.parameters.size()) +
+                               " parameters in " + std::string(dim));
     }
-
-    for (int64_t r = 0; r < rows.length(); ++r, ++flat) {
-      if (rows.IsNull(r)) continue; // no data for this chunk
-
-      const std::optional<std::string> type = detail::string_at(*grid_type, r);
-      const std::shared_ptr<arrow::Array> p_row = detail::list_row(*params, r);
-      const std::shared_ptr<arrow::Array> i_row = detail::list_row(*idx, r);
-      if (!type || !p_row || !i_row || !detail::doubles_of(*p_row, parameters) ||
-          !detail::indices_of(*i_row, indices)) {
-        throw InvalidFormatError("malformed grid row in " + std::string(dim_name));
-      }
-      if (indices.empty()) continue;
-
-      if (delta_coded) {
-        std::uint32_t acc = 0;
-        for (auto& v : indices) {
-          acc += v; // wrapping, as the reference does
-          v = acc;
-        }
-      }
-
-      const std::size_t first = out.size();
-      // The mobility model's parameter pair is disambiguated by magnitude (see
-      // timstof_mobility), which is an inference; every value it yields is
-      // therefore checked against the physical band rather than trusted.
-      const bool check_range = (*type == "MS:9999001");
-      for (const std::uint32_t k : indices) {
-        const std::optional<double> value = value_at(*type, parameters, k);
-        if (!value) {
-          throw InvalidFormatError("unknown grid model " + *type + " with " +
-                                   std::to_string(parameters.size()) +
-                                   " parameters in " + std::string(dim_name));
-        }
-        if (check_range &&
-            (!(*value > kMobilityFloor) || !(*value < kMobilityCeiling))) {
-          throw InvalidFormatError(
-              "grid decode of " + std::string(dim_name) + " gives " +
-              std::to_string(*value) + " Vs/cm^2 at scan " + std::to_string(k) +
-              ", outside the physically possible range for inverse reduced ion "
-              "mobility; the model's parameters cannot be read as written");
-        }
-        out.push_back(static_cast<V>(*value));
-      }
-
-      if (bounds == nullptr || flat >= bounds->start.size()) continue;
-      const auto check = [&](const std::optional<double>& expected, double got,
-                             const char* which) {
-        if (!expected) return;
-        const double scale = std::max(std::fabs(*expected), 1.0);
-        if (std::fabs(got - *expected) > kRelativeTolerance * scale) {
-          throw InvalidFormatError(
-              "grid decode of " + std::string(dim_name) + " disagrees with " +
-              which + " on chunk " + std::to_string(flat) + ": model gives " +
-              std::to_string(got) + ", file records " + std::to_string(*expected));
-        }
-      };
-      const std::optional<double>& recorded_start = bounds->start[flat];
-      std::optional<double> recorded_end = bounds->end[flat];
-
-      // A recorded `chunk_end` of exactly zero that lies BELOW the recorded
-      // start is not a bound this file is asserting -- it is the trace of a
-      // writer bug, and treating it as one refuses an archive whose data is
-      // perfectly good.
-      //
-      // The reference writer read a chunk's start and end from a SINGLE
-      // iterator, so on a chunk holding one value `next()` consumed it for the
-      // start and the end fell through to 0.0.  Its own vendored copy carries
-      // the fix and the explanation (`chunk_series.rs`, "Read start and end
-      // from two INDEPENDENT iterators so a single-point chunk gives
-      // end == start").  Archives written before it are in circulation: in the
-      // diaPASEF conversion this was found on, EXACTLY the two single-point
-      // chunks of 295 carry a zero end, and no other row does.
-      //
-      // The condition is deliberately narrow.  It needs the value to be zero
-      // AND below the start, which is already malformed -- the specification
-      // requires start <= end -- so it cannot swallow a genuine disagreement,
-      // and a legitimately zero-valued chunk on an axis that reaches zero has
-      // a zero start too and is therefore untouched.
-      if (recorded_end.has_value() && *recorded_end == 0.0 &&
-          recorded_start.has_value() && *recorded_start > 0.0) {
-        recorded_end.reset();
-      }
-
-      check(recorded_start, static_cast<double>(out[first]), "chunk_start");
-      check(recorded_end, static_cast<double>(out.back()), "chunk_end");
+    if (!std::isfinite(*value)) {
+      throw InvalidFormatError("grid model " + row.type + " gives a non-finite " +
+                               "value at index " + std::to_string(k) + " in " +
+                               std::string(dim));
     }
+    if (mobility && !(*value > kMobilityFloor && *value < kMobilityCeiling)) {
+      throw InvalidFormatError(
+          "grid decode of " + std::string(dim) + " gives " + std::to_string(*value) +
+          " Vs/cm^2 at scan " + std::to_string(k) +
+          ", outside the physically possible range for inverse reduced ion "
+          "mobility; the model's parameters cannot be read as written");
+    }
+    out.push_back(*value);
   }
 }
 
+/// The distance from grid index @p idx to the next grid point: the resolution
+/// the model can express there.  Zero when it cannot be computed.
+inline double step_at(const Row& row, std::uint32_t idx)
+{
+  const auto here = value_at(row.type, row.parameters, idx);
+  const auto next = value_at(row.type, row.parameters, idx + 1);
+  if (!here || !next) return 0.0;
+  const double step = std::fabs(*next - *here);
+  return std::isfinite(step) ? step : 0.0;
+}
+
+/**
+ * Check a grid row's first and last coordinate against the bounds its chunk
+ * recorded.
+ *
+ * The bounds are an oracle for free -- a writer that records its own
+ * evaluation hands the reader a second opinion on every row, and a model
+ * transcribed with one wrong operation still produces entirely plausible
+ * numbers.  But the specification does not say bounds ARE evaluations: grid
+ * encoding is "likely to be a lossy transformation" and a writer may record
+ * the original coordinate instead.  Snapping to the nearest grid point moves a
+ * coordinate by at most half a step, so the tolerance is one grid step at that
+ * index.  That admits every correctly snapped lossy grid and still refuses the
+ * errors this is for, which are many steps wide.  Exactness is tested, not
+ * enforced at read time: see test/grid_encoding_test.cpp.
+ *
+ * A recorded `chunk_end` of exactly 0.0 below a positive start, on a chunk of
+ * ONE point, is treated as unrecorded.  The reference writer read a chunk's
+ * start and end from a single iterator, so a one-value chunk had its value
+ * consumed for the start and its end fell through to 0.0; its own
+ * `chunk_series.rs` documents the fix.  In the conversion this was found on,
+ * the two single-point chunks of 295 are exactly the two with a zero end.
+ * The condition is kept to that shape: a multi-point chunk with a zero end is
+ * a contradiction and is refused.
+ */
+inline void check_bounds(double first,
+                         double last,
+                         std::size_t points,
+                         std::optional<double> start,
+                         std::optional<double> end,
+                         double step_first,
+                         double step_last,
+                         std::string_view dim,
+                         std::size_t chunk)
+{
+  constexpr double kRelativeFloor = 1e-9;
+
+  if (points == 1 && end && *end == 0.0 && start && *start > 0.0) end.reset();
+
+  const auto check = [&](const std::optional<double>& expected, double got,
+                         double step, const char* which) {
+    if (!expected) return;
+    const double tolerance =
+        std::max(kRelativeFloor * std::max(std::fabs(*expected), 1.0), step);
+    // Written so a NaN on either side FAILS the check rather than passing it.
+    if (!(std::fabs(got - *expected) <= tolerance)) {
+      throw InvalidFormatError(
+          "grid decode of " + std::string(dim) + " disagrees with " + which +
+          " on chunk " + std::to_string(chunk) + ": model gives " +
+          std::to_string(got) + ", file records " + std::to_string(*expected));
+    }
+  };
+  check(start, first, step_first, "chunk_start");
+  check(end, last, step_last, "chunk_end");
+}
+
 } // namespace MzPeak::Data::Transformer::Grid
+
+#undef MZPEAK_GRID_NO_CONTRACT
