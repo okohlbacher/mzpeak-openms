@@ -38,6 +38,13 @@ public:
     ///
     /// Compression using MS-Numpress linear prediction compression.
     NumpressLinear,
+
+    /// MS:1003826
+    ///
+    /// Coordinate grid encoding: the chunk stores integer indices into a
+    /// parametric model carried in a sibling `<array>_grid` struct column,
+    /// and no coordinate values at all.  Decoded by Transformer::Grid.
+    Grid,
   };
 
   // Internal storage type.

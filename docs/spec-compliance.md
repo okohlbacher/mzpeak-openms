@@ -4,9 +4,11 @@ Audited against `HUPO-PSI/mzPeak-specification` at `85442bd`
 (`docs/conformance.md`), as both a conformant reader and a conformant writer.
 Re-checked against `d0c16b3` (2026-09-11), which formalised `term_marker`,
 raised column statistics from optional to required, and moved the example
-`scan_start_time` from float32 to double; and again against `e5e9021`
+`scan_start_time` from float32 to double; again against `e5e9021`
 (2026-09-22), which made a SHA-512 checksum per indexed file a MUST and
-extended the page-index requirement to cover row group statistics.  The deltas
+extended the page-index requirement to cover row group statistics; and again
+against `840ba4a` (2026-09-29), which specified grid encoding, added the
+optional Imaging profile, and tightened what a `cv_list` URI must point at.  The deltas
 are folded into the rows below and into *Known deviations*.
 Two independent passes: this implementation's own, and an adversarial audit by
 an external model. Findings the audit raised are cited where they changed the
@@ -59,7 +61,7 @@ fixtures:
 |---|---|---|
 | W1 produce a conformant archive | **PARTIAL** | subject to the S-invariants below; a NaN coordinate is now rejected rather than written non-ascending; caller-supplied unit CURIEs are not checked for CV ancestry (S8). |
 | W2 page index AND column statistics for index/coordinate columns | **OK** | `enable_write_page_index()` and `enable_statistics()` sit together in the single choke point for every Parquet file written (`parquet_writer.cpp`). `d0c16b3` raised statistics from "when present" to a writer MUST; this already satisfied it. |
-| W3 declare every CV used, version-pinned | **FIXED** | `cv_list` was hardcoded MS+UO regardless of content. It is now derived from every CURIE prefix reachable in the finished index; MS and UO are always present (the array index and column mappings use them); each prefix is pinned from a registry of the vocabularies a mass-spec archive plausibly cites. An unpinnable prefix is still declared with a visible placeholder and a warning, never silently omitted. |
+| W3 declare every CV used, with a URI identifying a fixed release | **PARTIAL** — see *Known deviations* | `cv_list` was hardcoded MS+UO regardless of content. It is now derived from every CURIE prefix reachable in the finished index; MS and UO are always present (the array index and column mappings use them); each prefix is pinned from a registry of the vocabularies a mass-spec archive plausibly cites. An unpinnable prefix is still declared with a visible placeholder and a warning, never silently omitted. |
 | W4 array index sufficient to reconstruct without names | **OK** (scope-limited) | full `path`/`data_type`/`array_type`/`unit`/`buffer_format`/`sorting_rank` per entry, in the spec-mandated Parquet KV location. Sufficiency holds for the writer's feature set: transforms, mobility and auxiliary arrays are not yet emitted. |
 
 ## Archive
@@ -160,12 +162,40 @@ reference corpus or a well-formed archive from the reference writer.
   "MUST be encrypted using a proprietary secret key". So there is nothing to
   implement against and no member for a reader to encounter; recorded here only
   so the mechanism's location is known when it is formalised.
-- **Grid encoding is refused, not read** — the prototype added a `grid` buffer
-  encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
-  maps anything it does not know to `Layout::Unknown`, and the decoder raises
-  `UnknownLayoutError` rather than guessing, so such an archive is refused
-  cleanly instead of being misread. Supporting it is unstarted work, not a
-  latent corruption.
+- **`cv_list` URIs do not identify a fixed release.** `840ba4a` changed W3 from
+  "version-pinned" to requiring a `uri` that "identifies a fixed release or
+  snapshot and the matching `version`". This writer emits the *latest* artifact
+  URI (`http://purl.obolibrary.org/obo/uo.owl`) beside a pinned `version`, so
+  the two drift apart as the ontology is re-released: the version says 2023 while
+  the URI resolves to whatever is current. The reference emits
+  `http://purl.obolibrary.org/obo/ms/4.1.249/psi-ms.obo` and
+  `http://purl.obolibrary.org/obo/uo/releases/2026-01-16/uo.obo`. Note the two
+  patterns DIFFER -- `<id>/<version>/<file>` versus `<id>/releases/<date>/<file>`
+  -- so this cannot be fixed by deriving one URL template; each vocabulary's
+  release layout has to be recorded, and a guessed URL that 404s is worse than
+  today's honest-but-unpinned one.
+- **Grid encoding (`MS:1003826`) — IMPLEMENTED.** A chunk encoding, not a
+  layout: `chunk_values` is null and the coordinates are integer indices into a
+  model carried in a sibling `<array>_grid` struct column. All four models are
+  decoded -- `MS:1003824` linear, `MS:1003825` square root, and the two Bruker
+  models the reference carries under the placeholder accessions `MS:9999002`
+  (timsTOF m/z) and `MS:9999001` (TIMS mobility) until PSI assigns terms. The
+  main axis's indices are delta-coded and a secondary axis's are not; both
+  directions are pinned, because getting it backwards yields a plausible
+  ascending array that is wrong from the second point on. Every row's decode is
+  checked against the `chunk_start`/`chunk_end` the writer recorded, which is
+  the writer's own evaluation of the same model, so a model transcribed with one
+  wrong operation is caught rather than trusted. Validated against a real Bruker
+  diaPASEF conversion with `C2 != 0` and `C4 != 0`: m/z is bit-identical to the
+  reference's explicitly-stored values on all 205,921 points of the MS1 frame.
+  Unimplemented still: WRITING grid-encoded archives, and the materialised grid
+  form the specification also allows.
+- **Imaging profile — ignored, as a Core reader must.** `840ba4a` added it,
+  declared by `metadata.imaging.is_imaging`. Conformance requires a Core reader
+  to read Core content and ignore profile content it does not implement.
+  Verified rather than assumed: declaring the profile on a fixture, with a
+  `grid_geometry` block beside it, changes nothing about what this reader
+  returns.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled

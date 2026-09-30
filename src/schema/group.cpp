@@ -195,6 +195,17 @@ void Group::make_fields(const parquet::schema::GroupNode& node,
         if (field->name() == "parameters") {
           field->kind_ = Group::Field::Kind::Params;
         }
+      } else if (grp->field_count() > 1) {
+        // A group with several children is a STRUCT.  Only the single-child
+        // shape -- Parquet's LIST wrapper -- was registered before, so a struct
+        // column was skipped silently and any array index entry naming it
+        // failed to resolve at all.  The grid encoding's `<array>_grid` is such
+        // a column; it is handed to the caller whole, as the struct it is,
+        // because its three children are only meaningful together.
+        std::shared_ptr<Field> field =
+            std::make_shared<Field>(grp->name(), i, offset + i);
+        link(field);
+        field->kind_ = Group::Field::Kind::Struct;
       }
     }
   }
