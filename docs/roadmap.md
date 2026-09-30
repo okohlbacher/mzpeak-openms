@@ -100,12 +100,23 @@ pyarrow BEFORE this reader was pointed at it.
 
 ## Backlog
 
-- **Grid encoding is not supported.** The prototype added a `grid` buffer
-  encoding (`e62e18c`) beside `point` and `chunk`. `group_name_to_layout` maps
-  it to `Layout::Unknown` and the decoder raises `UnknownLayoutError`, so such
-  an archive is refused cleanly rather than misread -- unstarted work, not a
-  latent defect. Worth starting only against an archive that actually uses it;
-  implementing from the prose alone would be guessing.
+- **Grid encoding is not supported.** Now specified (`840ba4a`) rather than
+  prototype-only, and specified differently from what was assumed here: it is a
+  CHUNK ENCODING (`MS:1003826`) signalled by the `chunk_encoding` column, not a
+  layout named in the array index. A grid-encoded chunk carries an EMPTY
+  `chunk_values` list with the data in a sibling `<array>_grid` group holding a
+  `grid_type` CURIE, a parameter list and delta-encoded integer `indices`. This
+  reader refuses it (verified against a synthesised archive of exactly that
+  shape), so the risk is a refusal rather than silent loss. Two open model
+  types, `MS:1003824` linear and `MS:1003825` square-root; the latter is the one
+  that matters for TOF. Implementing it needs an archive that actually uses one
+  -- the reference converter has the flags (`-q`, `-G`) but did not emit grid
+  encoding when asked here, and that checkout currently has uncommitted changes
+  to `src/grid.rs`, so its behaviour today is not evidence of anything.
+- **`cv_list` URIs must identify a fixed release.** W3 tightened in `840ba4a`;
+  see `docs/spec-compliance.md`. The blocker is that each vocabulary publishes
+  its snapshots under a different path shape, so the fix is a small registry of
+  release-URI patterns, not a format string.
 - **clang-format version skew makes the repository-wide style rule unsafe to
   apply.** Under clang-format 22.1.8, 48 of 151 tracked C++ files disagree with
   the repository's own `.clang-format`, so running `clang-format -i` on a file
