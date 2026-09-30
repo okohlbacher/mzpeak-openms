@@ -165,18 +165,25 @@ std::shared_ptr<KeyRuns> scan_key_runs(parquet::arrow::FileReader& reader, int32
   // page may end its indices in a bit-packed group zero-padded to eight, and
   // the padding reads back as the dictionary's first value: `rows` values
   // from a chunk with a null.  So the footer's null count decides when the
-  // footer has one, as it does for sizing (run_key_leaf()): above zero keeps
-  // the column, and zero is believed -- a footer that says zero and holds a
-  // null is trusted here as it is there.  Without a count, the definition
-  // levels are read with the values, and a row without a value keeps the
-  // column.  Decoding the levels was a third of the scan, so only a footer
-  // without a count pays for it.
+  // footer gives one Arrow accepts, as it does for sizing (run_key_leaf()):
+  // above zero keeps the column, and zero is believed -- a footer that says
+  // zero and holds a null is trusted here as it is there.  Without one (no
+  // statistics, statistics is_stats_set() rejects or that do not decode, or
+  // no null count in them), the definition levels are read with the values,
+  // and a row without a value keeps the column.  Decoding the levels was a
+  // third of the scan, so only a footer without a count pays for it.
   constexpr int64_t kChunk = 64 * 1024;
   std::vector<int16_t> levels;
   if (descriptor->max_definition_level() > 0) {
-    const auto chunk = row_group->ColumnChunk(*leaf);
     std::shared_ptr<parquet::Statistics> stats;
-    if (chunk && chunk->is_stats_set()) stats = chunk->statistics();
+    try {
+      const auto chunk = row_group->ColumnChunk(*leaf);
+      if (chunk && chunk->is_stats_set()) stats = chunk->statistics();
+    } catch (const std::exception&) {
+      // Statistics that do not decode (a min or max cut short) give no count,
+      // and the levels decide.  Keeping the column instead would not spare
+      // the group: Arrow's full decode of the key decodes them too, and fails.
+    }
     if (stats && stats->HasNullCount()) {
       if (stats->null_count() != 0) return nullptr;
     } else {
