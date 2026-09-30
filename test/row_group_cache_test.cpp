@@ -11,6 +11,9 @@ directory of this repository.
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -189,6 +192,64 @@ std::thread slow_first_decode(RowGroupCache& cache, std::size_t bytes,
   while (!started) std::this_thread::yield();
   return first;
 }
+
+/// One collision, held open by a gate rather than a sleep: group 0 of "f" is
+/// in flight on one thread while a second reader asks for it with @p ahead,
+/// and is let go only once that reader has done whatever it does meanwhile
+/// and waits for it (stats().waits), or has returned.  Returns what the
+/// second reader's get() returned, and rethrows what it threw.
+RowGroupCache::Batches collide(RowGroupCache& cache, std::size_t bytes,
+                               const RowGroupCache::Ahead& ahead)
+{
+  std::mutex mutex;
+  std::condition_variable gate;
+  bool started = false;
+  bool open = false;
+  std::thread first([&] {
+    cache.get("f", 0, bytes, [&] {
+      std::unique_lock<std::mutex> lock(mutex);
+      started = true;
+      gate.notify_all();
+      gate.wait(lock, [&] { return open; });
+      return empty_group();
+    });
+  });
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    gate.wait(lock, [&] { return started; });
+  }
+
+  const std::size_t waits = cache.stats().waits;
+  RowGroupCache::Batches got;
+  std::exception_ptr error;
+  std::atomic<bool> returned{false};
+  std::thread second([&] {
+    try {
+      got = cache.get("f", 0, bytes,
+                      []() -> RowGroupCache::Batches { throw std::logic_error("decoded twice"); },
+                      &ahead);
+    } catch (...) {
+      error = std::current_exception();
+    }
+    returned = true;
+  });
+
+  // The deadline only keeps a regression from hanging the suite.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (cache.stats().waits == waits && !returned &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    open = true;
+  }
+  gate.notify_all();
+  second.join();
+  first.join();
+  if (error) std::rethrow_exception(error);
+  return got;
+}
 } // namespace
 
 /******************************************************************************/
@@ -264,4 +325,31 @@ BOOST_AUTO_TEST_CASE(held_groups_are_not_evicted)
     return empty_group();
   });
   BOOST_CHECK(!decoded);
+}
+
+/******************************************************************************/
+/// Groups decoded ahead age out like any other.  One collision off a reader
+/// that does not walk forward fills the budget with groups nobody asks for;
+/// kept until nothing else was left, they outlived a working set that fits
+/// the budget, and every read of it evicted the group read before it.
+BOOST_AUTO_TEST_CASE(groups_decoded_ahead_do_not_outlive_the_working_set)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(8 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(100, kGroup, calls);
+
+  collide(cache, kGroup, ahead);
+  // Group 0 in flight plus seven decoded ahead filled the budget.
+  BOOST_REQUIRE_EQUAL(calls.load(), 7);
+
+  // Four other groups, half the budget, read over and over -- with the Ahead
+  // Parquet hands every read, though one thread never collides.
+  const auto before = cache.stats();
+  for (int32_t i = 0; i < 100; ++i) cache.get("f", 50 + i % 4, kGroup, empty_group, &ahead);
+  const auto after = cache.stats();
+
+  BOOST_CHECK_EQUAL(after.decodes - before.decodes, 4u); // each once
+  BOOST_CHECK_EQUAL(after.hits - before.hits, 96u);
+  BOOST_CHECK_EQUAL(calls.load(), 7);
 }

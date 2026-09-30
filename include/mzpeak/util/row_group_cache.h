@@ -100,7 +100,8 @@ struct RowGroupBatches {
 /// A reader that finds its group IN FLIGHT does not simply wait for it when it
 /// can decode AHEAD instead: it claims the next group of the same file that
 /// nobody has claimed, decodes that, and only then comes back for its own.
-/// See get().
+/// See get().  A group decoded that way is evicted like any other, least
+/// recently used first.
 class RowGroupCache final {
 public:
   using Batches = std::shared_ptr<const RowGroupBatches>;
@@ -108,9 +109,9 @@ public:
 
   /// What a reader needs to decode groups OTHER than the one it asked for:
   /// the file's group count, and each group's budget size and decode, on the
-  /// reader's own file handle.  Handed to get() by readers that walk a file
-  /// forward; get() calls these under the cache's lock (bytes) and outside
-  /// it (decode).
+  /// reader's own file handle.  Parquet hands one to every get() it makes,
+  /// whichever way its reader moves through the file; get() calls these
+  /// under the cache's lock (bytes) and outside it (decode).
   struct Ahead {
     int32_t groups = 0;
     std::function<std::size_t(int32_t)> bytes;
@@ -192,14 +193,16 @@ private:
                             int32_t group,
                             const Ahead& ahead);
 
-  /// Bytes eviction cannot or must not reclaim: groups in flight, groups a
-  /// reader holds, and groups decoded ahead that nobody has asked for yet.
-  /// Caller holds mutex_.
+  /// Bytes a decode ahead must not count as room: groups in flight and groups
+  /// a reader holds, which eviction cannot reclaim, and groups decoded ahead
+  /// that nobody has asked for yet, which it can but which the same burst must
+  /// not push out to go on.  Caller holds mutex_.
   std::size_t resident_locked_() const;
 
   /// Evict least-recently-used READY entries, never @p keep and never one a
-  /// reader still holds, until the budget holds or nothing evictable is left;
-  /// groups decoded ahead and not yet asked for go last.  Caller holds mutex_.
+  /// reader still holds, until the budget holds or nothing evictable is left.
+  /// Groups decoded ahead are ordered by the same clock as the rest.  Caller
+  /// holds mutex_.
   void evict_locked_(const Key& keep);
 
   mutable std::mutex mutex_;
