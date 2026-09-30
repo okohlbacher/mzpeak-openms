@@ -62,8 +62,12 @@ struct RowGroupBatches;
  *     nulls last (run_key_leaf());
  *   - it is a non-repeated INT64 leaf that decodes to Arrow int64 or uint64,
  *     one or two levels deep, and not the table's only leaf;
- *   - it has no null: the read gets exactly one value per row, which a chunk
- *     only holds when no row is null (a null runs the values out first);
+ *   - it has no null: for a nullable key, the footer's null count says so,
+ *     or, when the footer has none, every row read has a definition level
+ *     that gives it a value.  Reading the values alone would not do: a
+ *     dictionary page may zero-pad its last indices to eight, and the padding
+ *     reads back as values.  A footer that counts no null and holds one is
+ *     believed, as run_key_leaf() believes it;
  *   - its values never DECREASE, in the order of that Arrow type -- which is
  *     what makes each value's rows one contiguous run, and exactly the run a
  *     binary search over the column finds.  A file that declares sorted and is
