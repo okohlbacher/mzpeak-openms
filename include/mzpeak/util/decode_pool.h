@@ -36,17 +36,21 @@ namespace MzPeak::Util {
 /// the OS, their size rounded up to a size class: four per power of two, but
 /// never finer than the 64 KB granule.  So a block is under 25% over its
 /// request from 256 KB up, under 50% for 128-256 KB and under 100% for
-/// 64-128 KB (65,537 bytes take 128 KB).  On macOS that slack costs address
-/// space, not memory: a page costs RSS once it is touched.  On Linux the same
-/// holds for small pages, but slack that shares a huge page with written bytes
-/// is resident with it (see below).  On Windows the whole block is committed
-/// when it is mapped, so its slack, like a cached block, counts against the
-/// commit limit (RAM plus page file) from the start, though its pages take RAM
-/// only once touched.  A freed block goes onto its class's free list, shared
-/// by all threads, and the next request of that class on any thread takes the
-/// most recently freed one.  Which thread frees a block, and whether the
-/// thread that mapped it still exists, does not matter.  Smaller buffers, and
-/// any alignment above 64, go to Arrow's system allocator as before.
+/// 64-128 KB (65,537 bytes take 128 KB).  A page takes memory once it is
+/// touched (on Linux, once it is written), so on macOS a fresh block's slack
+/// costs address space, not memory.  On Linux the same holds for small pages,
+/// but slack that shares a huge page with written bytes is resident with it
+/// (see below).  On Windows the whole block is committed when it is mapped,
+/// so its slack, like a cached block, counts against the commit limit (RAM
+/// plus page file) from the start, though its pages take RAM only once
+/// touched.  A freed block goes onto its class's free list, shared by all
+/// threads, and the next request of that class on any thread takes the most
+/// recently freed one.  The block keeps its pages until it is unmapped, so a
+/// smaller request of its class that reuses it carries the pages its earlier
+/// users wrote: in steady state the pool's memory is about bytes_mapped(), not
+/// the bytes requested.  Which thread frees a block, and whether the thread
+/// that mapped it still exists, does not matter.  Smaller buffers, and any
+/// alignment above 64, go to Arrow's system allocator as before.
 ///
 /// On Linux the blocks are backed by transparent huge pages: smaller ones are
 /// carved from 64 MB regions, and blocks of 2 MB and more are mapped on their
