@@ -10,6 +10,7 @@ top-level directory of this repository.
 
 #include <arrow/array.h>
 #include <arrow/builder.h>
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <ranges>
@@ -273,21 +274,30 @@ void Decoder<T>::grid(const ArrayIndex::Dimension& dim,
   // Slice::raw() is a CONSUMING read, so every column this path needs is taken
   // exactly once, here, before anything else could.
   std::optional<Grid::Bounds> bounds;
+  std::optional<Grid::Plain> plain;
   if (main_axis) {
-    // Every row of a grid-encoded dimension must say so.  A file that mixes
-    // encodings within one dimension cannot be represented by a per-dimension
-    // dispatch, and decoding its grid rows while silently dropping the others
-    // would be worse than refusing it.
+    // `chunk_encoding` is a property of the CHUNK: a grid-encoded column may
+    // still hold rows that are not grid encoded, with a null grid struct and
+    // their coordinates in `chunk_values`.  When any row says so, that column
+    // is taken too and the plain rows are reconstructed from it.
     if (auto enc = signals_->column(dim, Schema::BufferFormat::ChunkEncoding);
         enc && slice_->has_column(*enc)) {
       std::vector<std::string> encodings;
       slice_->array(*enc, encodings, Util::Decoders::Scalar<std::string>());
-      for (const auto& e : encodings) {
+
+      const bool mixed = std::ranges::any_of(encodings, [](const std::string& e) {
         auto cv = Schema::CV::from_string(e);
-        if (!cv || !(*cv == Grid::encoding_cv())) {
-          throw InvalidFormatError("dimension " + dim.name +
-                                   " is grid encoded but a chunk declares " + e);
+        return !cv || !(*cv == Grid::encoding_cv());
+      });
+
+      if (mixed) {
+        Grid::Plain p;
+        p.encoding = std::move(encodings);
+        if (auto c = signals_->column(dim, Schema::BufferFormat::ChunkValues);
+            c && slice_->has_column(*c)) {
+          if (auto raw = slice_->raw(*c)) p.values = Grid::detail::list_rows(*raw);
         }
+        plain = std::move(p);
       }
     }
 
@@ -306,7 +316,8 @@ void Decoder<T>::grid(const ArrayIndex::Dimension& dim,
   std::shared_ptr<Util::Slice::Raw> raw = slice_->raw(column);
   if (raw == nullptr) return;
 
-  Grid::decode<V>(*raw, main_axis, bounds ? &*bounds : nullptr, dim.name, v);
+  Grid::decode<V>(*raw, main_axis, bounds ? &*bounds : nullptr, dim.name, v,
+                  plain ? &*plain : nullptr);
 }
 
 /******************************************************************************/

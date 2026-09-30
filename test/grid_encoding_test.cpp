@@ -45,6 +45,7 @@ directory of this repository.
 namespace {
 
 const char* kFixture = "../test/files/grid.dir";
+const char* kMixed = "../test/files/mixed_grid.dir";
 
 MzPeak::Spectra peaks_of(const MzPeak::Index& index)
 {
@@ -330,6 +331,46 @@ BOOST_AUTO_TEST_CASE(a_one_point_chunk_keeps_its_unset_end_bound)
   BOOST_CHECK_THROW(
       Grid::decode<double>(pair, true, &zero_end, "mz_chunk_start", out),
       MzPeak::InvalidFormatError);
+}
+
+BOOST_AUTO_TEST_CASE(a_column_mixing_grid_and_plain_chunks_reads_whole)
+{
+  // `chunk_encoding` is a property of the CHUNK: one m/z column may hold both,
+  // a row whose grid struct is null declaring MS:1000576 and carrying its
+  // coordinates in `chunk_values` with the first in `chunk_start`.
+  //
+  // The failure this guards is quiet.  The null struct rows are exactly the
+  // plainly encoded chunks, so a decoder that visits only the non-null ones
+  // returns a SHORTER array rather than a visibly wrong one, and every peak
+  // past the first plain chunk is paired with another peak's intensity.
+  // Length is therefore checked first and separately.
+  //
+  // `mixed_grid.dir` is `grid.dir` with every other m/z chunk written out, so
+  // the two must decode to the same values; mobility stays gridded in both,
+  // which also covers a gridded secondary axis beside a plain main axis.
+  auto mixed = peaks_of(MzPeak::open(kMixed));
+  auto whole = peaks_of(MzPeak::open(kFixture));
+  BOOST_REQUIRE_EQUAL(mixed.size(), whole.size());
+  BOOST_REQUIRE_EQUAL(mixed.size(), 2u);
+
+  for (std::size_t i = 0; i < mixed.size(); ++i) {
+    const auto g = mixed[i];
+    const auto w = whole[i];
+
+    BOOST_TEST_CONTEXT("spectrum " << i)
+    {
+      BOOST_REQUIRE_EQUAL(g.mz().size(), w.mz().size());
+      BOOST_REQUIRE_EQUAL(g.intensity().size(), w.intensity().size());
+      BOOST_REQUIRE_EQUAL(g.ion_mobility_array().size(),
+                          w.ion_mobility_array().size());
+      BOOST_REQUIRE_GT(g.mz().size(), 0u);
+
+      BOOST_TEST(g.mz() == w.mz(), boost::test_tools::per_element());
+      BOOST_TEST(g.intensity() == w.intensity(), boost::test_tools::per_element());
+      BOOST_TEST(g.ion_mobility_array() == w.ion_mobility_array(),
+                 boost::test_tools::per_element());
+    }
+  }
 }
 
 BOOST_AUTO_TEST_CASE(the_fixture_verifies_its_own_checksums)

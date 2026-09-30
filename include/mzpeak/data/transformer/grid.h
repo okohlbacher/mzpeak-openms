@@ -241,6 +241,19 @@ inline bool indices_of(const arrow::Array& a, std::vector<std::uint32_t>& out)
   }
 }
 
+/// Flatten a per-row LIST column across record batches into one value slice
+/// per row; a null row stays null.
+inline std::vector<std::shared_ptr<arrow::Array>> list_rows(const Util::Slice::Raw& raw)
+{
+  std::vector<std::shared_ptr<arrow::Array>> out;
+  for (const auto& chunk : raw) {
+    for (int64_t i = 0; i < chunk->length(); ++i) {
+      out.push_back(list_row(*chunk, i));
+    }
+  }
+  return out;
+}
+
 /// Flatten a per-row double column across record batches; null stays null.
 inline std::vector<std::optional<double>> flatten(const Util::Slice::Raw& raw)
 {
@@ -266,6 +279,27 @@ struct Bounds {
 };
 
 /**
+ * The plainly encoded chunks of a dimension that is otherwise grid encoded.
+ *
+ * `chunk_encoding` is a property of the CHUNK, not of the column, so one m/z
+ * column may hold both: a row whose `<array>_grid` struct is null declares
+ * MS:1000576 instead and carries its coordinates the ordinary way, in
+ * `chunk_values` with the first of them in `chunk_start`.  Row groups of that
+ * shape are common in the SCIEX SWATH corpus.
+ *
+ * Nothing but the row order pairs peaks with their intensities, so dropping
+ * those rows would not produce a visibly wrong array -- it would produce a
+ * SHORTER one, and mis-pair every peak after the first plain chunk.  They are
+ * decoded, or the file is refused; never skipped.
+ */
+struct Plain {
+  /// The `chunk_encoding` CURIE of each flat row.
+  std::vector<std::string> encoding;
+  /// Each flat row's `chunk_values` list, or null where the row has none.
+  std::vector<std::shared_ptr<arrow::Array>> values;
+};
+
+/**
  * Decode every row of a `<array>_grid` struct column into @p out.
  *
  * @param raw          the struct column's record batches, in row order
@@ -282,7 +316,8 @@ void decode(const Util::Slice::Raw& raw,
             bool delta_coded,
             const Bounds* bounds,
             std::string_view dim_name,
-            std::vector<V>& out)
+            std::vector<V>& out,
+            const Plain* plain = nullptr)
 {
   // Relative slack for the bound check: the model is evaluated with the same
   // operations as the writer, so agreement is normally exact; a few ulp of
@@ -308,7 +343,42 @@ void decode(const Util::Slice::Raw& raw,
     }
 
     for (int64_t r = 0; r < rows.length(); ++r, ++flat) {
-      if (rows.IsNull(r)) continue; // no data for this chunk
+      if (rows.IsNull(r)) {
+        // Not "no data": a null grid struct is how a plainly encoded chunk
+        // appears in a grid-encoded column.  Decode it from `chunk_values`,
+        // seeded with the `chunk_start` this row records, or say what the
+        // file holds -- skipping it would silently shorten the array and
+        // mis-pair every later peak with another peak's intensity.
+        const std::optional<double> start =
+            bounds != nullptr && flat < bounds->start.size() ? bounds->start[flat]
+                                                             : std::nullopt;
+        const std::string encoding =
+            plain != nullptr && flat < plain->encoding.size()
+                ? plain->encoding[flat]
+                : std::string();
+        const std::shared_ptr<arrow::Array> values =
+            plain != nullptr && flat < plain->values.size() ? plain->values[flat]
+                                                            : nullptr;
+
+        if (!start || values == nullptr || encoding != "MS:1000576") {
+          throw InvalidFormatError(
+              "chunk " + std::to_string(flat) + " of " + std::string(dim_name) +
+              " carries no grid" +
+              (encoding.empty() ? std::string()
+                                : " and declares " + encoding) +
+              ", which this reader cannot reconstruct");
+        }
+
+        out.push_back(static_cast<V>(*start));
+        std::vector<double> plain_values;
+        if (!detail::doubles_of(*values, plain_values)) {
+          throw InvalidFormatError("chunk_values of " + std::string(dim_name) +
+                                   " on chunk " + std::to_string(flat) +
+                                   " is not a float array");
+        }
+        for (const double value : plain_values) out.push_back(static_cast<V>(value));
+        continue;
+      }
 
       const std::optional<std::string> type = detail::string_at(*grid_type, r);
       const std::shared_ptr<arrow::Array> p_row = detail::list_row(*params, r);
