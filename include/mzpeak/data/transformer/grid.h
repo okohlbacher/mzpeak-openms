@@ -338,7 +338,15 @@ void decode(const Util::Slice::Raw& raw,
         out.push_back(static_cast<V>(*value));
       }
 
-      if (bounds == nullptr || flat >= bounds->start.size()) continue;
+      if (bounds == nullptr) continue;
+
+      // A dimension may record one bound column and not the other, so neither
+      // vector is assumed to reach this row.
+      const auto at = [](const std::vector<std::optional<double>>& v,
+                         std::size_t i) -> std::optional<double> {
+        return i < v.size() ? v[i] : std::nullopt;
+      };
+
       const auto check = [&](const std::optional<double>& expected, double got,
                              const char* which) {
         if (!expected) return;
@@ -350,8 +358,32 @@ void decode(const Util::Slice::Raw& raw,
               std::to_string(got) + ", file records " + std::to_string(*expected));
         }
       };
-      check(bounds->start[flat], static_cast<double>(out[first]), "chunk_start");
-      check(bounds->end[flat], static_cast<double>(out.back()), "chunk_end");
+
+      const std::optional<double> recorded_start = at(bounds->start, flat);
+      const std::optional<double> recorded_end = at(bounds->end, flat);
+
+      // A chunk that reduces to ONE point carries no usable end bound from the
+      // reference writer: it read `chunk_start` and `chunk_end` from a single
+      // iterator -- `next()`, then `next_back()` on what REMAINED -- so for a
+      // one-point chunk the second call found nothing and the end fell through
+      // to its 0.0 default (upstream mzpeak_prototyping's
+      // `ChunkingStrategy::encode_arrow`, since repaired by reading the two
+      // ends from independent iterators).  The reference's own diaPASEF
+      // conversion has two such chunks, both with `chunk_start` near 1700 Th.
+      //
+      // 0.0 below a positive start cannot be the last coordinate of a chunk
+      // whose main axis ascends, so this is the writer's unset default rather
+      // than a file that contradicts itself, and refusing it would reject
+      // archives the reference reads.  `chunk_start` is still checked, and on
+      // a one-point chunk that pins the only value there is.
+      const bool end_is_unset = out.size() - first == 1 && recorded_end &&
+                                *recorded_end == 0.0 &&
+                                static_cast<double>(out[first]) != 0.0;
+
+      check(recorded_start, static_cast<double>(out[first]), "chunk_start");
+      if (!end_is_unset) {
+        check(recorded_end, static_cast<double>(out.back()), "chunk_end");
+      }
     }
   }
 }

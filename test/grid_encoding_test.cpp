@@ -31,8 +31,11 @@ directory of this repository.
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include <arrow/builder.h>
 
 #include "mzpeak/data/transformer/grid.h"
 #include "mzpeak/exception.h"
@@ -47,6 +50,41 @@ MzPeak::Spectra peaks_of(const MzPeak::Index& index)
 {
   return index.spectra(MzPeak::MetadataDetail::Full,
                        MzPeak::Index::SpectraSource::Peaks);
+}
+
+/// One row of an `<array>_grid` struct column, built by hand, so that the
+/// bound check can be driven with rows no bundled archive contains.
+MzPeak::Util::Slice::Raw grid_row(const char* grid_type,
+                                  const std::vector<double>& parameters,
+                                  const std::vector<std::uint32_t>& indices)
+{
+  arrow::StringBuilder type_builder;
+  BOOST_REQUIRE(type_builder.Append(grid_type).ok());
+
+  arrow::ListBuilder p_builder(arrow::default_memory_pool(),
+                               std::make_shared<arrow::DoubleBuilder>());
+  BOOST_REQUIRE(p_builder.Append().ok());
+  BOOST_REQUIRE(static_cast<arrow::DoubleBuilder*>(p_builder.value_builder())
+                    ->AppendValues(parameters)
+                    .ok());
+
+  arrow::ListBuilder i_builder(arrow::default_memory_pool(),
+                               std::make_shared<arrow::UInt32Builder>());
+  BOOST_REQUIRE(i_builder.Append().ok());
+  BOOST_REQUIRE(static_cast<arrow::UInt32Builder*>(i_builder.value_builder())
+                    ->AppendValues(indices)
+                    .ok());
+
+  std::shared_ptr<arrow::Array> type, p, i;
+  BOOST_REQUIRE(type_builder.Finish(&type).ok());
+  BOOST_REQUIRE(p_builder.Finish(&p).ok());
+  BOOST_REQUIRE(i_builder.Finish(&i).ok());
+
+  auto row = arrow::StructArray::Make({type, p, i},
+                                      std::vector<std::string>{
+                                          "grid_type", "parameters", "indices"});
+  BOOST_REQUIRE(row.ok());
+  return MzPeak::Util::Slice::Raw{*row};
 }
 
 /// Mobility scans of the bundled acquisition and the 1/K0 they stand for,
@@ -237,6 +275,61 @@ BOOST_AUTO_TEST_CASE(the_mobility_model_reads_the_pre_eb08ba0_parameter_order)
   // that as well as the magnitude.
   BOOST_TEST(*Grid::value_at("MS:9999001", swapped, 33) >
              *Grid::value_at("MS:9999001", swapped, 926));
+}
+
+BOOST_AUTO_TEST_CASE(a_one_point_chunk_keeps_its_unset_end_bound)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // The reference writer read `chunk_start` and `chunk_end` from ONE iterator
+  // -- `next()`, then `next_back()` on what remained -- so a chunk that
+  // reduces to a single point left the end at its 0.0 default.  Two chunks of
+  // the reference's own diaPASEF conversion are like that, `chunk_start` near
+  // 1700 Th.  Refusing them would reject archives the reference reads, so a
+  // 0.0 end below a positive start is taken as unset rather than as a
+  // contradiction -- but only for a chunk that really does hold one point,
+  // and `chunk_start` is still checked.
+  const auto raw = grid_row("MS:1003824", {10.0, 0.5}, {4});
+
+  Grid::Bounds unset;
+  unset.start = {12.0};
+  unset.end = {0.0};
+
+  std::vector<double> out;
+  BOOST_CHECK_NO_THROW(
+      Grid::decode<double>(raw, true, &unset, "mz_chunk_start", out));
+  BOOST_REQUIRE_EQUAL(out.size(), 1u);
+  BOOST_TEST(out[0] == 12.0);
+
+  // Still checked: a start that disagrees is a refusal on the same row.
+  Grid::Bounds wrong_start;
+  wrong_start.start = {11.0};
+  wrong_start.end = {0.0};
+  out.clear();
+  BOOST_CHECK_THROW(
+      Grid::decode<double>(raw, true, &wrong_start, "mz_chunk_start", out),
+      MzPeak::InvalidFormatError);
+
+  // And an end that is simply wrong rather than unset is still a refusal.
+  Grid::Bounds wrong_end;
+  wrong_end.start = {12.0};
+  wrong_end.end = {11.0};
+  out.clear();
+  BOOST_CHECK_THROW(
+      Grid::decode<double>(raw, true, &wrong_end, "mz_chunk_start", out),
+      MzPeak::InvalidFormatError);
+
+  // A MULTI-point chunk gets no such licence: 0.0 there is a contradiction,
+  // not the writer's default, and letting it pass would disarm the check that
+  // `bounds_are_enforced` exists for.
+  const auto pair = grid_row("MS:1003824", {10.0, 0.5}, {4, 2});
+  Grid::Bounds zero_end;
+  zero_end.start = {12.0};
+  zero_end.end = {0.0};
+  out.clear();
+  BOOST_CHECK_THROW(
+      Grid::decode<double>(pair, true, &zero_end, "mz_chunk_start", out),
+      MzPeak::InvalidFormatError);
 }
 
 BOOST_AUTO_TEST_CASE(the_fixture_verifies_its_own_checksums)
