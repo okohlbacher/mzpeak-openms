@@ -82,6 +82,18 @@ pyarrow BEFORE this reader was pointed at it.
   several windows over disjoint mobility ranges does not describe this file:
   the converter emits one spectrum per window, each with a single precursor.
   A file that genuinely uses limits is still needed.
+
+  **This may be about to change.** mzdata `985c547` (2026-09-29) switched its
+  TDF reader from accession-less `Param::new_key_value("ion mobility lower
+  limit", ...)` to proper MS CV terms, and dropped the two grid-model params it
+  had been attaching. So a conversion made with that mzdata onwards should carry
+  the limits as real terms. Whether they reach the TYPED
+  `ion_mobility_lower_limit`/`_upper_limit` fields depends on something this
+  reader does not control: those are read from `selected_ion` COLUMNS, so the
+  prototype writer has to promote the terms to columns. If it leaves them in
+  `parameters`, the typed fields stay empty and the values arrive untyped --
+  which would look identical to today's "absent" from the API's point of view.
+  Worth re-checking as soon as the prototype picks up that mzdata release.
 - **The reference's own canonical conversion reads correctly.** `74ff521`
   committed `diaPASEF.ref.mzpeak` to the prototype, so there is now a reference
   artifact rather than only a conversion produced here. This reader opens it,
