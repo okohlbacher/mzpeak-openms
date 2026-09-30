@@ -42,6 +42,7 @@ directory of this repository.
 namespace {
 
 const char* kGrid = "../test/files/grid_diapasef.dir";
+const char* kMixed = "../test/files/mixed_grid_diapasef.dir";
 const char* kReference = "../test/files/diapasef.dir";
 
 /// The largest absolute and relative gap between two arrays.
@@ -119,6 +120,48 @@ BOOST_AUTO_TEST_CASE(grid_encoded_spectra_equal_the_written_out_reference)
                                      << " rel=" << mz.second
                                      << " | intensity abs=" << in.first
                                      << " | mobility abs=" << im.first);
+    }
+  }
+}
+
+/******************************************************************************/
+BOOST_AUTO_TEST_CASE(a_column_mixing_grid_and_plain_chunks_reads_whole)
+{
+  // One column may hold both: `chunk_encoding` says MS:1000576 for a chunk
+  // whose grid struct is null and whose values live in `chunk_values`.  The
+  // SCIEX SWATH corpus is full of these, and it is 738 MB; this fixture is the
+  // same shape at 226 KB, with every other m/z chunk written out.
+  //
+  // The failure this guards is quiet: the struct column's null rows are
+  // exactly the plainly encoded chunks, so a decoder that skips nulls returns
+  // a SHORTER array rather than a wrong one, and every peak past the first
+  // such chunk is mis-paired with another peak's intensity.  Length is
+  // therefore checked first and separately.
+  auto mixed = MzPeak::open(kMixed);
+  auto reference = MzPeak::open(kReference);
+
+  auto got = mixed.spectra();
+  auto want = reference.spectra();
+  BOOST_REQUIRE_EQUAL(got.size(), want.size());
+
+  for (std::size_t i = 0; i < got.size(); ++i) {
+    auto g = got[i];
+    auto w = want[i];
+
+    BOOST_TEST_CONTEXT("spectrum " << i)
+    {
+      BOOST_REQUIRE_EQUAL(g.mz().size(), w.mz().size());
+      BOOST_REQUIRE_EQUAL(g.intensity().size(), w.intensity().size());
+      BOOST_REQUIRE_EQUAL(g.ion_mobility_array().size(),
+                          w.ion_mobility_array().size());
+
+      // The un-gridded chunks carry the very coordinates the grid decodes to,
+      // so mixing the encodings changes nothing about the values.  Mobility
+      // stays gridded throughout, so this also covers a gridded secondary axis
+      // beside a plainly encoded main axis.
+      BOOST_TEST(mismatches(g.mz(), w.mz()) == 0u);
+      BOOST_TEST(mismatches(g.intensity(), w.intensity()) == 0u);
+      BOOST_TEST(mismatches(g.ion_mobility_array(), w.ion_mobility_array()) == 0u);
     }
   }
 }
