@@ -42,10 +42,13 @@ namespace MzPeak {
  * one selected ion (m/z, charge, intensity).  Base peak, TIC, spectrum type,
  * observed m/z range, data-processing ref, precursor id and ion mobility are
  * left out.  An archive with a spectrum outside that shape -- several
- * precursors, or several ions on one -- is read as `Lean` instead, so no
- * precursor is ever dropped.  On a 717,924-spectrum run: 0.57 GB of map and
- * per-spectrum allocations -> 0.20 GB of map alone, peak RSS of the open
- * 0.97 -> 0.58 GB, and the open itself 0.42 -> 0.29 s.
+ * precursors, several ions on one, or an ion for a precursor it does not have
+ * -- is read as `Lean` instead, so no precursor is ever dropped.  Such an
+ * archive is read twice the first time Minimal is asked of it: Minimal finds
+ * the misfit only while attaching precursors, after reading every table, and
+ * the fallback then reads it again at `Lean`.  On a 717,924-spectrum run:
+ * 0.57 GB of map and per-spectrum allocations -> 0.20 GB of map alone, peak
+ * RSS of the open 0.97 -> 0.58 GB, and the open itself 0.42 -> 0.29 s.
  */
 enum class MetadataDetail {
   /// Everything the format carries.

@@ -99,8 +99,9 @@ read_spectra_metadata(const SpectraMetadataFiles&, MetadataDetail detail);
 
 /**
  * The same read at @ref MzPeak::MetadataDetail::Minimal, into compact
- * records.  nullopt when a spectrum has more than one precursor, or more than
- * one selected ion on its precursor: read the archive as `Lean` then.
+ * records.  nullopt when a spectrum has more than one precursor, more than
+ * one selected ion on its precursor, or an ion for a precursor it does not
+ * have: read the archive as `Lean` then.
  */
 std::optional<IndexMap<MinimalSpectrumMetadata>>
 read_minimal_spectra_metadata(const SpectraMetadataFiles&);
