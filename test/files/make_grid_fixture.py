@@ -24,11 +24,13 @@ The `chunk_start`/`chunk_end` bounds are left exactly as written: they are the
 writer's own evaluation of the same models at each chunk's first and last index,
 so they are the oracle this reader checks its decode against on every row.
 
-A second fixture, `grid_bad_bounds.dir`, is the same archive with ONE chunk's
-`mz_chunk_start` moved.  Nothing else distinguishes it, and a reader that
-evaluates the model but never compares it to the recorded bound reads it as
-perfectly good data -- which is precisely the failure a mis-ported model
-produces, so the guard against it is pinned rather than assumed.
+Four variants follow, each differing from grid.dir in exactly one respect:
+
+  grid_bad_bounds.dir    chunk_start[0] off by 1 Th           -> refused
+  grid_bad_end.dir       chunk_end[0] off by 1 Th             -> refused
+  grid_legacy.dir        pre-fix writer: mobility pair swapped,
+                         chunk_end 0.0 on each last chunk     -> same values as grid.dir
+  grid_bad_mobility.dir  1/K0 unphysical in either reading    -> refused
 """
 
 import hashlib
@@ -93,6 +95,106 @@ def filter_rows(path: Path, column: str, keep: set[int]) -> None:
                    write_statistics=True)
 
 
+# ---------------------------------------------------------------------------
+# Variants of grid.dir, each differing in ONE respect, so a failing test names
+# the property that broke rather than a fixture that differs in several.
+# ---------------------------------------------------------------------------
+
+def _rows(struct_array):
+    return struct_array.to_pylist()
+
+
+def bad_start(cols, si):
+    """chunk_start[0] moved by 1 Th: far outside rounding, inside the plausible
+    range.  A reader that never compares the decode to the recorded bound reads
+    this as good data."""
+    starts = cols["mz_chunk_start"].to_pylist()
+    starts[0] += 1.0
+    cols["mz_chunk_start"] = pa.array(starts, pa.float64())
+    return "mz_chunk_start[0] += 1.0"
+
+
+def bad_end(cols, si):
+    """chunk_end[0] moved by 1 Th.  Guards the zero-end relaxation: tolerating a
+    ZERO end must not tolerate a WRONG one."""
+    ends = cols["mz_chunk_end"].to_pylist()
+    ends[0] += 1.0
+    cols["mz_chunk_end"] = pa.array(ends, pa.float64())
+    return "mz_chunk_end[0] += 1.0"
+
+
+def legacy(cols, si):
+    """The two defects of archives written before the reference's fixes, as
+    they occur together in the wild:
+
+    - the TIMS mobility parameter pair in the pre-eb08ba0 order
+      [c6, c7, slope, offset] instead of [c6, c7, offset, slope];
+    - chunk_end = 0.0 on the last chunk of each spectrum, the trace of the
+      single-iterator bug in the writer's chunk_series.rs.
+
+    Nothing in the archive distinguishes the old spelling, which is the point:
+    it must decode to exactly what grid.dir decodes to."""
+    field = cols["mean_inverse_reduced_ion_mobility_grid"]
+    rows = _rows(field)
+    for r in rows:
+        if r is None:
+            continue
+        p = r["parameters"]
+        p[2], p[3] = p[3], p[2]
+    cols["mean_inverse_reduced_ion_mobility_grid"] = pa.array(rows, field.type)
+
+    ends = cols["mz_chunk_end"].to_pylist()
+    last = [i for i in range(len(si)) if i + 1 == len(si) or si[i + 1] != si[i]]
+    for i in last:
+        ends[i] = 0.0
+    cols["mz_chunk_end"] = pa.array(ends, pa.float64())
+    return f"mobility pair swapped on every row; chunk_end = 0.0 on rows {last}"
+
+
+def bad_mobility(cols, si):
+    """c6 scaled by 1000, so 1/K0 comes out near 0.05 Vs/cm^2 whichever way the
+    offset/slope pair is read.  The magnitude disambiguation cannot rescue it,
+    so the physical-range check must refuse it rather than return it."""
+    field = cols["mean_inverse_reduced_ion_mobility_grid"]
+    rows = _rows(field)
+    for r in rows:
+        if r is not None:
+            r["parameters"][0] *= 1000.0
+    cols["mean_inverse_reduced_ion_mobility_grid"] = pa.array(rows, field.type)
+    return "mobility c6 *= 1000"
+
+
+def write_variant(source: Path, name: str, mutate) -> None:
+    out_dir = source.parent / name
+    shutil.rmtree(out_dir, ignore_errors=True)
+    shutil.copytree(source, out_dir)
+
+    peaks = out_dir / "spectra_peaks.parquet"
+    parquet = pq.ParquetFile(peaks)
+    table = parquet.read()
+    kv = parquet.metadata.metadata
+    st = table.column(0).combine_chunks()
+    names = [f.name for f in st.type]
+    cols = {n: st.field(n) for n in names}
+    what = mutate(cols, st.field("spectrum_index").to_pylist())
+
+    out = pa.StructArray.from_arrays([cols[n] for n in names], names=names)
+    schema = pa.schema([pa.field(table.schema.names[0], out.type)]).with_metadata(kv)
+    pq.write_table(pa.Table.from_arrays([out], schema=schema), peaks,
+                   write_statistics=True)
+
+    # Digests recomputed so each variant fails on the property it perturbs and
+    # not on a stale checksum.
+    index_path = out_dir / "mzpeak_index.json"
+    index = json.loads(index_path.read_text())
+    for entry in index["files"]:
+        member = entry.get("path") or entry.get("name")
+        if (out_dir / member).exists():
+            entry["checksum"] = hashlib.sha512((out_dir / member).read_bytes()).hexdigest()
+    index_path.write_text(json.dumps(index, indent=2))
+    print(f"wrote {out_dir} ({what})")
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
@@ -132,38 +234,10 @@ def main() -> int:
     total = sum(f.stat().st_size for f in dest.iterdir())
     print(f"wrote {dest} ({total / 1024:.0f} KB)")
 
-    # The companion fixture: one chunk bound perturbed, digests recomputed so it
-    # fails on the bound and not on its checksum.
-    bad = dest.parent / "grid_bad_bounds.dir"
-    shutil.rmtree(bad, ignore_errors=True)
-    shutil.copytree(dest, bad)
-
-    peaks = bad / "spectra_peaks.parquet"
-    parquet = pq.ParquetFile(peaks)
-    table = parquet.read()
-    kv = parquet.metadata.metadata
-    st = table.column(0).combine_chunks()
-    names = [f.name for f in st.type]
-    starts = st.field("mz_chunk_start").to_pylist()
-    # A whole Thomson: far outside any rounding, far inside the plausible range.
-    starts[0] = starts[0] + 1.0
-    fields = [
-        pa.array(starts, pa.float64()) if n == "mz_chunk_start" else st.field(n)
-        for n in names
-    ]
-    out = pa.StructArray.from_arrays(fields, names=names)
-    schema = pa.schema([pa.field(table.schema.names[0], out.type)]).with_metadata(kv)
-    pq.write_table(pa.Table.from_arrays([out], schema=schema), peaks,
-                   write_statistics=True)
-
-    index_path = bad / "mzpeak_index.json"
-    index = json.loads(index_path.read_text())
-    for entry in index["files"]:
-        name = entry.get("path") or entry.get("name")
-        if (bad / name).exists():
-            entry["checksum"] = hashlib.sha512((bad / name).read_bytes()).hexdigest()
-    index_path.write_text(json.dumps(index, indent=2))
-    print(f"wrote {bad} (mz_chunk_start[0] += 1.0)")
+    write_variant(dest, "grid_bad_bounds.dir", bad_start)
+    write_variant(dest, "grid_bad_end.dir", bad_end)
+    write_variant(dest, "grid_legacy.dir", legacy)
+    write_variant(dest, "grid_bad_mobility.dir", bad_mobility)
     return 0
 
 

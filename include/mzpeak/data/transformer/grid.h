@@ -110,10 +110,40 @@ inline double timstof_mz(const std::vector<double>& p, double i)
   return refined * refined - c4;
 }
 
+/// The physically possible band for inverse reduced ion mobility on a TIMS
+/// analyser, in Vs/cm^2.  Real acquisitions sit around 0.6-1.9; this is an
+/// order-of-magnitude fence, not a tolerance, and exists only to catch a
+/// mis-read parameter pair -- reading one with its offset and slope exchanged
+/// lands near 45, which is not a 1/K0 any instrument produces.
+inline constexpr double kMobilityFloor = 0.1;
+inline constexpr double kMobilityCeiling = 10.0;
+
 /// Bruker TIMS 1/K0 at scan @p i: mzdata's `TimsCalibrationModel2::convert`.
+///
+/// `MS:9999001` carries `[c6, c7, offset, slope]`, which is the order mzdata's
+/// `TimsCalibrationModel2::as_param` writes and the reference's `from_param`
+/// reads.  Until upstream's `eb08ba0` the reference WRITER emitted
+/// `[c6, c7, slope, offset]`, so writer and reader disagreed and the reference
+/// gets its own older files wrong too.  Archives with the exchanged pair are in
+/// circulation and nothing in them says so.
+///
+/// The two are told apart by the model's own algebra rather than by a threshold.
+/// `slope = (C3 - C2)/C1` is a voltage difference divided by the ramp's length
+/// in mobility scans, while `offset = C2 - slope*(C4 + C0)` is a voltage; the
+/// offset therefore exceeds the slope by about the scan count, which is in the
+/// hundreds for any ramp longer than a single scan.  Ordering the pair by
+/// magnitude reads both spellings and leaves a conforming file untouched.
+///
+/// That is still an inference, so `decode` CHECKS it: every value it produces
+/// has to land in the physical band above.  A silent 45 Vs/cm^2 is the failure
+/// this whole function exists to prevent, and it would be perverse to trade it
+/// for a silent 45 produced a different way.
 inline double timstof_mobility(const std::vector<double>& p, double i)
 {
-  const double c6 = p[0], c7 = p[1], offset = p[2], slope = p[3];
+  const double c6 = p[0], c7 = p[1];
+  // Larger magnitude is the offset, whichever position the writer used.
+  const double offset = std::fabs(p[2]) >= std::fabs(p[3]) ? p[2] : p[3];
+  const double slope = std::fabs(p[2]) >= std::fabs(p[3]) ? p[3] : p[2];
   return 1.0 / (c6 + c7 / (offset + slope * i));
 }
 
@@ -304,12 +334,24 @@ void decode(const Util::Slice::Raw& raw,
       }
 
       const std::size_t first = out.size();
+      // The mobility model's parameter pair is disambiguated by magnitude (see
+      // timstof_mobility), which is an inference; every value it yields is
+      // therefore checked against the physical band rather than trusted.
+      const bool check_range = (*type == "MS:9999001");
       for (const std::uint32_t k : indices) {
         const std::optional<double> value = value_at(*type, parameters, k);
         if (!value) {
           throw InvalidFormatError("unknown grid model " + *type + " with " +
                                    std::to_string(parameters.size()) +
                                    " parameters in " + std::string(dim_name));
+        }
+        if (check_range &&
+            (!(*value > kMobilityFloor) || !(*value < kMobilityCeiling))) {
+          throw InvalidFormatError(
+              "grid decode of " + std::string(dim_name) + " gives " +
+              std::to_string(*value) + " Vs/cm^2 at scan " + std::to_string(k) +
+              ", outside the physically possible range for inverse reduced ion "
+              "mobility; the model's parameters cannot be read as written");
         }
         out.push_back(static_cast<V>(*value));
       }
@@ -326,8 +368,35 @@ void decode(const Util::Slice::Raw& raw,
               std::to_string(got) + ", file records " + std::to_string(*expected));
         }
       };
-      check(bounds->start[flat], static_cast<double>(out[first]), "chunk_start");
-      check(bounds->end[flat], static_cast<double>(out.back()), "chunk_end");
+      const std::optional<double>& recorded_start = bounds->start[flat];
+      std::optional<double> recorded_end = bounds->end[flat];
+
+      // A recorded `chunk_end` of exactly zero that lies BELOW the recorded
+      // start is not a bound this file is asserting -- it is the trace of a
+      // writer bug, and treating it as one refuses an archive whose data is
+      // perfectly good.
+      //
+      // The reference writer read a chunk's start and end from a SINGLE
+      // iterator, so on a chunk holding one value `next()` consumed it for the
+      // start and the end fell through to 0.0.  Its own vendored copy carries
+      // the fix and the explanation (`chunk_series.rs`, "Read start and end
+      // from two INDEPENDENT iterators so a single-point chunk gives
+      // end == start").  Archives written before it are in circulation: in the
+      // diaPASEF conversion this was found on, EXACTLY the two single-point
+      // chunks of 295 carry a zero end, and no other row does.
+      //
+      // The condition is deliberately narrow.  It needs the value to be zero
+      // AND below the start, which is already malformed -- the specification
+      // requires start <= end -- so it cannot swallow a genuine disagreement,
+      // and a legitimately zero-valued chunk on an axis that reaches zero has
+      // a zero start too and is therefore untouched.
+      if (recorded_end.has_value() && *recorded_end == 0.0 &&
+          recorded_start.has_value() && *recorded_start > 0.0) {
+        recorded_end.reset();
+      }
+
+      check(recorded_start, static_cast<double>(out[first]), "chunk_start");
+      check(recorded_end, static_cast<double>(out.back()), "chunk_end");
     }
   }
 }

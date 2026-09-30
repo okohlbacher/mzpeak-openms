@@ -1,0 +1,606 @@
+{
+  "files": [
+    {
+      "name": "spectra_data.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "data_arrays",
+      "column_mapping": [],
+      "parameters": [],
+      "checksum": "d4c7cd0e1655abb569c441d634c1de9e40f3b115353c0f6ec7c43b8d34d315d440593040ca6f05d7e0338e0e6feff70f7105209adf414320ed0ee9109f30421e"
+    },
+    {
+      "name": "spectra_peaks.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "peaks",
+      "column_mapping": [],
+      "parameters": [],
+      "checksum": "edf19dca4524009e1fb1c31d38c46f83e8f44e29342eca19a5528470e44041470a5740d7a5b256d6f3e1ea5ad8400dfd776de7bed78945e46da2a86dbecf7eb5"
+    },
+    {
+      "name": "spectra_metadata.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "metadata",
+      "column_mapping": [
+        {
+          "name": "ms level",
+          "path": "ms_level",
+          "accession": "MS:1000511",
+          "unit": null
+        },
+        {
+          "name": "scan start time",
+          "path": "time",
+          "accession": "MS:1000016",
+          "unit": "UO:0000031"
+        },
+        {
+          "name": "scan polarity",
+          "path": "scan_polarity",
+          "accession": "MS:1000465",
+          "unit": null
+        },
+        {
+          "name": "spectrum representation",
+          "path": "spectrum_representation",
+          "accession": "MS:1000525",
+          "unit": null
+        },
+        {
+          "name": "spectrum type",
+          "path": "spectrum_type",
+          "accession": "MS:1000559",
+          "unit": null
+        },
+        {
+          "name": "lowest observed m/z",
+          "path": "lowest_observed_mz",
+          "accession": "MS:1000528",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "highest observed m/z",
+          "path": "highest_observed_mz",
+          "accession": "MS:1000527",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "number of data points",
+          "path": "number_of_data_points",
+          "accession": "MS:1003060",
+          "unit": null
+        },
+        {
+          "name": "number of peaks",
+          "path": "number_of_peaks",
+          "accession": "MS:1003059",
+          "unit": null
+        },
+        {
+          "name": "base peak m/z",
+          "path": "base_peak_mz",
+          "accession": "MS:1000504",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "base peak intensity",
+          "path": "base_peak_intensity",
+          "accession": "MS:1000505",
+          "unit": "MS:1000131"
+        },
+        {
+          "name": "total ion current",
+          "path": "total_ion_current",
+          "accession": "MS:1000285",
+          "unit": "MS:1000131"
+        },
+        {
+          "name": "tdf_t1",
+          "path": "opt_MZP_1000008_tdf_t1",
+          "accession": "MZP:1000008",
+          "unit": null
+        },
+        {
+          "name": "tdf_t2",
+          "path": "opt_MZP_1000009_tdf_t2",
+          "accession": "MZP:1000009",
+          "unit": null
+        },
+        {
+          "name": "tdf_mz_calibration_id",
+          "path": "opt_MZP_1000010_tdf_mz_calibration_id",
+          "accession": "MZP:1000010",
+          "unit": null
+        }
+      ],
+      "parameters": [],
+      "checksum": "034dbced7ae4d133238712216b8619bf262db03498ad03d797c6d82ab44d9118521f75ea4a7b35147f7b42b0b23438e4cfe782379d8df1e242f8c688f61811b0"
+    },
+    {
+      "name": "spectra_metadata_scans.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "scans",
+      "column_mapping": [
+        {
+          "name": "scan start time",
+          "path": "scan_start_time",
+          "accession": "MS:1000016",
+          "unit": "UO:0000031"
+        },
+        {
+          "name": "preset scan configuration",
+          "path": "preset_scan_configuration",
+          "accession": "MS:1000616",
+          "unit": null
+        },
+        {
+          "name": "filter string",
+          "path": "filter_string",
+          "accession": "MS:1000512",
+          "unit": null
+        },
+        {
+          "name": "ion injection time",
+          "path": "ion_injection_time",
+          "accession": "MS:1000927",
+          "unit": "UO:0000028"
+        },
+        {
+          "name": "scan window lower limit",
+          "path": "scan_windows.scan_window_lower_limit",
+          "accession": "MS:1000501",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "scan window upper limit",
+          "path": "scan_windows.scan_window_upper_limit",
+          "accession": "MS:1000500",
+          "unit": "MS:1000040"
+        }
+      ],
+      "parameters": [],
+      "checksum": "c17cae2bcd24dec610205fac458e8989f61412840b9c1c10119b8be12ae540098ef71f3f0cbf941709ca6b96ecb0bfc07da5c6c410957742868b19262f74e795"
+    },
+    {
+      "name": "spectra_metadata_precursors.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "precursors",
+      "column_mapping": [
+        {
+          "name": "isolation window target m/z",
+          "path": "isolation_window.isolation_window_target",
+          "accession": "MS:1000827",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "isolation window lower offset",
+          "path": "isolation_window.isolation_window_lower_offset",
+          "accession": "MS:1000828",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "isolation window upper offset",
+          "path": "isolation_window.isolation_window_upper_offset",
+          "accession": "MS:1000829",
+          "unit": "MS:1000040"
+        }
+      ],
+      "parameters": [],
+      "checksum": "5a8bde678ba5da3ca5f7469ef336265013723044cb729bde2b26c1aa11b4820d62ad59f9371b30fe6115728fbef8e3bb615b3daabe27beeb8de092f13a376885"
+    },
+    {
+      "name": "spectra_metadata_selected_ions.parquet",
+      "entity_type": "spectrum",
+      "data_kind": "selected_ions",
+      "column_mapping": [
+        {
+          "name": "selected ion m/z",
+          "path": "selected_ion_mz",
+          "accession": "MS:1000744",
+          "unit": "MS:1000040"
+        },
+        {
+          "name": "charge state",
+          "path": "charge_state",
+          "accession": "MS:1000041",
+          "unit": null
+        },
+        {
+          "name": "intensity",
+          "path": "peak_intensity",
+          "accession": "MS:1000042",
+          "unit": "MS:1000131"
+        }
+      ],
+      "parameters": [],
+      "checksum": "d5776c722fee892527a7cd3f9761bb1e0034ec380dbd2c15d10299a63f6b72e3bba5a0bf458599090050849e1c60f4320b75055d6efea746349f551d7aa16939"
+    }
+  ],
+  "metadata": {
+    "vendor_mz_calibration": {
+      "global_metadata": {
+        "DigitizerNumSamples": 396860,
+        "MzAcqRangeLower": 99.998563,
+        "MzAcqRangeUpper": 1700.0
+      },
+      "model_type_1": "t_ns = tof*DigitizerTimebase + DigitizerDelay; cf = 1 + dC1*(T1 - tdf_t1)/1e6 (+ dC2*(T2 - tdf_t2)/1e6, dC2 = 0 on every file seen); u = sqrt(mz + C4); t_ns = C0 + (1e6/sqrt(C1*cf))*u + (C2/cf)*u^2, solve for u; mz = u^2 - C4 (C2 = 0: mz = ((t_ns - C0)*sqrt(C1*cf)/1e6)^2 - C4)",
+      "model_type_1_verified": "1e-9 ppm vs Bruker timsdata SDK on a C2 != 0, C4 != 0 file (mzdata diaPASEF.d, 2026-09-22); 1e-7 ppm on PXD059079 2485 (C2 = C4 = 0)",
+      "mz_calibration": [
+        {
+          "C0": 320.480481,
+          "C1": 157992.031315,
+          "C2": 0.002115,
+          "C3": 0.0,
+          "C4": -0.068565,
+          "DigitizerDelay": 24833.0,
+          "DigitizerTimebase": 0.2,
+          "Id": 1,
+          "ModelType": 1,
+          "T1": 25.727448,
+          "T2": 28.353124,
+          "dC1": 27.0,
+          "dC2": 0.0
+        },
+        {
+          "C0": 318.430952,
+          "C1": 156075.076816,
+          "C2": -0.000133,
+          "C3": 0.0,
+          "C4": -0.041962,
+          "DigitizerDelay": 24833.0,
+          "DigitizerTimebase": 0.2,
+          "Id": 2,
+          "ModelType": 1,
+          "T1": 25.222462,
+          "T2": 178.235378,
+          "dC1": 27.0,
+          "dC2": 0.0
+        }
+      ],
+      "per_frame_columns": [
+        "opt_MZP_1000008_tdf_t1",
+        "opt_MZP_1000009_tdf_t2",
+        "opt_MZP_1000010_tdf_mz_calibration_id"
+      ],
+      "per_frame_columns_note": "spectra_metadata columns holding Frames.T1, Frames.T2, Frames.MzCalibration per spectrum (in this order); the id selects the mz_calibration row by Id",
+      "source": "analysis.tdf"
+    },
+    "vendor_tims_calibration": {
+      "applies_to": "mean_inverse_reduced_ion_mobility of every point and the 1/K0 of every precursor/isolation band, unless --no-tims-recalibration (then timsrust's linear map of the nominal range)",
+      "global_metadata": {
+        "OneOverK0AcqRangeLower": 0.601567,
+        "OneOverK0AcqRangeUpper": 1.601096
+      },
+      "model_type_2": "W = C2 + (C3 - C2)*(scan - C4 - C0)/C1; 1/K0 = W/(C7 + C6*W); scan 0-based (C5, C8, C9 do not enter; C0 = C5 = 1 on every file seen)",
+      "model_type_2_verified": "6.7e-16 vs Bruker timsdata SDK tims_scannum_to_oneoverk0 on every scan of seven corpus runs, timsControl 4.0.5-6.2 (2026-09-15); the nominal OneOverK0AcqRange is not the model's value at the first/last scan",
+      "source": "analysis.tdf",
+      "tims_calibration": [
+        {
+          "C0": 1,
+          "C1": 926,
+          "C2": 217.23199652301727,
+          "C3": 74.71319596975974,
+          "C4": 33.0,
+          "C5": 1,
+          "C6": 0.020932469715718497,
+          "C7": 131.22279563838268,
+          "C8": 13.03725439289374,
+          "C9": 2581.2848608831187,
+          "Id": 1,
+          "ModelType": 2
+        }
+      ]
+    },
+    "ims_calibration": {
+      "chunk_bounds": "mz",
+      "chunk_width_th": 50.0,
+      "codec": "ims-compact",
+      "encoding": "byte-stream-split on the index lists and the bounds",
+      "exact": true,
+      "intensity_dtype": "int32",
+      "ion_mobility_grid": {
+        "column": "chunk.mean_inverse_reduced_ion_mobility_grid",
+        "evaluation": "mzdata::io::tdf::TimsCalibrationModel2::convert (reference implementation); differs from the closed form W/(C7 + C6*W) by at most 1 ulp",
+        "indices": "TIMS scan number (uint32, 0-based, not delta-coded); 1/K0 = 1/(C6 + C7/(offset + slope*scan))",
+        "model": "MS:9999001",
+        "parameters": "[C6, C7, offset, slope] of TimsCalibration ModelType 2: slope = (C3 - C2)/C1, offset = C2 - slope*(C4 + C0)"
+      },
+      "layout": "grid-transform",
+      "mz_grid": {
+        "column": "chunk.mz_grid",
+        "evaluation": "mzdata::io::tdf::MzCalibrationModel2::convert_f64 (reference implementation); the chunk bounds are that evaluation at the first and last bin",
+        "indices": "[first TOF bin, deltas...] (uint32); t_ns = fma(bin, timebase, delay); solve t_ns = C0 + beta*u + C2*u^2 (+ C3*u^3) for u; m/z = u^2 - C4",
+        "model": "MS:9999002",
+        "parameters": "[C0, 1e6/sqrt(C1*cf), C2/cf, C3, C4, DigitizerTimebase, DigitizerDelay] of the frame's MzCalibration row, cf = 1 + (dC1*(T1 - Frames.T1) + dC2*(T2 - Frames.T2))/1e6",
+        "verified": "1e-9 ppm vs Bruker timsdata SDK on a C2 != 0, C4 != 0 file (tests/fixtures/tdf_diapasef_sdk_golden.json)"
+      },
+      "previous_layout": {
+        "note": "rewritten from the 0.12.x layout (integer TOF bounds, tof_chunk_values deltas, tof_c0/tof_c1 per spectrum); the tof_c0/tof_c1 spectra_metadata columns are kept as provenance and are no longer read",
+        "tof_encoding": "m/z-chunked"
+      },
+      "tof_encoding": "grid"
+    },
+    "instrument_configuration_list": [
+      {
+        "components": [
+          {
+            "component_type": "analyzer",
+            "order": 1,
+            "parameters": [
+              {
+                "accession": "MS:1000084",
+                "name": "time-of-flight",
+                "unit": null,
+                "value": null
+              }
+            ]
+          }
+        ],
+        "id": 0,
+        "parameters": [
+          {
+            "accession": "MS:1003123",
+            "name": "Bruker Daltonics timsTOF series",
+            "unit": null,
+            "value": null
+          },
+          {
+            "accession": "MS:1000031",
+            "name": "instrument model",
+            "unit": null,
+            "value": "timsTOF Pro"
+          },
+          {
+            "accession": "MS:1000529",
+            "name": "instrument serial number",
+            "unit": null,
+            "value": "1854399.63"
+          }
+        ],
+        "software_reference": "Bruker otofControl"
+      }
+    ],
+    "sample_list": [
+      {
+        "id": "sample_1",
+        "name": "HYE 200ng",
+        "parameters": []
+      }
+    ],
+    "vendor_metadata": {
+      "AcquisitionDateTime": "2019-08-24T18:27:02.345+02:00",
+      "AcquisitionFirmwareVersion": "<unknown>",
+      "AcquisitionSoftware": "Bruker otofControl",
+      "AcquisitionSoftwareVendor": "Bruker",
+      "AcquisitionSoftwareVersion": "6.0.110.229-14868-vc141",
+      "AnalysisId": "00000000-0000-0000-0000-000000000000",
+      "ClosedProperly": "1",
+      "DenoisingEnabled": "0",
+      "Description": "",
+      "DigitizerNumSamples": "396860",
+      "InstrumentFamily": "9",
+      "InstrumentName": "timsTOF Pro",
+      "InstrumentRevision": "1",
+      "InstrumentSerialNumber": "1854399.63",
+      "InstrumentSourceType": "11",
+      "InstrumentVendor": "Bruker",
+      "MaxNumPeaksPerScan": "1335",
+      "MethodName": "diaPASEF.m",
+      "MzAcqRangeLower": "99.998563",
+      "MzAcqRangeUpper": "1700.000000",
+      "OneOverK0AcqRangeLower": "0.601567",
+      "OneOverK0AcqRangeUpper": "1.601096",
+      "OperatorName": "Demo User",
+      "PeakListIndexScaleFactor": "1",
+      "SampleName": "HYE 200ng",
+      "SchemaType": "TDF",
+      "SchemaVersionMajor": "3",
+      "SchemaVersionMinor": "1",
+      "TimsCompressionType": "2"
+    },
+    "cv_list": [
+      {
+        "full_name": "Proteomics Standards Initiative Mass Spectrometry Ontology",
+        "id": "MS",
+        "uri": "https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/v4.1.249/psi-ms.obo",
+        "version": "4.1.249"
+      },
+      {
+        "full_name": "Units of measurement ontology",
+        "id": "UO",
+        "uri": "http://purl.obolibrary.org/obo/uo/releases/2026-01-16/uo.obo",
+        "version": "2026-01-16"
+      },
+      {
+        "full_name": "mzPeak converter provisional controlled vocabulary",
+        "id": "MZP",
+        "uri": "https://raw.githubusercontent.com/okohlbacher/mzPeakConverter/main/cv/mzpeak.obo",
+        "version": "0.1.0"
+      }
+    ],
+    "version": "0.9.0",
+    "software_list": [
+      {
+        "id": "Bruker otofControl",
+        "parameters": [
+          {
+            "accession": "MS:1000692",
+            "name": "Bruker software",
+            "unit": null,
+            "value": null
+          }
+        ],
+        "version": "6.0.110.229-14868-vc141"
+      },
+      {
+        "id": "mzpeak-convert",
+        "parameters": [
+          {
+            "accession": "MS:1000799",
+            "name": "custom unreleased software tool",
+            "unit": null,
+            "value": "mzpeak-convert"
+          }
+        ],
+        "version": "0.13.0"
+      }
+    ],
+    "conversion_route": {
+      "reader": "timsrust",
+      "route": "ims-compact"
+    },
+    "run": {
+      "default_data_processing_id": "mzpeak_convert_conversion",
+      "default_instrument_id": 0,
+      "default_source_file_id": "analysis.tdf",
+      "id": "diaPASEF",
+      "start_time": "2019-08-24T18:27:02.345+02:00"
+    },
+    "scan_settings_list": [],
+    "data_processing_method_list": [
+      {
+        "id": "mzpeak_convert_conversion",
+        "methods": [
+          {
+            "order": 1,
+            "parameters": [
+              {
+                "accession": null,
+                "name": "conversion options",
+                "unit": null,
+                "value": "diaPASEF.d -o tdfgrid.mzpeak"
+              },
+              {
+                "accession": "MS:1000530",
+                "name": "file format conversion",
+                "unit": null,
+                "value": null
+              }
+            ],
+            "software_reference": "mzpeak-convert"
+          }
+        ]
+      },
+      {
+        "id": "mzpeak_convert_grid_layout",
+        "methods": [
+          {
+            "order": 1,
+            "parameters": [
+              {
+                "accession": null,
+                "name": "conversion options",
+                "unit": null,
+                "value": "--ims-grid --grid-encoding bss"
+              },
+              {
+                "accession": "MS:1000530",
+                "name": "file format conversion",
+                "unit": null,
+                "value": null
+              }
+            ],
+            "software_reference": "mzpeak-convert"
+          }
+        ]
+      }
+    ],
+    "file_description": {
+      "contents": [
+        {
+          "accession": "MS:1000579",
+          "name": "MS1 spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000580",
+          "name": "MSn spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000127",
+          "name": "centroid spectrum",
+          "unit": null,
+          "value": null
+        },
+        {
+          "accession": "MS:1000235",
+          "name": "total ion current chromatogram",
+          "unit": null,
+          "value": null
+        }
+      ],
+      "source_files": [
+        {
+          "id": "analysis.tdf",
+          "location": "file://",
+          "name": "analysis.tdf",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "6406479af440ac2140c7bb81d33c003ac600f7c8"
+            },
+            {
+              "accession": "MS:1002817",
+              "name": "Bruker TDF format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1002818",
+              "name": "Bruker TDF nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        },
+        {
+          "id": "analysis.tdf_bin",
+          "location": "file://",
+          "name": "analysis.tdf_bin",
+          "parameters": [
+            {
+              "accession": "MS:1000569",
+              "name": "SHA-1",
+              "unit": null,
+              "value": "d2d881dbb808568c74ecad34033bcab7c3a505c7"
+            },
+            {
+              "accession": "MS:1002817",
+              "name": "Bruker TDF format",
+              "unit": null,
+              "value": null
+            },
+            {
+              "accession": "MS:1002818",
+              "name": "Bruker TDF nativeID format",
+              "unit": null,
+              "value": null
+            }
+          ]
+        }
+      ]
+    },
+    "vendor_files": [
+      {
+        "action": "embed",
+        "bytes": 192512,
+        "content_encoding": "gzip",
+        "path": "vendor/analysis.tdf.gz"
+      },
+      {
+        "action": "drop",
+        "bytes": 815105,
+        "content_encoding": "identity",
+        "path": "analysis.tdf_bin"
+      }
+    ],
+    "transformations": [
+      "sort-by-mz",
+      "grid-encode:mz,ion_mobility"
+    ]
+  }
+}
