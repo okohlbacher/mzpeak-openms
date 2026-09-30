@@ -1234,10 +1234,12 @@ BOOST_AUTO_TEST_CASE(minimal_reads_an_ion_of_another_precursor_as_lean)
 // From Util::kParallelAttachMinSpectra spectra on, precursors and selected ions
 // are attached in four index ranges, three of them on threads of their own.
 // No bundled archive is that large, so this builds one from copies of
-// small.dir's spectrum metadata -- every key shifted, every id made unique,
-// the facet rows shuffled -- and every copy must read exactly as small.dir
-// does on the one-range path.  The copies have no peak data of their own, so
-// this reads through the metadata readers, not Spectra.
+// small.dir's spectrum metadata -- every index and source_index shifted
+// (precursor_index is left as is: the precursor/ion join only needs it to
+// agree between the two tables), every id made unique, the facet rows
+// shuffled -- and every copy must read exactly as small.dir does on the
+// one-range path.  The copies have no peak data of their own, so this reads
+// through the metadata readers, not Spectra.
 namespace {
 
 /// An archive's spectrum metadata members, opened for the Util readers and
