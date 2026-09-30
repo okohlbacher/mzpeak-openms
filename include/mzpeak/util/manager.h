@@ -74,7 +74,10 @@ public:
   std::unique_ptr<MzPeak::IO::File> read_member(const std::string&) const;
 
   /// The archive-wide decoded-row-group cache: size its budget to the number
-  /// of readers you run, read its stats to see what they cost.
+  /// of readers you run, read its stats to see what they cost.  Expect about
+  /// one decoded group per live reader (two with a separate peaks file) on
+  /// top of the budget: each Parquet from parquet() holds the last group it
+  /// read.  See RowGroupCache.
   RowGroupCache& row_group_cache() const { return *row_group_cache_; }
 
   /**

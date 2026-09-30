@@ -101,6 +101,9 @@ struct RowGroupBatches {
 /// a separate peaks file.  Readers on distinct groups hold that many groups
 /// whatever the budget, so size memory as budget + readers x the largest
 /// group (x2 with a separate peaks file); stats().held_bytes includes them.
+/// They also take room decoding ahead needs (see get()): once the groups
+/// readers hold fill the budget, decoding ahead stops, so size the budget
+/// above readers x the largest group to keep it.
 /// A caller that keeps a slice of a group (a Chromatogram does, through its
 /// decoder) keeps that group's buffers alive on top, evicted or not.
 ///
