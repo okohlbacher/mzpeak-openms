@@ -82,17 +82,27 @@ struct RowGroupBatches {
 /// The lock covers only the bookkeeping.
 ///
 /// Bounded by BYTES in two places, because eviction alone cannot hold a
-/// budget: a group still being decoded is not evictable, so N readers used to
-/// pin N groups however small the budget was, and memory followed the READER
-/// COUNT rather than the budget.
+/// budget: a group still being decoded is not evictable, so N readers
+/// decoding at once used to pin N groups however small the budget was.
 ///
 /// So a decode is also ADMITTED: a reader that misses waits until the bytes
 /// already in flight leave room for its group (half the budget is reserved
 /// for them, the rest stays available to hold decoded groups).  A single
 /// reader is always admitted, so a group larger than the budget still makes
-/// progress.  Peak decoded memory therefore follows THE BUDGET, whatever the
-/// thread count -- which is what lets a caller run every core on tagging
-/// while reading stays bounded.
+/// progress.
+///
+/// What the budget does NOT bound is the groups readers hold.  A group a
+/// reader still holds is never evicted (dropping it would free nothing), nor
+/// counted as room to decode ahead into.  And every Parquet that reads
+/// through this cache holds the last group it read -- its memo, see
+/// parquet.cpp -- until it reads another group or is destroyed, idle or not.
+/// So peak decoded memory is about the budget PLUS one group per live
+/// Parquet reading through the cache: one per reader, two for a reader with
+/// a separate peaks file.  Readers on distinct groups hold that many groups
+/// whatever the budget, so size memory as budget + readers x the largest
+/// group (x2 with a separate peaks file); stats().held_bytes includes them.
+/// A caller that keeps a slice of a group (a Chromatogram does, through its
+/// decoder) keeps that group's buffers alive on top, evicted or not.
 ///
 /// A budget smaller than the working set thrashes (a group is decoded again
 /// each time a reader comes back to it) but stays correct.
@@ -140,6 +150,12 @@ public:
               const Decode& decode,
               const Ahead* ahead = nullptr);
 
+  /// The bytes of decoded groups eviction holds the cache to, and the room
+  /// decodes are admitted into (half of it in flight at once).  Not a cap on
+  /// decoded memory: groups readers hold are never evicted, so they take it
+  /// past the budget, by about one group per live Parquet reading through
+  /// the cache (see the class comment).  Lowering it evicts at once, down to
+  /// what readers hold.
   void set_budget(std::size_t bytes);
   std::size_t budget() const;
 

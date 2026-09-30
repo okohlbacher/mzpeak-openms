@@ -95,10 +95,11 @@ RowGroupCache::Batches RowGroupCache::get(const std::string& file,
       return got;
     }
 
-    // Miss.  Admission control, and the reason peak memory follows the
-    // budget rather than the reader count: an entry being decoded is not
+    // Miss.  Admission control, and the reason the bytes in flight follow
+    // the budget rather than the reader count: an entry being decoded is not
     // evictable, so without this N readers pin N groups whatever the budget
-    // says.  Half the budget is reserved for decodes in flight; the rest
+    // says.  (Groups readers HOLD are not bounded by it; see the class
+    // comment.)  Half the budget is reserved for decodes in flight; the rest
     // stays available to HOLD decoded groups, which is what stops a fully
     // admitted cache from evicting everything it just decoded.
     //
