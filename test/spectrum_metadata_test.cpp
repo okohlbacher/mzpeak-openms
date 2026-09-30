@@ -26,6 +26,8 @@ directory of this repository.
 #define BOOST_TEST_MODULE SpectrumMetadata
 #include <boost/test/included/unit_test.hpp>
 
+#include <arrow/array/array_binary.h>
+#include <arrow/array/builder_binary.h>
 #include <arrow/array/builder_primitive.h>
 #include <arrow/io/file.h>
 #include <arrow/table.h>
@@ -35,16 +37,23 @@ directory of this repository.
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
+#include <random>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/open.h"
 #include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/util/arrow.h"
+#include "mzpeak/util/manager.h"
+#include "mzpeak/util/metadata_model.h"
 
 namespace {
 
@@ -1091,14 +1100,25 @@ BOOST_AUTO_TEST_CASE(minimal_holds_diapasef_without_its_ion_mobility)
 // fixture has.
 namespace {
 
-/// A member of an archive directory, read whole and closed again.
+/// A member of an archive directory, read whole into one chunk per column and
+/// closed again.
 std::shared_ptr<arrow::Table> read_member(const std::filesystem::path& path)
 {
   auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
   auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
   auto table = MzPeak::Util::read_table(*reader).ValueOrDie();
   BOOST_TEST_REQUIRE(file->Close().ok());
-  return table;
+  return table->CombineChunks().ValueOrDie();
+}
+
+/// The uint64 column @p name of @p table, which read_member left in one chunk.
+const arrow::UInt64Array& uint64_column(const arrow::Table& table, const char* name)
+{
+  const auto column = table.GetColumnByName(name);
+  BOOST_TEST_REQUIRE(column != nullptr);
+  BOOST_TEST_REQUIRE(column->num_chunks() == 1);
+  BOOST_TEST_REQUIRE(column->type()->id() == arrow::Type::UINT64);
+  return static_cast<const arrow::UInt64Array&>(*column->chunk(0));
 }
 
 /// Replaces the member at @p path with @p table.
@@ -1110,21 +1130,21 @@ void write_member(const std::filesystem::path& path, const arrow::Table& table)
   BOOST_TEST_REQUIRE(sink->Close().ok());
 }
 
-/// Rewrites the facet member @p name of @p archive with a copy of spectrum 2's
-/// row -- under @p precursor_index when one is given -- appended after the
-/// others, or in place of the original when @p in_place.
-void copy_spectrum_2_row(const std::filesystem::path& archive,
-                         const char* name,
-                         std::optional<uint64_t> precursor_index,
-                         bool in_place)
+/// Rewrites the facet member @p name of @p archive with a copy of spectrum
+/// @p spectrum's row -- under @p precursor_index when one is given -- appended
+/// after the others, or in place of the original when @p in_place.
+void copy_facet_row(const std::filesystem::path& archive,
+                    const char* name,
+                    uint64_t spectrum,
+                    std::optional<uint64_t> precursor_index,
+                    bool in_place)
 {
   const std::filesystem::path path(archive / name);
   const auto table = read_member(path);
-  const auto source = std::static_pointer_cast<arrow::UInt64Array>(
-      table->GetColumnByName("source_index")->chunk(0));
+  const auto& source = uint64_column(*table, "source_index");
   int64_t row = -1;
-  for (int64_t r = 0; r < source->length(); ++r)
-    if (source->IsValid(r) && source->Value(r) == 2) row = r;
+  for (int64_t r = 0; r < source.length(); ++r)
+    if (source.IsValid(r) && source.Value(r) == spectrum) row = r;
   BOOST_TEST_REQUIRE(row >= 0);
 
   auto copy = table->Slice(row, 1);
@@ -1157,7 +1177,7 @@ BOOST_AUTO_TEST_CASE(minimal_reads_a_second_precursor_as_lean)
   namespace fs = std::filesystem;
   Scratch scratch("mzp-test-minimal-fallback");
   fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
-  copy_spectrum_2_row(scratch.path, "spectra_metadata_precursors.parquet", 99, false);
+  copy_facet_row(scratch.path, "spectra_metadata_precursors.parquet", 2, 99, false);
 
   auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
   auto s2 = spectra[2];
@@ -1175,8 +1195,8 @@ BOOST_AUTO_TEST_CASE(minimal_reads_a_second_selected_ion_as_lean)
   namespace fs = std::filesystem;
   Scratch scratch("mzp-test-minimal-second-ion");
   fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
-  copy_spectrum_2_row(scratch.path, "spectra_metadata_selected_ions.parquet",
-                      std::nullopt, false);
+  copy_facet_row(scratch.path, "spectra_metadata_selected_ions.parquet", 2,
+                 std::nullopt, false);
 
   auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
   auto s2 = spectra[2];
@@ -1196,7 +1216,7 @@ BOOST_AUTO_TEST_CASE(minimal_reads_an_ion_of_another_precursor_as_lean)
   namespace fs = std::filesystem;
   Scratch scratch("mzp-test-minimal-foreign-ion");
   fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
-  copy_spectrum_2_row(scratch.path, "spectra_metadata_selected_ions.parquet", 99, true);
+  copy_facet_row(scratch.path, "spectra_metadata_selected_ions.parquet", 2, 99, true);
 
   auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
   auto s2 = spectra[2];
@@ -1208,4 +1228,369 @@ BOOST_AUTO_TEST_CASE(minimal_reads_an_ion_of_another_precursor_as_lean)
   // A holder, not a copy of the precursor row.
   BOOST_TEST(!precursors[1].isolation_window.target_mz.has_value());
   require_minimal_equals_lean(scratch.path.string());
+}
+
+/******************************************************************************/
+// From Util::kParallelAttachMinSpectra spectra on, precursors and selected ions
+// are attached in four index ranges, three of them on threads of their own.
+// No bundled archive is that large, so this builds one from copies of
+// small.dir's spectrum metadata -- every key shifted, every id made unique,
+// the facet rows shuffled -- and every copy must read exactly as small.dir
+// does on the one-range path.  The copies have no peak data of their own, so
+// this reads through the metadata readers, not Spectra.
+namespace {
+
+/// An archive's spectrum metadata members, opened for the Util readers and
+/// closed when this goes.
+struct MetadataMembers {
+  std::shared_ptr<MzPeak::Util::Manager> manager;
+  std::unique_ptr<MzPeak::Util::Parquet> primary, scans, precursors, selected_ions;
+
+  explicit MetadataMembers(const std::filesystem::path& archive)
+      : manager(MzPeak::open(archive).manager())
+  {
+    using MzPeak::Schema::DataKind;
+    const auto member =
+        [this](DataKind::Type kind) -> std::unique_ptr<MzPeak::Util::Parquet> {
+      const auto file = manager->find_file(MzPeak::Schema::EntityType::Spectrum, kind);
+      return file == manager->files().end() ? nullptr : manager->parquet(*file);
+    };
+    primary = member(DataKind::Metadata);
+    scans = member(DataKind::Scans);
+    precursors = member(DataKind::Precursors);
+    selected_ions = member(DataKind::SelectedIons);
+  }
+
+  MzPeak::Util::SpectraMetadataFiles files() const
+  {
+    return {primary.get(), scans.get(), precursors.get(), selected_ions.get()};
+  }
+};
+
+MzPeak::Util::IndexMap<MzPeak::SpectrumMetadata>
+read_metadata(const std::filesystem::path& archive, MzPeak::MetadataDetail detail)
+{
+  const MetadataMembers members(archive);
+  return MzPeak::Util::read_spectra_metadata(members.files(), detail);
+}
+
+std::optional<MzPeak::Util::IndexMap<MzPeak::MinimalSpectrumMetadata>>
+read_minimal_metadata(const std::filesystem::path& archive)
+{
+  const MetadataMembers members(archive);
+  return MzPeak::Util::read_minimal_spectra_metadata(members.files());
+}
+
+template <typename T> void put(std::ostream& out, const char* name, const T& value)
+{
+  out << name << '=' << value << ' ';
+}
+
+template <typename T>
+void put(std::ostream& out, const char* name, const std::optional<T>& value)
+{
+  out << name << '=';
+  if (value) out << *value;
+  else
+    out << "null";
+  out << ' ';
+}
+
+void put(std::ostream& out, const char* name, const std::vector<MzPeak::CvParam>& params)
+{
+  out << name << "=[ ";
+  for (const auto& p : params) {
+    put(out, "accession", p.accession);
+    put(out, "name", p.name);
+    put(out, "value", p.value);
+    put(out, "unit", p.unit);
+  }
+  out << "] ";
+}
+
+/// Every field of @p m as text, floating point to the bit, so two records
+/// compare -- and a difference reads -- as one string.
+std::string dump(const MzPeak::SpectrumMetadata& m)
+{
+  std::ostringstream out;
+  out << std::hexfloat;
+  put(out, "index", m.index);
+  put(out, "id", m.id);
+  put(out, "ms_level", m.ms_level);
+  put(out, "retention_time", m.retention_time);
+  put(out, "polarity", m.polarity);
+  put(out, "representation", m.representation);
+  put(out, "number_of_data_points", m.number_of_data_points);
+  put(out, "number_of_peaks", m.number_of_peaks);
+  put(out, "base_peak_mz", m.base_peak_mz);
+  put(out, "base_peak_intensity", m.base_peak_intensity);
+  put(out, "total_ion_current", m.total_ion_current);
+  put(out, "spectrum_type", m.spectrum_type);
+  put(out, "lowest_observed_mz", m.lowest_observed_mz);
+  put(out, "highest_observed_mz", m.highest_observed_mz);
+  put(out, "data_processing_ref", m.data_processing_ref);
+  put(out, "parameters", m.parameters);
+  for (const auto& a : m.auxiliary_arrays) {
+    put(out, "auxiliary_array", a.name.accession);
+    put(out, "data_type", a.data_type);
+    put(out, "compression", a.compression);
+    put(out, "unit", a.unit);
+    put(out, "parameters", a.parameters);
+    put(out, "data_processing_ref", a.data_processing_ref);
+    for (float v : a.values) put(out, "value", v);
+    put(out, "values_decoded", a.values_decoded);
+  }
+  for (const auto& p : m.precursors) {
+    put(out, "precursor_index", p.precursor_index);
+    put(out, "precursor_id", p.precursor_id);
+    put(out, "target_mz", p.isolation_window.target_mz);
+    put(out, "lower_offset", p.isolation_window.lower_offset);
+    put(out, "upper_offset", p.isolation_window.upper_offset);
+    put(out, "isolation_window", p.isolation_window.parameters);
+    put(out, "activation", p.activation_parameters);
+    for (const auto& ion : p.selected_ions) {
+      put(out, "selected_ion_mz", ion.selected_ion_mz);
+      put(out, "charge_state", ion.charge_state);
+      put(out, "intensity", ion.intensity);
+      put(out, "ion_mobility_value", ion.ion_mobility_value);
+      put(out, "ion_mobility_type", ion.ion_mobility_type);
+      put(out, "ion_mobility_lower_limit", ion.ion_mobility_lower_limit);
+      put(out, "ion_mobility_upper_limit", ion.ion_mobility_upper_limit);
+      put(out, "selected_ion", ion.parameters);
+    }
+  }
+  put(out, "scan_parameters", m.scan_parameters);
+  for (const auto& w : m.scan_windows) {
+    put(out, "lower_limit", w.lower_limit);
+    put(out, "upper_limit", w.upper_limit);
+    put(out, "scan_window", w.parameters);
+  }
+  put(out, "ion_mobility", m.ion_mobility);
+  put(out, "ion_mobility_type", m.ion_mobility_type);
+  for (double beta : m.mz_delta_model) put(out, "mz_delta_model", beta);
+  return out.str();
+}
+
+/// What MetadataDetail::Minimal keeps of @p m: the MinimalSpectrumMetadata
+/// of the same spectrum, expanded.
+MzPeak::SpectrumMetadata minimal_fields(const MzPeak::SpectrumMetadata& m)
+{
+  MzPeak::SpectrumMetadata kept;
+  kept.index = m.index;
+  kept.id = m.id;
+  kept.ms_level = m.ms_level;
+  kept.retention_time = m.retention_time;
+  kept.polarity = m.polarity;
+  kept.representation = m.representation;
+  kept.number_of_data_points = m.number_of_data_points;
+  kept.number_of_peaks = m.number_of_peaks;
+  kept.mz_delta_model = m.mz_delta_model;
+  for (const auto& p : m.precursors) {
+    auto& precursor = kept.precursors.emplace_back();
+    precursor.precursor_index = p.precursor_index;
+    precursor.isolation_window.target_mz = p.isolation_window.target_mz;
+    precursor.isolation_window.lower_offset = p.isolation_window.lower_offset;
+    precursor.isolation_window.upper_offset = p.isolation_window.upper_offset;
+    for (const auto& ion : p.selected_ions) {
+      auto& kept_ion = precursor.selected_ions.emplace_back();
+      kept_ion.selected_ion_mz = ion.selected_ion_mz;
+      kept_ion.charge_state = ion.charge_state;
+      kept_ion.intensity = ion.intensity;
+    }
+  }
+  return kept;
+}
+
+/// The id copy @p k gives a spectrum.
+std::string replica_id(const std::string& id, uint64_t k)
+{
+  return id + " copy=" + std::to_string(k);
+}
+
+/// @p table with every value of its uint64 column @p name raised by @p offset.
+std::shared_ptr<arrow::Table> shifted(const std::shared_ptr<arrow::Table>& table,
+                                      const char* name,
+                                      uint64_t offset)
+{
+  const auto& values = uint64_column(*table, name);
+  arrow::UInt64Builder builder;
+  bool ok = true;
+  for (int64_t r = 0; r < values.length(); ++r)
+    ok = (values.IsNull(r) ? builder.AppendNull()
+                           : builder.Append(values.Value(r) + offset))
+             .ok() &&
+         ok;
+  BOOST_TEST_REQUIRE(ok);
+  const int column = table->schema()->GetFieldIndex(name);
+  return table
+      ->SetColumn(column, table->field(column),
+                  std::make_shared<arrow::ChunkedArray>(builder.Finish().ValueOrDie()))
+      .ValueOrDie();
+}
+
+/// @p table with copy @p k's id on every row.
+std::shared_ptr<arrow::Table> renamed(const std::shared_ptr<arrow::Table>& table,
+                                      uint64_t k)
+{
+  const int column = table->schema()->GetFieldIndex("id");
+  BOOST_TEST_REQUIRE(column >= 0);
+  const auto ids =
+      std::dynamic_pointer_cast<arrow::LargeStringArray>(table->column(column)->chunk(0));
+  BOOST_TEST_REQUIRE(ids != nullptr);
+  arrow::LargeStringBuilder builder;
+  bool ok = true;
+  for (int64_t r = 0; r < ids->length(); ++r)
+    ok = (ids->IsNull(r) ? builder.AppendNull()
+                         : builder.Append(replica_id(std::string(ids->GetView(r)), k)))
+             .ok() &&
+         ok;
+  BOOST_TEST_REQUIRE(ok);
+  return table
+      ->SetColumn(column, table->field(column),
+                  std::make_shared<arrow::ChunkedArray>(builder.Finish().ValueOrDie()))
+      .ValueOrDie();
+}
+
+/// Appends each row of @p table whose @p key is below @p limit to @p rows, as a
+/// table of its own.
+void add_rows_below(const std::shared_ptr<arrow::Table>& table,
+                    const char* key,
+                    uint64_t limit,
+                    std::vector<std::shared_ptr<arrow::Table>>& rows)
+{
+  const auto& keys = uint64_column(*table, key);
+  for (int64_t r = 0; r < keys.length(); ++r)
+    if (keys.IsValid(r) && keys.Value(r) < limit) rows.push_back(table->Slice(r, 1));
+}
+
+/// Fisher-Yates over mt19937_64's raw output: the same order on every
+/// platform, which std::shuffle and the standard distributions do not promise.
+void shuffle(std::vector<std::shared_ptr<arrow::Table>>& rows, uint64_t seed)
+{
+  std::mt19937_64 engine(seed);
+  for (std::size_t i = rows.size(); i > 1; --i)
+    std::swap(rows[i - 1], rows[static_cast<std::size_t>(engine() % i)]);
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(four_range_attach_reads_like_one_range)
+{
+  namespace fs = std::filesystem;
+  using MzPeak::MetadataDetail;
+  using MzPeak::Util::kParallelAttachMinSpectra;
+  const fs::path source("../test/files/small.dir");
+  Scratch scratch("mzp-test-four-range-attach");
+  fs::copy(source, scratch.path, fs::copy_options::recursive);
+
+  // The one-range reference: small.dir itself, keyed 0 .. stride-1.
+  const auto full = read_metadata(source, MetadataDetail::Full);
+  const auto lean = read_metadata(source, MetadataDetail::Lean);
+  const auto stride = static_cast<uint64_t>(std::ranges::distance(full));
+  BOOST_TEST_REQUIRE(stride < kParallelAttachMinSpectra);
+  for (uint64_t k = 0; k < stride; ++k) BOOST_TEST_REQUIRE((full.find(k) != full.end()));
+  const auto carries_precursor = [&](uint64_t index) {
+    return !full.find(index % stride)->second.precursors.empty();
+  };
+
+  // Whole copies to pass the threshold, then the first `extra` spectra of one
+  // more: the fewest that put a spectrum with precursors on both sides of
+  // every range boundary, t*n/4 - 1 | t*n/4, so none is crossed untested.
+  const uint64_t copies = kParallelAttachMinSpectra / stride + 1;
+  const auto straddled = [&](uint64_t n) {
+    for (uint64_t t = 1; t < 4; ++t)
+      if (!carries_precursor(t * n / 4 - 1) || !carries_precursor(t * n / 4)) return false;
+    return true;
+  };
+  uint64_t extra = 0;
+  while (extra < stride && !straddled(copies * stride + extra)) ++extra;
+  BOOST_TEST_REQUIRE(extra < stride);
+  const uint64_t n = copies * stride + extra;
+  // The four-range path, or this proves nothing.
+  BOOST_TEST_REQUIRE(n >= kParallelAttachMinSpectra);
+
+  std::map<std::string, std::shared_ptr<arrow::Table>> written;
+  uint64_t seed = 20260930;
+  for (const auto& [name, key] :
+       {std::pair{"spectra_metadata.parquet", "index"},
+        std::pair{"spectra_metadata_scans.parquet", "source_index"},
+        std::pair{"spectra_metadata_precursors.parquet", "source_index"},
+        std::pair{"spectra_metadata_selected_ions.parquet", "source_index"}}) {
+    const bool primary = std::string_view(key) == "index";
+    const auto original = read_member(scratch.path / name);
+    std::vector<std::shared_ptr<arrow::Table>> rows;
+    for (uint64_t k = 0; k <= copies; ++k) {
+      auto copy = shifted(original, key, k * stride);
+      if (primary) copy = renamed(copy, k);
+      add_rows_below(copy, key, k * stride + (k < copies ? stride : extra), rows);
+    }
+    if (!primary) shuffle(rows, seed++);
+    const auto table = arrow::ConcatenateTables(rows).ValueOrDie()->CombineChunks().ValueOrDie();
+    write_member(scratch.path / name, *table);
+    written[name] = table;
+  }
+
+  // Full and Lean: every copy is small.dir, bar its index and id.
+  const auto replica_lean = read_metadata(scratch.path, MetadataDetail::Lean);
+  for (auto detail : {MetadataDetail::Full, MetadataDetail::Lean}) {
+    const auto& reference = detail == MetadataDetail::Full ? full : lean;
+    const auto replica = detail == MetadataDetail::Full
+                             ? read_metadata(scratch.path, MetadataDetail::Full)
+                             : replica_lean;
+    BOOST_TEST_REQUIRE(static_cast<uint64_t>(std::ranges::distance(replica)) == n);
+    for (const auto& [index, got] : replica) {
+      MzPeak::SpectrumMetadata want = reference.find(index % stride)->second;
+      want.index = index;
+      want.id = replica_id(want.id, index / stride);
+      BOOST_TEST_CONTEXT((detail == MetadataDetail::Full ? "Full" : "Lean")
+                         << " spectrum " << index)
+      {
+        BOOST_TEST(dump(got) == dump(want));
+      }
+    }
+  }
+
+  // Minimal holds every spectrum, and equals Lean.
+  {
+    const auto minimal = read_minimal_metadata(scratch.path);
+    BOOST_TEST_REQUIRE(minimal.has_value());
+    BOOST_TEST_REQUIRE(static_cast<uint64_t>(std::ranges::distance(*minimal)) == n);
+    for (const auto& [index, got] : *minimal) {
+      BOOST_TEST_CONTEXT("Minimal spectrum " << index)
+      {
+        BOOST_TEST(dump(got.expand()) == dump(minimal_fields(replica_lean.find(index)->second)));
+      }
+    }
+  }
+
+  // A spectrum Minimal cannot hold makes it fall back from any range, whose
+  // own thread then clears the verdict: a second precursor row in the last
+  // range, and separately a second selected ion in a middle one.  Lean, which
+  // the caller reads instead, keeps both.
+  const auto a_spectrum_in_range = [&](uint64_t t) {
+    uint64_t index = t * n / 4 + n / 8;
+    while (!carries_precursor(index)) ++index;
+    BOOST_TEST_REQUIRE(index < (t + 1) * n / 4);
+    return index;
+  };
+  {
+    const char* name = "spectra_metadata_precursors.parquet";
+    const uint64_t spectrum = a_spectrum_in_range(3);
+    copy_facet_row(scratch.path, name, spectrum, 99, false);
+    BOOST_TEST(!read_minimal_metadata(scratch.path).has_value());
+    const auto fallback = read_metadata(scratch.path, MetadataDetail::Lean);
+    BOOST_TEST(fallback.find(spectrum)->second.precursors.size() == 2u);
+    write_member(scratch.path / name, *written[name]);
+  }
+  {
+    const char* name = "spectra_metadata_selected_ions.parquet";
+    const uint64_t spectrum = a_spectrum_in_range(2);
+    copy_facet_row(scratch.path, name, spectrum, std::nullopt, false);
+    BOOST_TEST(!read_minimal_metadata(scratch.path).has_value());
+    const auto fallback = read_metadata(scratch.path, MetadataDetail::Lean);
+    const auto& precursors = fallback.find(spectrum)->second.precursors;
+    BOOST_TEST_REQUIRE(precursors.size() == 1u);
+    BOOST_TEST(precursors[0].selected_ions.size() == 2u);
+    write_member(scratch.path / name, *written[name]);
+  }
 }

@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -103,6 +104,14 @@ read_spectra_metadata(const SpectraMetadataFiles&, MetadataDetail detail);
  */
 std::optional<IndexMap<MinimalSpectrumMetadata>>
 read_minimal_spectra_metadata(const SpectraMetadataFiles&);
+
+/**
+ * From this many spectra on, the spectrum metadata readers above attach
+ * precursors and selected ions in four contiguous index ranges, three of them
+ * on threads of their own; below it, in one range on the calling thread.  The
+ * result is the same either way.
+ */
+inline constexpr std::size_t kParallelAttachMinSpectra = 1024;
 
 /**
  * The Parquet files carrying one chromatogram set's metadata.  As with
