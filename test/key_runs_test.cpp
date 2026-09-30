@@ -48,6 +48,7 @@ directory of this repository.
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
+#include "mzpeak/util/arrow.h"
 #include "mzpeak/util/key_runs.h"
 #include "mzpeak/util/manager.h"
 #include "mzpeak/util/parquet.h"
@@ -585,8 +586,7 @@ BOOST_AUTO_TEST_CASE(inconsistent_metadata_counts_are_never_trusted)
   // Same rows, same values; only the key's split between spectra 1 and 2 moves.
   auto file = value(arrow::io::ReadableFile::Open((source / "spectra_data.parquet").string()));
   auto reader = value(parquet::arrow::OpenFile(file, arrow::default_memory_pool()));
-  std::shared_ptr<arrow::Table> table;
-  check(reader->ReadTable(&table));
+  std::shared_ptr<arrow::Table> table = value(Util::read_table(*reader));
   auto point = std::static_pointer_cast<arrow::StructArray>(
       value(arrow::Concatenate(table->column(0)->chunks())));
   BOOST_TEST_REQUIRE(point->length() == 20);
