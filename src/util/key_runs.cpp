@@ -61,7 +61,7 @@ KeyRuns::rows(const any_value_type& value) const
 namespace
 {
 /// The declared-sorted key leaf, when it has a shape runs can stand in for.
-/// Structure only: whether it is sorted and null-free is for the data to prove.
+/// Structure only: whether it is sorted and null-free is for scan_key_runs().
 std::optional<int32_t> key_leaf_shape(const parquet::RowGroupMetaData& group,
                                       const parquet::SchemaDescriptor& schema)
 {
@@ -108,8 +108,9 @@ std::optional<int32_t> run_key_leaf(const parquet::RowGroupMetaData& group,
   if (!leaf.has_value()) return std::nullopt;
 
   // For SIZING, a nullable key must also be SAID to have no nulls.  The decode
-  // does not rely on this (it proves it from the data), so a footer without
-  // statistics only makes the charge an over-count, never an under-count.
+  // takes the same word when the footer gives it, and reads the definition
+  // levels when it does not, so a footer without statistics only makes the
+  // charge an over-count, never an under-count.
   const parquet::ColumnDescriptor* column = schema.Column(*leaf);
   if (column->max_definition_level() > 0) {
     auto chunk = group.ColumnChunk(*leaf);
@@ -159,28 +160,48 @@ std::shared_ptr<KeyRuns> scan_key_runs(parquet::arrow::FileReader& reader, int32
     return nullptr;
   }
 
+  // A nullable key must have no null, and reading its VALUES alone does not
+  // show that.  A chunk stores one value per non-null row, but a dictionary
+  // page may end its indices in a bit-packed group zero-padded to eight, and
+  // the padding reads back as the dictionary's first value: `rows` values
+  // from a chunk with a null.  So the footer's null count decides when the
+  // footer has one, as it does for sizing (run_key_leaf()): above zero keeps
+  // the column, and zero is believed -- a footer that says zero and holds a
+  // null is trusted here as it is there.  Without a count, the definition
+  // levels are read with the values, and a row without a value keeps the
+  // column.  Decoding the levels was a third of the scan, so only a footer
+  // without a count pays for it.
+  constexpr int64_t kChunk = 64 * 1024;
+  std::vector<int16_t> levels;
+  if (descriptor->max_definition_level() > 0) {
+    const auto chunk = row_group->ColumnChunk(*leaf);
+    std::shared_ptr<parquet::Statistics> stats;
+    if (chunk && chunk->is_stats_set()) stats = chunk->statistics();
+    if (stats && stats->HasNullCount()) {
+      if (stats->null_count() != 0) return nullptr;
+    } else {
+      levels.resize(kChunk);
+    }
+  }
+
   // The column itself, 64 K values at a time into one reused buffer: it is
   // never materialised, and a sorted key's DELTA_BINARY_PACKED pages decode to
   // the buffer at memory speed.
-  //
-  // VALUES ONLY, no definition levels, even for a nullable key: decoding the
-  // levels was a third of the scan, and the proof of "no nulls" does not need
-  // them.  A chunk stores one value per NON-null row, so reading exactly
-  // `rows` values out of a `rows`-row chunk proves there is no null; with one,
-  // the value stream runs out first -- the reader throws, or the count comes
-  // up short -- and the group keeps its column.
   try {
     auto column = std::static_pointer_cast<parquet::Int64Reader>(
         file.RowGroup(group)->Column(*leaf));
-    constexpr int64_t kChunk = 64 * 1024;
     std::vector<int64_t> values(kChunk);
     const int64_t* data = values.data();
 
     int64_t row = 0;
     while (row < rows) {
       int64_t read = 0;
-      const int64_t n = column->ReadBatch(std::min(kChunk, rows - row), nullptr, nullptr,
+      const int64_t n = column->ReadBatch(std::min(kChunk, rows - row),
+                                          levels.empty() ? nullptr : levels.data(), nullptr,
                                           values.data(), &read);
+      // With levels, `n` counts rows and `read` only those with a value, so a
+      // null makes the two differ.  A chunk that runs out short of `rows`
+      // fails the row count below.
       if (n <= 0 || read != n) break;
 
       int64_t i = 0;
@@ -215,8 +236,9 @@ std::shared_ptr<KeyRuns> scan_key_runs(parquet::arrow::FileReader& reader, int32
     }
     if (row != rows) return nullptr;
   } catch (const std::exception&) {
-    // A null ran the values out (see above), or the chunk is damaged: the full
-    // decode meets the same fault, if it is one, and reports it as it always has.
+    // The values ran out under a null the footer denied, or the chunk is
+    // damaged: the full decode meets the same fault, if it is one, and
+    // reports it as it always has.
     return nullptr;
   }
 
