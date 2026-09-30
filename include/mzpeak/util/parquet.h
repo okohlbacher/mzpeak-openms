@@ -132,8 +132,9 @@ public:
    * file, 13,009 decodes where 21 would do.  This hands back the same decoded
    * batches to every caller that lands in the group.
    *
-   * Only the most recent few groups are kept: a decoded group is tens of
-   * megabytes, and a forward pass never looks back.
+   * Only the most recent few groups are kept -- two without a shared
+   * RowGroupCache, what its budget allows with one: a decoded group is tens
+   * of megabytes, and a forward pass never looks back.
    *
    * Returned by shared_ptr, not by reference: the cache evicts, and a reference
    * into it would dangle the moment a caller fetched a second group while still
@@ -143,7 +144,16 @@ public:
    * anything retaining such a slice keeps the whole decoded row group alive.
    * Spectrum copies its values out and drops the slice; Chromatogram keeps its
    * decoder, and so keeps a group resident for as long as the caller holds it.
-   * That is bounded by how many entities the caller holds, not by the run.
+   * That is bounded by how many entities the caller holds, not by the run, and
+   * comes on top of a shared cache's budget.
+   *
+   * @note Reading through a shared RowGroupCache, this object also HOLDS the
+   * last group it returned -- a memo, so asking for that group again skips
+   * the cache -- until it returns another group or is destroyed, idle or not.
+   * The cache neither evicts a held group nor counts it as room, so every
+   * live Parquet reading through it keeps about one group on top of the
+   * cache's budget: readers on distinct groups hold that many groups,
+   * whatever the budget.  See RowGroupCache.
    *
    * @note A group whose declared-sorted key proves sorted is decoded WITHOUT
    * that column: RowGroupBatches::key_runs holds it as runs and a null
