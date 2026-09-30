@@ -25,6 +25,8 @@ CV type_to_cv(Transform::Type t)
     return CV("MS", "1002314");
   case Transform::NumpressPIC:
     return CV("MS", "1002313");
+  case Transform::GridEncoding:
+    return CV("MS", "1003826");
   }
 
   std::unreachable();
@@ -42,6 +44,8 @@ Transform::value_type to_value_type(const CV& cv)
       return Transform::NumpressSLOF;
     } else if (cv.accession() == "1002313") {
       return Transform::NumpressPIC;
+    } else if (cv.accession() == "1003826") {
+      return Transform::GridEncoding;
     }
   }
 
@@ -103,6 +107,10 @@ bool Transform::needs_delta_model() const noexcept
         case NumpressSLOF:
           return false;
         case NumpressPIC:
+          return false;
+        case GridEncoding:
+          // Grid indices reconstruct every coordinate outright; there
+          // are no null positions to interpolate across.
           return false;
         }
 

@@ -38,6 +38,14 @@ public:
     ///
     /// Compression using MS-Numpress linear prediction compression.
     NumpressLinear,
+
+    /// MS:1003826
+    ///
+    /// Coordinate grid encoding: the chunk's main-axis coordinates are
+    /// not stored.  A `chunk_transform` STRUCT column holds integer
+    /// grid indices plus the model that maps them back to
+    /// coordinates.  See MzPeak::Data::GridModel.
+    GridEncoding,
   };
 
   // Internal storage type.

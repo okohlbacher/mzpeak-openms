@@ -190,10 +190,27 @@ deps = [
 # also links msnumpress.  link_whole restores the old property.
 deps_a = deps + [numpress.get_variable('msnumpres_cpp_lib_a')]
 
+# The coordinate grid models (MS:1003826) reproduce the reference
+# implementation's arithmetic operation for operation, so that a grid-encoded
+# archive decodes to the same values the writer started from.  A fused
+# multiply-add rounds once where the reference rounds twice, which moves the
+# last bits of an m/z -- and the compilers disagree on when to fuse: clang
+# contracts within a statement by default, gcc contracts across statements,
+# and only an explicit flag settles it.  Built apart so the rest of the
+# library keeps whatever the toolchain's default is.
+fp_exact_args = compiler.get_supported_arguments(['-ffp-contract=off',
+                                                  '/fp:precise'])
+
+libmzpeak_grid = static_library(
+  'mzpeak_grid', 'src/data/grid.cpp',
+  dependencies : deps,
+  cpp_args : fp_exact_args,
+  include_directories : include)
+
 libmzpeak_a = static_library(
   'mzpeak', lib_sources,
   dependencies : deps_a,
-  link_whole : numpress.get_variable('cpp_lib_a'),
+  link_whole : [numpress.get_variable('cpp_lib_a'), libmzpeak_grid],
   include_directories : include,
   install : true)
 
@@ -209,6 +226,7 @@ else
   libmzpeak_so = library(
     'mzpeak', lib_sources,
     dependencies : deps_so,
+    link_whole : libmzpeak_grid,
     include_directories : include,
     install : true)
 

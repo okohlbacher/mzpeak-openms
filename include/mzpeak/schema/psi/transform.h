@@ -47,6 +47,14 @@ public:
     ///
     /// Compression using MS-Numpress positive integer compression.
     NumpressPIC,
+
+    /// MS:1003826
+    ///
+    /// Coordinate grid encoding.  The column this transform names is a
+    /// STRUCT of `{grid_type, parameters, indices}`: integer grid
+    /// indices plus the model that maps them back to coordinates.  See
+    /// MzPeak::Data::GridModel.
+    GridEncoding,
   };
 
   /// The transform value can be a type as described by the Type enum,
