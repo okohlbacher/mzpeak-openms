@@ -88,7 +88,23 @@ template <typename F> int64_t visit(const std::shared_ptr<arrow::Array>& ary, F 
 
   auto type = ary->type_id();
 
-  if (type == arrow::Type::LIST) {
+  if (type == arrow::Type::STRUCT) {
+    // A chunk_transform struct column (a coordinate grid: `{grid_type,
+    // parameters, indices}`).  Each row is one chunk, so hand the
+    // transformer a one-row window it can read the members off.
+    //
+    // Unlike the list arms, NULL rows are visited too.  A file may mix
+    // grid-encoded chunks with plainly encoded ones in the same column,
+    // and there the struct is null exactly where the chunk's values live
+    // in `chunk_values` instead.  Skipping those rows would silently drop
+    // their peaks, so the decision belongs to the transformer, which can
+    // see the row's chunk_encoding.
+    for (int64_t index : std::views::iota(0, ary->length())) {
+      std::invoke(f, index, ary->Slice(index, 1));
+    }
+
+    return ary->length();
+  } else if (type == arrow::Type::LIST) {
     return go(std::static_pointer_cast<arrow::ListArray>(ary));
   } else if (type == arrow::Type::FIXED_SIZE_LIST) {
     return go(std::static_pointer_cast<arrow::FixedSizeListArray>(ary));

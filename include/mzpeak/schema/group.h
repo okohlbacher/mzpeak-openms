@@ -68,6 +68,12 @@ public:
       /// Metadata parameters,
       Params,
 
+      /// Elements are a struct of several named children, read as a
+      /// whole through the Arrow StructArray rather than as a single
+      /// leaf column.  A `chunk_transform` coordinate grid column
+      /// (`{grid_type, parameters, indices}`) is one.
+      Struct,
+
       /// No clue.
       Unknown,
     };

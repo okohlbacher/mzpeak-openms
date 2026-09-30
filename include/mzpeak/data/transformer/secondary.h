@@ -9,6 +9,7 @@ directory of this repository.
 #pragma once
 
 #include "mzpeak/data/array_index.h"
+#include "mzpeak/data/grid_chunk.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Data::Transformer::Secondary {
@@ -72,6 +73,19 @@ Decoder<T>::operator()(int64_t, const std::shared_ptr<arrow::Array>& src) const
 
   case Schema::PSI::Transform::NumpressPIC:
     return Util::Numpress::decode_pic_convert<T>(src);
+
+  case Schema::PSI::Transform::GridEncoding: {
+    auto out = std::make_shared<std::vector<T>>();
+
+    // A null row contributes nothing, which is what the reference does
+    // (it decodes only the non-null rows and concatenates them).
+    if (src == nullptr || src->IsNull(0)) return out;
+
+    // A secondary axis is not sorted, so its indices are stored
+    // absolutely -- only the main axis is delta-coded.
+    grid_decode<T>(grid_chunk_at(src, dim_name_), false, *out);
+    return out;
+  }
   }
 
   std::unreachable();

@@ -195,6 +195,22 @@ void Group::make_fields(const parquet::schema::GroupNode& node,
         if (field->name() == "parameters") {
           field->kind_ = Group::Field::Kind::Params;
         }
+      } else if (!is_root_) {
+        // A struct with several named children.  Registered so it can be
+        // projected and reached through Executor::array(), which boxes it
+        // via relative_index() -- the Arrow child ordinal, which `i` is --
+        // and hands the whole StructArray to the decoder.  A coordinate
+        // grid column (MS:1003826) is such a struct; its own children are
+        // read off the StructArray by name and never need Fields here.
+        //
+        // Nothing reads a leaf through this field, so the fact that
+        // `offset + i` counts children rather than parquet leaves (a
+        // multi-leaf struct makes the two diverge) does not matter: the
+        // value serves only as this field's key in a Slice.
+        std::shared_ptr<Field> field =
+            std::make_shared<Field>(grp->name(), i, offset + i);
+        link(field);
+        field->kind_ = Group::Field::Kind::Struct;
       }
     }
   }
