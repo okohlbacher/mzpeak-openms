@@ -16,6 +16,17 @@ forward/reverse + cross-impl harness ([e2e-testing.md](e2e-testing.md)).
   through one code path; the writer emits the split layout and the current Rust
   reference reads it. **T2 and T5 both PASS.** See
   [e2e-testing.md](e2e-testing.md#split-metadata-layout-the-v2-layout).
+- **Coordinate grid encoding (MS:1003826), reader.** Chunks that store integer
+  grid indices instead of coordinates are read, for all four models the
+  reference defines: linear (MS:1003824), square root linear (MS:1003825) and
+  the Bruker timsTOF m/z (MS:9999002) and ion mobility (MS:9999001)
+  calibrations. Main-axis and secondary (ion mobility) grids both, any number of
+  chunks per spectrum, and columns that mix grid with non-grid chunks. Decodes
+  bit-identically to the same acquisition written out in full — 291,453 of
+  291,453 peaks, m/z, intensity and mobility alike. Pinned by
+  `test/grid_test.cpp` against `test/files/grid_diapasef.dir`. See
+  [spec-compliance.md](spec-compliance.md) for the exactness argument and the
+  one residual limitation.
 - **Reader correctness** (each validated against the Rust reference):
   null-marked m/z now reconstructed from its own adjacent run (was ~2.15 Da out
   on every profile spectrum); null-marked intensity reads as 0 rather than
@@ -100,12 +111,6 @@ pyarrow BEFORE this reader was pointed at it.
 
 ## Backlog
 
-- **Grid encoding is not supported.** The prototype added a `grid` buffer
-  encoding (`e62e18c`) beside `point` and `chunk`. `group_name_to_layout` maps
-  it to `Layout::Unknown` and the decoder raises `UnknownLayoutError`, so such
-  an archive is refused cleanly rather than misread -- unstarted work, not a
-  latent defect. Worth starting only against an archive that actually uses it;
-  implementing from the prose alone would be guessing.
 - **clang-format version skew makes the repository-wide style rule unsafe to
   apply.** Under clang-format 22.1.8, 48 of 151 tracked C++ files disagree with
   the repository's own `.clang-format`, so running `clang-format -i` on a file

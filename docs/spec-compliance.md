@@ -160,12 +160,37 @@ reference corpus or a well-formed archive from the reference writer.
   "MUST be encrypted using a proprietary secret key". So there is nothing to
   implement against and no member for a reader to encounter; recorded here only
   so the mechanism's location is known when it is formalised.
-- **Grid encoding is refused, not read** — the prototype added a `grid` buffer
-  encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
-  maps anything it does not know to `Layout::Unknown`, and the decoder raises
-  `UnknownLayoutError` rather than guessing, so such an archive is refused
-  cleanly instead of being misread. Supporting it is unstarted work, not a
-  latent corruption.
+- **Coordinate grid encoding (MS:1003826) — FIXED** (was refused). Such a chunk
+  does not store its main-axis coordinates: a `chunk_transform` STRUCT column
+  `{grid_type, parameters, indices}` carries integer grid indices plus the model
+  that maps them back. This is a chunk ENCODING inside the chunked layout, not a
+  third layout beside `point` and `chunk` — the note that stood here previously
+  described it as a `grid` buffer format reaching `Layout::Unknown`, and the
+  reference defines no such prefix. What it actually hit was
+  `Signals::select` throwing `array entry not present in schema: mz_grid`,
+  because a three-child struct was not registered as a schema field at all.
+  All four models the reference defines are read: linear (MS:1003824), square
+  root linear (MS:1003825) and the two Bruker timsTOF calibrations, m/z
+  (MS:9999002) and ion mobility (MS:9999001). Indices may be `uint8`, `uint16`
+  or `uint32`; they are delta-coded on the main axis and absolute on a secondary
+  one, as the reference writes them. A file may mix grid and non-grid chunks in
+  one column, which the SCIEX SWATH corpus does, and those chunks fall back to
+  `chunk_values`. An unrecognised `grid_type` raises `InvalidFormatError` naming
+  the type rather than guessing a model.
+  Exactness: the decode is bit-identical to the same data written out in full —
+  all 291,453 peaks of the nine-spectrum diaPASEF corpus agree to the last bit
+  in m/z, intensity and ion mobility. That is achievable because a grid index is
+  the native representation for a timsTOF, so the encoding is lossless rather
+  than a quantisation; `test/grid_test.cpp` therefore asserts equality and not a
+  tolerance. It holds only because `src/data/grid.cpp` is compiled with
+  `-ffp-contract=off` (`/fp:precise` on MSVC): a compiler-inserted fused
+  multiply-add rounds once where the reference rounds twice, which was measured
+  to move an m/z by 4e-14.
+  Residual limitation: grid chunks are exempt from the `chunk_start <=
+  chunk_end` conformance check, because the reference writer leaves `chunk_end`
+  at 0 on a grid chunk holding one index (two of the nine diaPASEF spectra end
+  that way) and neither reader consults those bounds for a grid chunk. Bounds on
+  chunks that do use them are still checked.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled
