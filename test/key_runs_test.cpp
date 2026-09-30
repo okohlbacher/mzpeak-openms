@@ -42,6 +42,7 @@ directory of this repository.
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -224,6 +225,36 @@ fs::path write_archive(const fs::path& dir,
   return dir;
 }
 
+/// Write @p points as a FLAT table: spectrum_index, mz and intensity all
+/// top-level columns, the key at column @p key_at, declared sorted or not.
+void write_flat(const fs::path& path, const Points& points, int key_at, bool declare_sorted)
+{
+  arrow::UInt64Builder key;
+  for (const auto& k : points.key) check(key.Append(static_cast<uint64_t>(*k)));
+  arrow::DoubleBuilder mz;
+  check(mz.AppendValues(points.mz));
+  arrow::FloatBuilder intensity;
+  check(intensity.AppendValues(points.intensity));
+
+  arrow::FieldVector fields{arrow::field("mz", arrow::float64()),
+                            arrow::field("intensity", arrow::float32())};
+  arrow::ArrayVector columns{value(mz.Finish()), value(intensity.Finish())};
+  fields.insert(fields.begin() + key_at, arrow::field("spectrum_index", arrow::uint64()));
+  columns.insert(columns.begin() + key_at, value(key.Finish()));
+  auto table = arrow::Table::Make(arrow::schema(fields), columns);
+
+  parquet::WriterProperties::Builder props;
+  props.compression(arrow::Compression::ZSTD);
+  props.max_row_group_length(kGroupRows);
+  if (declare_sorted) {
+    props.set_sorting_columns({parquet::SortingColumn{key_at, false, false}});
+  }
+  auto out = value(arrow::io::FileOutputStream::Open(path.string()));
+  check(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(), out, kGroupRows,
+                                   props.build()));
+  check(out->Close());
+}
+
 /// One Parquet file on its own, outside any archive, as a @p data_kind member.
 std::unique_ptr<Util::Parquet> open_table(const fs::path& path, const char* data_kind)
 {
@@ -282,6 +313,23 @@ bool held_as_runs(Util::Parquet& table, int g)
   return true;
 }
 
+/// Is group @p g held as runs of a TOP-LEVEL key, with the placeholder in the
+/// key's own column @p top of every batch?
+bool held_as_top_level_runs(Util::Parquet& table, int g, int top)
+{
+  auto group = table.row_group(g);
+  if (!group->key_runs || group->key_runs->child >= 0 || group->key_runs->top != top) {
+    return false;
+  }
+  for (const auto& batch : group->batches) {
+    if (batch->num_columns() != 3 || batch->column(top)->type_id() != arrow::Type::NA ||
+        batch->schema()->field(top)->name() != "spectrum_index") {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// A query's projected columns, decoded.
 struct Read {
   std::vector<uint64_t> key;
@@ -290,11 +338,14 @@ struct Read {
   bool operator==(const Read&) const = default;
 };
 
-Read run_query(Util::Parquet& table, const Util::Query& query, bool with_key)
+Read run_query(Util::Parquet& table,
+               const Util::Query& query,
+               bool with_key,
+               std::string_view group = "point")
 {
-  const auto key = table.field("point", "spectrum_index").value();
-  const auto mz = table.field("point", "mz").value();
-  const auto intensity = table.field("point", "intensity").value();
+  const auto key = table.field(group, "spectrum_index").value();
+  const auto mz = table.field(group, "mz").value();
+  const auto intensity = table.field(group, "intensity").value();
   Util::Projection projection;
   if (with_key) projection.project(key);
   projection.project(mz);
@@ -481,6 +532,77 @@ BOOST_AUTO_TEST_CASE(other_queries_see_the_key_restored)
 
   for (int g = 0; g < a->file_metadata()->num_row_groups(); ++g) {
     BOOST_TEST(held_as_runs(*a, g), "group " << g << " after restoring");
+  }
+}
+
+/******************************************************************************/
+// A TOP-LEVEL key -- a column of the table itself, as in a metadata table, not
+// a struct's child -- is held as runs the same way: the placeholder goes into
+// the batch at the key's own column, whether that is first, between the others
+// or last, and a query that needs the key gets it back in that column.  Every
+// read gives what the full decode of the same table gives.
+BOOST_AUTO_TEST_CASE(a_top_level_key_is_held_as_runs)
+{
+  Scratch scratch("mzp-test-keyruns-top");
+  const Points points = honest_points();
+
+  // A spectrum that straddles the first group boundary.
+  uint64_t boundary = 0;
+  for (int64_t r = 0, s = 0; s < static_cast<int64_t>(kSpectra); r += points_of(s), ++s) {
+    if (r + static_cast<int64_t>(points_of(s)) > kGroupRows) {
+      boundary = static_cast<uint64_t>(s);
+      break;
+    }
+  }
+
+  for (int key_at : {0, 1, 2}) {
+    const std::string at = std::to_string(key_at);
+    write_flat(scratch.path / ("sorted" + at + ".parquet"), points, key_at, true);
+    write_flat(scratch.path / ("unsorted" + at + ".parquet"), points, key_at, false);
+    auto a = open_table(scratch.path / ("sorted" + at + ".parquet"), "metadata");
+    auto b = open_table(scratch.path / ("unsorted" + at + ".parquet"), "metadata");
+    BOOST_TEST_REQUIRE(!b->row_group(0)->key_runs);
+
+    const int groups = a->file_metadata()->num_row_groups();
+    BOOST_TEST_REQUIRE(groups >= 3);
+    for (int g = 0; g < groups; ++g) {
+      BOOST_TEST(held_as_top_level_runs(*a, g, key_at), "key at " << key_at << " group " << g);
+    }
+    BOOST_TEST(a->row_group(0)->batches.size() > 1u);
+
+    const auto key = a->field("root", "spectrum_index").value();
+    const auto key_b = b->field("root", "spectrum_index").value();
+
+    // A range, which the runs cannot answer: the key is restored.
+    const auto range = [&](const Schema::Column& k) {
+      return Util::Query::Builder(k).ge<uint64_t>(boundary - 5).and_then(
+          Util::Query::Builder(k).le<uint64_t>(boundary + 5));
+    };
+    const Read ra = run_query(*a, range(key), true, "root");
+    const Read rb = run_query(*b, range(key_b), true, "root");
+    BOOST_TEST(!ra.key.empty());
+    BOOST_TEST((ra == rb), "key at " << key_at << " range");
+    BOOST_TEST(same_bytes(ra.mz, rb.mz));
+
+    // Equalities: answered from the runs without the key, restored with it.
+    for (uint64_t s :
+         {uint64_t{0}, boundary, boundary + 1, uint64_t{3}, kSpectra - 1, kSpectra}) {
+      for (bool with_key : {true, false}) {
+        const Read ea =
+            run_query(*a, Util::Query::Builder(key).eq<uint64_t>(s), with_key, "root");
+        const Read eb =
+            run_query(*b, Util::Query::Builder(key_b).eq<uint64_t>(s), with_key, "root");
+        BOOST_TEST((ea == eb),
+                   "key at " << key_at << " spectrum " << s << " with_key " << with_key);
+        BOOST_TEST(same_bytes(ea.mz, eb.mz));
+        BOOST_TEST(ea.mz.size() == (s < kSpectra ? points_of(s) : 0u));
+        for (uint64_t k : ea.key) BOOST_TEST(k == s);
+      }
+    }
+
+    for (int g = 0; g < groups; ++g) {
+      BOOST_TEST(held_as_top_level_runs(*a, g, key_at), "key at " << key_at << " group " << g);
+    }
   }
 }
 
