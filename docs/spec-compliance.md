@@ -174,17 +174,22 @@ reference corpus or a well-formed archive from the reference writer.
   -- so this cannot be fixed by deriving one URL template; each vocabulary's
   release layout has to be recorded, and a guessed URL that 404s is worse than
   today's honest-but-unpinned one.
-- **Grid encoding is refused, not read** — `840ba4a` specified it, and the
-  specification's shape corrects what was written here earlier: grid is a CHUNK
-  ENCODING (`MS:1003826`), not a new layout, so it is signalled by the
-  `chunk_encoding` column and NOT by the array-index group name. That matters,
-  because a grid-encoded chunk carries an EMPTY `chunk_values` list with the real
-  data in a sibling `<array>_grid` group, which raises the question of whether
-  this reader refuses it or silently returns nothing. It refuses: verified by
-  synthesising exactly that shape -- `MS:1003826` with emptied `chunk_values` --
-  and reading it back, which throws `unable to decode ... unknown chunk encoding
-  method: MS:1003826`. Supporting it is unstarted work, not a latent
-  corruption.
+- **Grid encoding (`MS:1003826`) — IMPLEMENTED.** A chunk encoding, not a
+  layout: `chunk_values` is null and the coordinates are integer indices into a
+  model carried in a sibling `<array>_grid` struct column. All four models are
+  decoded -- `MS:1003824` linear, `MS:1003825` square root, and the two Bruker
+  models the reference carries under the placeholder accessions `MS:9999002`
+  (timsTOF m/z) and `MS:9999001` (TIMS mobility) until PSI assigns terms. The
+  main axis's indices are delta-coded and a secondary axis's are not; both
+  directions are pinned, because getting it backwards yields a plausible
+  ascending array that is wrong from the second point on. Every row's decode is
+  checked against the `chunk_start`/`chunk_end` the writer recorded, which is
+  the writer's own evaluation of the same model, so a model transcribed with one
+  wrong operation is caught rather than trusted. Validated against a real Bruker
+  diaPASEF conversion with `C2 != 0` and `C4 != 0`: m/z is bit-identical to the
+  reference's explicitly-stored values on all 205,921 points of the MS1 frame.
+  Unimplemented still: WRITING grid-encoded archives, and the materialised grid
+  form the specification also allows.
 - **Imaging profile — ignored, as a Core reader must.** `840ba4a` added it,
   declared by `metadata.imaging.is_imaging`. Conformance requires a Core reader
   to read Core content and ignore profile content it does not implement.
