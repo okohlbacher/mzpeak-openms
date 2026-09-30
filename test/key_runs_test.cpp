@@ -725,24 +725,28 @@ BOOST_AUTO_TEST_CASE(without_statistics_the_data_decides)
 }
 
 /******************************************************************************/
-// The null check must PROVE there is none, and the key's values alone cannot.
-// A dictionary page holds one index per non-null row, but may end its index
-// stream in a bit-packed group zero-padded to eight, and the padding reads back
-// as the dictionary's first value.  Here five points of spectrum 42 and two
-// null-key rows end that way (patched in: Arrow writes the five indices as an
-// RLE run), so a values-only read finds seven values, all 42 -- one sorted run
-// over every row.  The footer's null count refuses it; without statistics, the
-// definition levels do; on data page V1 and V2 alike.  The group keeps its
-// column, and reads back as the same points declared unsorted read.
+// The null check must not rest on the key's values alone.  A dictionary page
+// holds one index per non-null row, but may end its index stream in a
+// bit-packed group zero-padded to eight, and the padding reads back as the
+// dictionary's first value.  Here five points of spectrum 0 and two null-key
+// rows end that way (patched in: Arrow writes the five indices as an RLE run),
+// so a values-only read finds seven values, all 0 -- one sorted run over every
+// row.  The footer's null count refuses it; without statistics, the definition
+// levels do; on data page V1 and V2 alike.  Spectrum 0, because a read with
+// levels fills only the five slots that have a value and the scan's buffer
+// starts zeroed: under any other key the two zeros after it would fall below
+// it and refuse the group on order alone, and the level count would go
+// untested.  The group keeps its column, and reads back as the same points
+// declared unsorted read.
 BOOST_AUTO_TEST_CASE(a_padded_dictionary_page_does_not_hide_a_null)
 {
   Scratch scratch("mzp-test-keyruns-padded");
   Points points;
-  add_spectrum(points, 42, 5);
+  add_spectrum(points, 0, 5);
   for (uint64_t p = 0; p < 2; ++p) {
     points.key.push_back(std::nullopt);
-    points.mz.push_back(mz_of(43, p));
-    points.intensity.push_back(intensity_of(43, p));
+    points.mz.push_back(mz_of(1, p));
+    points.intensity.push_back(intensity_of(1, p));
   }
 
   for (const auto version :
@@ -771,7 +775,7 @@ BOOST_AUTO_TEST_CASE(a_padded_dictionary_page_does_not_hide_a_null)
       auto group = a->row_group(0);
       BOOST_TEST(!group->key_runs, name);
 
-      // The full decode: 42 five times, then the two nulls.
+      // The full decode: 0 five times, then the two nulls.
       BOOST_TEST_REQUIRE(group->batches.size() == 1u);
       const auto& point = static_cast<const arrow::StructArray&>(*group->batches[0]->column(0));
       const auto key = std::dynamic_pointer_cast<arrow::UInt64Array>(point.field(0));
@@ -779,12 +783,12 @@ BOOST_AUTO_TEST_CASE(a_padded_dictionary_page_does_not_hide_a_null)
       BOOST_TEST(decoded, name << ": the key column is not decoded");
       for (int64_t r = 0; decoded && r < 7; ++r) {
         BOOST_TEST(key->IsNull(r) == (r >= 5), name << " row " << r);
-        if (r < 5) BOOST_TEST(key->Value(r) == 42u, name << " row " << r);
+        if (r < 5) BOOST_TEST(key->Value(r) == 0u, name << " row " << r);
       }
 
       const auto key_a = a->field("point", "spectrum_index").value();
       const auto key_b = b->field("point", "spectrum_index").value();
-      for (uint64_t s : {uint64_t{42}, uint64_t{7}}) {
+      for (uint64_t s : {uint64_t{0}, uint64_t{7}}) {
         for (bool with_key : {true, false}) {
           const Read ra = run_query(*a, Util::Query::Builder(key_a).eq<uint64_t>(s), with_key);
           const Read rb = run_query(*b, Util::Query::Builder(key_b).eq<uint64_t>(s), with_key);
