@@ -203,20 +203,20 @@ std::thread slow_first_decode(RowGroupCache& cache, std::size_t bytes,
   return first;
 }
 
-/// One collision, held open by a gate rather than a sleep: group 0 of "f" is
-/// in flight on one thread while a second reader asks for it with @p ahead,
-/// and is let go only once that reader has done whatever it does meanwhile
-/// and waits for it (stats().waits), or has returned.  Returns what the
-/// second reader's get() returned, and rethrows what it threw.
-RowGroupCache::Batches collide(RowGroupCache& cache, std::size_t bytes,
-                               const RowGroupCache::Ahead& ahead)
+/// One collision, held open by a gate rather than a sleep: group @p group of
+/// "f" is in flight on one thread while a second reader asks for it with
+/// @p ahead, and is let go only once that reader has done whatever it does
+/// meanwhile and waits for it (stats().waits), or has returned.  Returns what
+/// the second reader's get() returned, and rethrows what it threw.
+RowGroupCache::Batches collide(RowGroupCache& cache, int32_t group,
+                               std::size_t bytes, const RowGroupCache::Ahead& ahead)
 {
   std::mutex mutex;
   std::condition_variable gate;
   bool started = false;
   bool open = false;
   std::thread first([&] {
-    cache.get("f", 0, bytes, [&] {
+    cache.get("f", group, bytes, [&] {
       std::unique_lock<std::mutex> lock(mutex);
       started = true;
       gate.notify_all();
@@ -235,7 +235,7 @@ RowGroupCache::Batches collide(RowGroupCache& cache, std::size_t bytes,
   std::atomic<bool> returned{false};
   std::thread second([&] {
     try {
-      got = cache.get("f", 0, bytes,
+      got = cache.get("f", group, bytes,
                       []() -> RowGroupCache::Batches { throw std::logic_error("decoded twice"); },
                       &ahead);
     } catch (...) {
@@ -349,7 +349,7 @@ BOOST_AUTO_TEST_CASE(groups_decoded_ahead_do_not_outlive_the_working_set)
   std::atomic<int> calls{0};
   const auto ahead = instant_ahead(100, kGroup, calls);
 
-  collide(cache, kGroup, ahead);
+  collide(cache, 0, kGroup, ahead);
   // Group 0 in flight plus seven decoded ahead filled the budget.
   BOOST_REQUIRE_EQUAL(calls.load(), 7);
 
@@ -362,6 +362,69 @@ BOOST_AUTO_TEST_CASE(groups_decoded_ahead_do_not_outlive_the_working_set)
   BOOST_CHECK_EQUAL(after.decodes - before.decodes, 4u); // each once
   BOOST_CHECK_EQUAL(after.hits - before.hits, 96u);
   BOOST_CHECK_EQUAL(calls.load(), 7);
+}
+
+/******************************************************************************/
+/// A reader that collides on a group evicted lately does not decode ahead:
+/// the budget is already losing groups readers come back to, and each group
+/// decoded ahead would push out another.  Aging groups decoded ahead does not
+/// stop that on its own: random-access readers collided on the groups they
+/// lost, decoded ahead again and lost more.
+BOOST_AUTO_TEST_CASE(no_decoding_ahead_for_a_group_evicted_lately)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(4 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(100, kGroup, calls);
+
+  // Enough evictions that the records of old ones are dropped meanwhile.
+  for (int32_t g = 0; g < 100; ++g) cache.get("f", g, kGroup, empty_group);
+  BOOST_REQUIRE_EQUAL(cache.stats().evictions, 96u);
+
+  collide(cache, 90, kGroup, ahead); // evicted when the walk decoded group 94
+  BOOST_CHECK_EQUAL(calls.load(), 0);
+  BOOST_CHECK_EQUAL(cache.stats().ahead_decodes, 0u);
+}
+
+/******************************************************************************/
+/// ...but only lately.  A group that comes back long after it was evicted,
+/// as on a second pass over a file larger than the budget, is decoded ahead
+/// of as before.
+BOOST_AUTO_TEST_CASE(decoding_ahead_for_a_group_evicted_long_ago)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(4 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(100, kGroup, calls);
+
+  for (int32_t g = 0; g < 100; ++g) cache.get("f", g, kGroup, empty_group);
+  for (int i = 0; i < 1000; ++i) cache.get("f", 99, kGroup, empty_group);
+  BOOST_REQUIRE_EQUAL(cache.stats().evictions, 96u);
+
+  collide(cache, 90, kGroup, ahead);
+  // Group 90 in flight plus 91-93 decoded ahead fill the four-group budget.
+  BOOST_CHECK_EQUAL(calls.load(), 3);
+}
+
+/******************************************************************************/
+/// Evictions are remembered only as long as they can make a re-decode, and
+/// the cache drops older records as it goes -- never recent ones, however
+/// many there are: a lowered budget that evicts a hundred groups at once
+/// leaves every one of them evicted lately.
+BOOST_AUTO_TEST_CASE(a_burst_of_evictions_is_remembered)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(100 * kGroup);
+  std::atomic<int> calls{0};
+  const auto ahead = instant_ahead(200, kGroup, calls);
+
+  for (int32_t g = 0; g < 100; ++g) cache.get("f", g, kGroup, empty_group);
+  cache.set_budget(0); // all hundred, the oldest first
+  BOOST_REQUIRE_EQUAL(cache.stats().evictions, 100u);
+  cache.set_budget(4 * kGroup);
+
+  collide(cache, 5, kGroup, ahead);
+  BOOST_CHECK_EQUAL(calls.load(), 0);
 }
 
 /******************************************************************************/
@@ -383,7 +446,7 @@ BOOST_AUTO_TEST_CASE(a_failed_decode_ahead_is_not_the_readers_error)
   };
 
   RowGroupCache::Batches got;
-  BOOST_CHECK_NO_THROW(got = collide(cache, kGroup, ahead));
+  BOOST_CHECK_NO_THROW(got = collide(cache, 0, kGroup, ahead));
   BOOST_CHECK(got != nullptr);
   BOOST_CHECK((tried == std::vector<int32_t>{1, 2, 3}));
   BOOST_CHECK_EQUAL(cache.stats().ahead_decodes, 3u);          // the failed one too
