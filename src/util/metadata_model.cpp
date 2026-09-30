@@ -1806,7 +1806,9 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
     const auto precursor_facets = facets_for("precursor", precursors_table, files.precursors);
     const auto ion_facets = facets_for("selected_ion", selected_ions_table, files.selected_ions);
     const auto n = static_cast<std::size_t>(std::ranges::distance(out));
-    const std::size_t parts = n >= 1024 ? 4 : 1;
+    // n >= 4 whatever the threshold: bound() reads the entry at t*n/4, which
+    // is end() for n == 0, and four ranges of n >= 4 each hold a spectrum.
+    const std::size_t parts = (n >= kParallelAttachMinSpectra && n >= 4) ? 4 : 1;
     // First index of range t; the last range runs to the end of uint64.
     const auto bound = [&](std::size_t t) -> uint64_t {
       return t == 0 || t == parts ? 0 : (out.begin() + static_cast<std::ptrdiff_t>(t * n / parts))->first;
