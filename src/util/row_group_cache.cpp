@@ -70,7 +70,16 @@ RowGroupCache::Batches RowGroupCache::get(const std::string& file,
       // 581 decodes of 347 groups, waits 809 -> 1,763): a lead the cache
       // cannot see the walk's working set behind pushes out groups that
       // readers between two chunks do not hold at that moment but still need.
-      if (!it->second.ready && ahead && !decoded_ahead) {
+      //
+      // And not while this decode brings back a group evicted lately
+      // (Entry::redecode).  The budget is then already losing groups readers
+      // come back to, and each group decoded ahead would push out another:
+      // readers that do not walk forward -- random access, say -- then collide
+      // on the groups they lost, decode ahead again and lose more.  Measured
+      // with 32 threads reading 24 scattered groups at random under a
+      // 32-group budget, 2 ms decodes: 215-5,546 decodes without this check,
+      // 53-58 with it, where 24 would do.
+      if (!it->second.ready && !it->second.redecode && ahead && !decoded_ahead) {
         decoded_ahead = true;
         decode_ahead_locked_(lock, file, group, *ahead);
         continue;
@@ -166,7 +175,13 @@ RowGroupCache::claim_locked_(const Key& key, std::size_t bytes, bool ahead)
   std::promise<Batches> promise;
   ++stats_.decodes;
   if (ahead) ++stats_.ahead_decodes;
-  entries_.emplace(key, Entry{promise.get_future().share(), bytes, ++tick_, false, ahead});
+  bool redecode = false;
+  if (auto it = evicted_.find(key); it != evicted_.end()) {
+    redecode = tick_ - it->second <= lately_locked_();
+    evicted_.erase(it);
+  }
+  entries_.emplace(key,
+                   Entry{promise.get_future().share(), bytes, ++tick_, false, ahead, redecode});
   held_ += bytes;
   in_flight_ += bytes;
   evict_locked_(key);
@@ -240,6 +255,13 @@ void RowGroupCache::evict_locked_(const Key& keep)
       if (victim == entries_.end() || e.used < victim->second.used) victim = it;
     }
     if (victim == entries_.end()) return; // everything left is in use; overshoot
+    // Remembered while it can still mark a re-decode (claim_locked_).  Once
+    // there are more records than lately_locked_() ticks, the older ones go,
+    // so they stay a few times the entries in number.
+    if (const std::uint64_t lately = lately_locked_(); evicted_.size() > lately) {
+      std::erase_if(evicted_, [&](const auto& r) { return tick_ - r.second > lately; });
+    }
+    evicted_[victim->first] = tick_;
     held_ -= victim->second.bytes;
     entries_.erase(victim);
     ++stats_.evictions;
