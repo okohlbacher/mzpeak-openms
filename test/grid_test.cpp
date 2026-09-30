@@ -31,6 +31,7 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -172,8 +173,11 @@ BOOST_AUTO_TEST_CASE(grid_mobility_is_in_the_physical_range)
   // The mobility model's parameters are [c6, c7, offset, slope], where
   // `offset + slope * scan` is the TIMS ramp VOLTAGE -- hundreds of volts,
   // with a small negative slope.  Reading those two the other way round still
-  // produces finite numbers, around 45, so only a range check catches it.
-  // One converter release did write them swapped.
+  // produces finite numbers, around 45, so nothing but a look at the value
+  // catches it; one reference release did write them swapped, and
+  // `timstof_mobility_model_reads_the_pre_eb08ba0_order` pins that case.
+  // This one is the whole-file end of it: every decoded mobility of a real
+  // acquisition, not just the sampled scans.
   auto grid = MzPeak::open(kGrid);
   auto spectra = grid.spectra();
   auto s = spectra[0];
@@ -207,15 +211,80 @@ BOOST_AUTO_TEST_CASE(timstof_mz_model_reproduces_the_reference_arithmetic)
 }
 
 /******************************************************************************/
+namespace {
+
+/// Mobility scans of the bundled diaPASEF acquisition and the 1/K0 they stand
+/// for, read off the written-out archive of the same run -- physical
+/// Vs/cm^2, not this reader's own output.  1/K0 falls as the TIMS ramp
+/// voltage falls, so these also pin the sign of the ramp slope.
+struct ScanMobility {
+  uint32_t scan;
+  double one_over_k0;
+};
+
+constexpr ScanMobility kKnownMobilities[] = {
+    {33, 1.6010956012790702},
+    {250, 1.3621252945398825},
+    {400, 1.1954873123229730},
+    {533, 1.0467308802733821},
+    {926, 0.60156745661641153},
+};
+
+} // namespace
+
+/******************************************************************************/
 BOOST_AUTO_TEST_CASE(timstof_mobility_model_reproduces_the_reference_arithmetic)
 {
+  // The diaPASEF acquisition's own TimsCalibration row as the four model
+  // parameters.  `offset + slope * scan` is the TIMS ramp VOLTAGE: it starts
+  // at 222 V and loses 0.154 V per mobility scan, and 1/K0 follows from it
+  // through 1/(c6 + c7/V).
   const double p[] = {0.020932469715718494, 131.22279563838268,
                       222.46486824959476, -0.1539079919581615};
   auto model = MzPeak::Data::GridModel::from_parameters("MS:9999001", p, 4);
 
   BOOST_TEST((model.kind() == MzPeak::Data::GridModel::Kind::TimsTofTims2));
+
+  // Extrapolated to scan 0, i.e. the full ramp voltage.
   BOOST_TEST(model.from_index(0) == 1.637221297889762);
-  BOOST_TEST(model.from_index(533) == 1.0467308802733821);
+
+  // Equality, not a tolerance: the grid index IS the native representation
+  // here, so decoding has to land on the written-out value bit for bit.
+  for (const auto& [scan, one_over_k0] : kKnownMobilities) {
+    BOOST_TEST_CONTEXT("scan " << scan)
+    {
+      BOOST_TEST(model.from_index(scan) == one_over_k0);
+    }
+  }
+}
+
+/******************************************************************************/
+BOOST_AUTO_TEST_CASE(timstof_mobility_model_reads_the_pre_eb08ba0_order)
+{
+  // The reference writer emitted [c6, c7, slope, offset] until upstream's
+  // eb08ba0, while everything reading the model -- upstream's own reader
+  // included -- expects [c6, c7, offset, slope].  Archives from before that
+  // fix are in the wild (mzdata's diaPASEF.d converted 2026-09-22), and read
+  // literally they give ~45 Vs/cm^2 where the run holds 0.6-1.6, so the
+  // mistake is not subtle but it is also not signalled anywhere in the file.
+  //
+  // The ramp offset is the larger coefficient by a factor of the scan count,
+  // which is how the two are told apart; a file in either order must decode
+  // to the SAME physical mobilities.
+  const double swapped[] = {0.020932469715718494, 131.22279563838268,
+                            -0.1539079919581615, 222.46486824959476};
+  auto model = MzPeak::Data::GridModel::from_parameters("MS:9999001", swapped, 4);
+
+  for (const auto& [scan, one_over_k0] : kKnownMobilities) {
+    BOOST_TEST_CONTEXT("scan " << scan)
+    {
+      BOOST_TEST(model.from_index(scan) == one_over_k0);
+    }
+  }
+
+  // Monotonically falling, as the ramp is -- reading the pair the other way
+  // round inverts that as well as the magnitude.
+  BOOST_TEST(model.from_index(33) > model.from_index(926));
 }
 
 /******************************************************************************/
