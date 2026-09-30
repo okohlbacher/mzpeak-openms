@@ -1060,6 +1060,67 @@ BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
 }
 
 /******************************************************************************/
+// Table surgery on a copy of small.dir, for the archive shapes no bundled
+// fixture has.
+namespace {
+
+/// A member of an archive directory, read whole and closed again.
+std::shared_ptr<arrow::Table> read_member(const std::filesystem::path& path)
+{
+  auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
+  auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
+  auto table = MzPeak::Util::read_table(*reader).ValueOrDie();
+  BOOST_TEST_REQUIRE(file->Close().ok());
+  return table;
+}
+
+/// Replaces the member at @p path with @p table.
+void write_member(const std::filesystem::path& path, const arrow::Table& table)
+{
+  auto sink = arrow::io::FileOutputStream::Open(path.string()).ValueOrDie();
+  BOOST_TEST_REQUIRE(
+      parquet::arrow::WriteTable(table, arrow::default_memory_pool(), sink).ok());
+  BOOST_TEST_REQUIRE(sink->Close().ok());
+}
+
+/// Rewrites the facet member @p name of @p archive with a copy of spectrum 2's
+/// row -- under @p precursor_index when one is given -- appended after the
+/// others, or in place of the original when @p in_place.
+void copy_spectrum_2_row(const std::filesystem::path& archive,
+                         const char* name,
+                         std::optional<uint64_t> precursor_index,
+                         bool in_place)
+{
+  const std::filesystem::path path(archive / name);
+  const auto table = read_member(path);
+  const auto source = std::static_pointer_cast<arrow::UInt64Array>(
+      table->GetColumnByName("source_index")->chunk(0));
+  int64_t row = -1;
+  for (int64_t r = 0; r < source->length(); ++r)
+    if (source->IsValid(r) && source->Value(r) == 2) row = r;
+  BOOST_TEST_REQUIRE(row >= 0);
+
+  auto copy = table->Slice(row, 1);
+  if (precursor_index) {
+    const int pi_column = table->schema()->GetFieldIndex("precursor_index");
+    BOOST_TEST_REQUIRE(pi_column >= 0);
+    arrow::UInt64Builder builder;
+    BOOST_TEST_REQUIRE(builder.Append(*precursor_index).ok());
+    copy = copy->SetColumn(pi_column, table->schema()->field(pi_column),
+                           std::make_shared<arrow::ChunkedArray>(
+                               builder.Finish().ValueOrDie()))
+               .ValueOrDie();
+  }
+  const auto rewritten =
+      in_place ? arrow::ConcatenateTables(
+                     {table->Slice(0, row), copy, table->Slice(row + 1)})
+               : arrow::ConcatenateTables({table, copy});
+  write_member(path, *rewritten.ValueOrDie());
+}
+
+} // namespace
+
+/******************************************************************************/
 // A spectrum with a second precursor row does not fit Minimal's one inline
 // precursor, so the archive is read as Lean instead -- both precursors kept.
 // No bundled archive has one, so this appends a copy of spectrum 2's precursor
@@ -1069,43 +1130,55 @@ BOOST_AUTO_TEST_CASE(minimal_reads_a_second_precursor_as_lean)
   namespace fs = std::filesystem;
   Scratch scratch("mzp-test-minimal-fallback");
   fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
-
-  const fs::path table_path(scratch.path / "spectra_metadata_precursors.parquet");
-  std::shared_ptr<arrow::Table> precursors;
-  {
-    auto file = arrow::io::ReadableFile::Open(table_path.string()).ValueOrDie();
-    auto reader =
-        parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
-    precursors = MzPeak::Util::read_table(*reader).ValueOrDie();
-    BOOST_TEST_REQUIRE(file->Close().ok());
-  }
-  const auto source = std::static_pointer_cast<arrow::UInt64Array>(
-      precursors->GetColumnByName("source_index")->chunk(0));
-  int64_t row = -1;
-  for (int64_t r = 0; r < source->length(); ++r)
-    if (source->IsValid(r) && source->Value(r) == 2) row = r;
-  BOOST_TEST_REQUIRE(row >= 0);
-  const int pi_column = precursors->schema()->GetFieldIndex("precursor_index");
-  BOOST_TEST_REQUIRE(pi_column >= 0);
-  arrow::UInt64Builder builder;
-  BOOST_TEST_REQUIRE(builder.Append(99).ok());
-  auto second = precursors->Slice(row, 1)
-                    ->SetColumn(pi_column, precursors->schema()->field(pi_column),
-                                std::make_shared<arrow::ChunkedArray>(
-                                    builder.Finish().ValueOrDie()))
-                    .ValueOrDie();
-  auto extended = arrow::ConcatenateTables({precursors, second}).ValueOrDie();
-  {
-    auto sink = arrow::io::FileOutputStream::Open(table_path.string()).ValueOrDie();
-    BOOST_TEST_REQUIRE(
-        parquet::arrow::WriteTable(*extended, arrow::default_memory_pool(), sink)
-            .ok());
-    BOOST_TEST_REQUIRE(sink->Close().ok());
-  }
+  copy_spectrum_2_row(scratch.path, "spectra_metadata_precursors.parquet", 99, false);
 
   auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
   auto s2 = spectra[2];
   BOOST_TEST_REQUIRE(s2.metadata().precursors.size() == 2u);
   BOOST_TEST((s2.metadata().precursors[1].precursor_index == std::optional<uint64_t>(99)));
+  require_minimal_equals_lean(scratch.path.string());
+}
+
+/******************************************************************************/
+// Nor does a second selected ion on the one precursor.  This appends an
+// unchanged copy of spectrum 2's ion row -- the same precursor_index -- so
+// both ions belong to its one precursor.
+BOOST_AUTO_TEST_CASE(minimal_reads_a_second_selected_ion_as_lean)
+{
+  namespace fs = std::filesystem;
+  Scratch scratch("mzp-test-minimal-second-ion");
+  fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
+  copy_spectrum_2_row(scratch.path, "spectra_metadata_selected_ions.parquet",
+                      std::nullopt, false);
+
+  auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
+  auto s2 = spectra[2];
+  BOOST_TEST_REQUIRE(s2.metadata().precursors.size() == 1u);
+  BOOST_TEST(s2.metadata().precursors[0].selected_ions.size() == 2u);
+  require_minimal_equals_lean(scratch.path.string());
+}
+
+/******************************************************************************/
+// Nor does an ion whose precursor_index is not its spectrum's precursor's:
+// Lean gives it a precursor of its own, beside the one from the precursor row.
+// Spectrum 2's only ion row is rewritten IN PLACE to precursor_index 99, so
+// the spectrum still has one precursor row and one ion row, and the mismatch
+// alone is what does not fit.
+BOOST_AUTO_TEST_CASE(minimal_reads_an_ion_of_another_precursor_as_lean)
+{
+  namespace fs = std::filesystem;
+  Scratch scratch("mzp-test-minimal-foreign-ion");
+  fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
+  copy_spectrum_2_row(scratch.path, "spectra_metadata_selected_ions.parquet", 99, true);
+
+  auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
+  auto s2 = spectra[2];
+  const auto& precursors = s2.metadata().precursors;
+  BOOST_TEST_REQUIRE(precursors.size() == 2u);
+  BOOST_TEST(precursors[0].selected_ions.empty());
+  BOOST_TEST((precursors[1].precursor_index == std::optional<uint64_t>(99)));
+  BOOST_TEST(precursors[1].selected_ions.size() == 1u);
+  // A holder, not a copy of the precursor row.
+  BOOST_TEST(!precursors[1].isolation_window.target_mz.has_value());
   require_minimal_equals_lean(scratch.path.string());
 }
