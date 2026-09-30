@@ -280,6 +280,7 @@ test_names = [
     'sha512',
     'validation',
     'ion_mobility',
+    'grid',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the
