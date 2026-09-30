@@ -72,12 +72,18 @@ struct Scratch {
   }
   ~Scratch()
   {
+    // error_code, not a throw: a destructor that throws terminates the process
+    // before Boost.Test reports anything.  Windows refuses to delete a file
+    // that is still open, so a leaked handle shows up HERE, with its name --
+    // after a few retries, because a Windows runner's antivirus can hold a
+    // freshly written file open for a moment (see row_group_test.cpp).
     std::error_code ec;
     for (int attempt = 0; attempt < 20; ++attempt) {
       fs::remove_all(path, ec);
       if (!ec) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    BOOST_TEST(!ec, "remove_all " << path.string() << ": " << ec.message());
   }
 };
 
