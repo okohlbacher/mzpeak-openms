@@ -30,7 +30,9 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "mzpeak/data/transformer/grid.h"
 #include "mzpeak/exception.h"
@@ -46,6 +48,28 @@ MzPeak::Spectra peaks_of(const MzPeak::Index& index)
   return index.spectra(MzPeak::MetadataDetail::Full,
                        MzPeak::Index::SpectraSource::Peaks);
 }
+
+/// Mobility scans of the bundled acquisition and the 1/K0 they stand for,
+/// read off the archive that writes its coordinates out -- physical Vs/cm^2,
+/// not this reader's own output.
+struct ScanMobility {
+  std::uint32_t scan;
+  double one_over_k0;
+};
+
+constexpr ScanMobility kKnownMobilities[] = {
+    {33, 1.6010956012790702},
+    {250, 1.3621252945398825},
+    {400, 1.1954873123229730},
+    {533, 1.0467308802733821},
+    {926, 0.60156745661641153},
+};
+
+/// The bundled acquisition's TimsCalibration row, in the order the reference
+/// settled on: `[C6, C7, offset, slope]`.
+const std::vector<double> kMobilityModel = {0.020932469715718494,
+                                            131.22279563838268, 222.46486824959476,
+                                            -0.1539079919581615};
 
 } // namespace
 
@@ -164,6 +188,55 @@ BOOST_AUTO_TEST_CASE(bounds_are_enforced)
   // The good fixture must still decode, so the check is not simply always-on.
   auto good = MzPeak::open(kFixture);
   BOOST_CHECK_NO_THROW((void)peaks_of(good)[0].mz());
+}
+
+BOOST_AUTO_TEST_CASE(the_mobility_model_lands_on_physical_one_over_k0)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // Equality, not a tolerance: a grid index IS the native representation on a
+  // timsTOF, so the decode must land on the value the written-out archive of
+  // the same acquisition holds, bit for bit.  `mobility_stays_in_the_physical
+  // _range` only asks for plausible; these are the numbers themselves.
+  for (const auto& [scan, one_over_k0] : kKnownMobilities) {
+    BOOST_TEST_CONTEXT("scan " << scan)
+    {
+      BOOST_TEST(*Grid::value_at("MS:9999001", kMobilityModel, scan) == one_over_k0);
+    }
+  }
+
+  // Extrapolated to scan 0, i.e. the full ramp voltage.
+  BOOST_TEST(*Grid::value_at("MS:9999001", kMobilityModel, 0) == 1.637221297889762);
+}
+
+BOOST_AUTO_TEST_CASE(the_mobility_model_reads_the_pre_eb08ba0_parameter_order)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // The reference WRITER emitted `[C6, C7, slope, offset]` until its eb08ba0,
+  // while mzdata's `as_param` and the reference's own `from_parameters` use
+  // `[C6, C7, offset, slope]`.  Archives written before that fix are in the
+  // wild -- mzdata's own diaPASEF.d, converted 2026-09-22 -- and nothing in
+  // the file says which spelling it used.  Read the wrong way the ramp
+  // collapses from 222 V to 0.15 V and every mobility comes back near 1/C6,
+  // about 45 Vs/cm^2 where a timsTOF holds 0.6 - 1.6.
+  //
+  // The offset is the larger of the two by a factor of the scan count, which
+  // is how they are told apart; a file in either order must decode the same.
+  std::vector<double> swapped = kMobilityModel;
+  std::swap(swapped[2], swapped[3]);
+
+  for (const auto& [scan, one_over_k0] : kKnownMobilities) {
+    BOOST_TEST_CONTEXT("scan " << scan)
+    {
+      BOOST_TEST(*Grid::value_at("MS:9999001", swapped, scan) == one_over_k0);
+    }
+  }
+
+  // The ramp falls with scan; reading the pair the other way round inverts
+  // that as well as the magnitude.
+  BOOST_TEST(*Grid::value_at("MS:9999001", swapped, 33) >
+             *Grid::value_at("MS:9999001", swapped, 926));
 }
 
 BOOST_AUTO_TEST_CASE(the_fixture_verifies_its_own_checksums)

@@ -9,6 +9,8 @@ directory of this repository.
 #pragma once
 
 #include <arrow/array.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -111,9 +113,31 @@ inline double timstof_mz(const std::vector<double>& p, double i)
 }
 
 /// Bruker TIMS 1/K0 at scan @p i: mzdata's `TimsCalibrationModel2::convert`.
+///
+/// `offset + slope * i` is the TIMS ramp VOLTAGE: about 220 V at scan 0,
+/// falling by a tenth of a volt or so per mobility scan.  The parameter list
+/// is `[C6, C7, offset, slope]` -- the order mzdata's
+/// `TimsCalibrationModel2::as_param` writes and the reference's
+/// `from_parameters` reads -- but the reference WRITER emitted
+/// `[C6, C7, slope, offset]` until its `eb08ba0`, so archives from before
+/// that fix carry the pair the other way round and nothing in the file says
+/// which spelling was used.  Read literally, the ramp collapses from 220 V to
+/// 0.15 V and every mobility comes back near `1/C6`, around 45 Vs/cm^2 where
+/// a timsTOF holds 0.6 - 1.6.
+///
+/// The roles are recovered from the model's own algebra rather than from a
+/// threshold: `slope = (C3 - C2)/C1` and `offset = C2 - slope*(C4 + C0)`,
+/// where C2 and C3 are the ramp's two end voltages and C1 its length in
+/// mobility scans, so the offset exceeds the slope in magnitude by a factor
+/// of the scan count on any ramp longer than a single scan.  Taking the
+/// larger of the two as the offset reads both spellings and leaves a
+/// conforming file untouched.
 inline double timstof_mobility(const std::vector<double>& p, double i)
 {
-  const double c6 = p[0], c7 = p[1], offset = p[2], slope = p[3];
+  const double c6 = p[0], c7 = p[1];
+  const bool as_written = std::fabs(p[2]) >= std::fabs(p[3]);
+  const double offset = as_written ? p[2] : p[3];
+  const double slope = as_written ? p[3] : p[2];
   return 1.0 / (c6 + c7 / (offset + slope * i));
 }
 
