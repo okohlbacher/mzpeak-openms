@@ -171,6 +171,13 @@ Decoder<T>::operator()(int64_t index, const std::shared_ptr<arrow::Array>& src) 
         chunk_start_[index], src);
   case Schema::PSI::ChunkEncoding::Type::NumpressLinear:
     return Util::Numpress::decode_linear_convert<T>(src);
+  case Schema::PSI::ChunkEncoding::Type::Grid:
+    // A grid-encoded dimension is routed to Transformer::Grid before this
+    // decoder is ever built; reaching here means a chunk_values list was
+    // populated on a dimension that declared no grid column to go with it.
+    throw InvalidFormatError("while decoding " + dim_name_ +
+                             " a chunk declares grid encoding but the "
+                             "dimension has no grid column");
   }
 
   std::unreachable();

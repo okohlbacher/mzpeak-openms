@@ -68,6 +68,10 @@ public:
       /// Metadata parameters,
       Params,
 
+      /// Elements are a struct of several named children, read as a whole.
+      /// The grid-encoding column `<array>_grid` is one.
+      Struct,
+
       /// No clue.
       Unknown,
     };

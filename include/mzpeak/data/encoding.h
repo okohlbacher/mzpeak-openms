@@ -19,6 +19,7 @@ top-level directory of this repository.
 #include "mzpeak/data/array_index.h"
 #include "mzpeak/data/null_marking.h"
 #include "mzpeak/data/signals.h"
+#include "mzpeak/data/transformer/grid.h"
 #include "mzpeak/data/transformer/primary.h"
 #include "mzpeak/data/transformer/secondary.h"
 #include "mzpeak/exception.h"
@@ -80,6 +81,14 @@ private:
 
   template <Util::Type From, typename V>
   void remap(const ArrayIndex::Dimension& dim, std::vector<V>& v) const;
+
+  /// Coordinate grid encoding (MS:1003826).  Its values column is a STRUCT of
+  /// model parameters and integer indices rather than a list of values, so it
+  /// cannot go through the list-shaped pipeline below and is decoded here.
+  template <typename V>
+  void grid(const ArrayIndex::Dimension& dim,
+            const Schema::Column& column,
+            std::vector<V>& v) const;
 
   void note_unit(const ArrayIndex::Dimension& dim, const std::string& unit) const
   {
@@ -224,6 +233,11 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
     return; // No data to decode so we can exit early.
   }
 
+  if (Transformer::Grid::is_grid_encoded(primary_entry)) {
+    grid<V>(dim, col.value(), v);
+    return;
+  }
+
   auto go = [&](auto&& decoder) -> void { slice_->array(col.value(), v, decoder); };
 
   if (primary_entry.buffer_format == Schema::BufferFormat::Point) {
@@ -244,6 +258,55 @@ void Decoder<T>::decode_with_nulls(const ArrayIndex::Dimension& dim,
       go(decoder);
     }
   }
+}
+
+/******************************************************************************/
+template <typename T>
+template <typename V>
+void Decoder<T>::grid(const ArrayIndex::Dimension& dim,
+                      const Schema::Column& column,
+                      std::vector<V>& v) const
+{
+  namespace Grid = Transformer::Grid;
+  const bool main_axis = dim.is_main_axis();
+
+  // Slice::raw() is a CONSUMING read, so every column this path needs is taken
+  // exactly once, here, before anything else could.
+  std::optional<Grid::Bounds> bounds;
+  if (main_axis) {
+    // Every row of a grid-encoded dimension must say so.  A file that mixes
+    // encodings within one dimension cannot be represented by a per-dimension
+    // dispatch, and decoding its grid rows while silently dropping the others
+    // would be worse than refusing it.
+    if (auto enc = signals_->column(dim, Schema::BufferFormat::ChunkEncoding);
+        enc && slice_->has_column(*enc)) {
+      std::vector<std::string> encodings;
+      slice_->array(*enc, encodings, Util::Decoders::Scalar<std::string>());
+      for (const auto& e : encodings) {
+        auto cv = Schema::CV::from_string(e);
+        if (!cv || !(*cv == Grid::encoding_cv())) {
+          throw InvalidFormatError("dimension " + dim.name +
+                                   " is grid encoded but a chunk declares " + e);
+        }
+      }
+    }
+
+    Grid::Bounds b;
+    if (auto c = signals_->column(dim, Schema::BufferFormat::ChunkStart);
+        c && slice_->has_column(*c)) {
+      if (auto raw = slice_->raw(*c)) b.start = Grid::detail::flatten(*raw);
+    }
+    if (auto c = signals_->column(dim, Schema::BufferFormat::ChunkEnd);
+        c && slice_->has_column(*c)) {
+      if (auto raw = slice_->raw(*c)) b.end = Grid::detail::flatten(*raw);
+    }
+    if (!b.start.empty() || !b.end.empty()) bounds = std::move(b);
+  }
+
+  std::shared_ptr<Util::Slice::Raw> raw = slice_->raw(column);
+  if (raw == nullptr) return;
+
+  Grid::decode<V>(*raw, main_axis, bounds ? &*bounds : nullptr, dim.name, v);
 }
 
 /******************************************************************************/
