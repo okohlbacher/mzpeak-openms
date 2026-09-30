@@ -28,9 +28,13 @@ namespace MzPeak::Util {
 namespace {
 
 /// Blocks come straight from the OS: page-aligned, so 64-byte aligned, and
-/// nobody's arena.  Pages are committed on first write, so the part of a block
-/// above the request costs address space, not memory (up to huge-page
-/// rounding: a huge page is committed whole).
+/// nobody's arena.  With mmap a page takes memory when it is first touched, so
+/// the part of a block above the request costs address space, not memory (up
+/// to huge-page rounding: a huge page is allocated whole).  Linux does count
+/// the whole mapping as committed, which matters only under strict
+/// overcommit (vm.overcommit_memory=2).  VirtualAlloc(MEM_COMMIT) charges the
+/// whole block, slack included, against Windows' commit limit when it is
+/// mapped; there too a page takes RAM only when first touched.
 uint8_t* map_block(int64_t bytes)
 {
   const auto len = static_cast<size_t>(bytes);
