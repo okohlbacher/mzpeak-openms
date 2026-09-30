@@ -11,7 +11,6 @@ directory of this repository.
 #include <algorithm>
 #include <chrono>
 #include <exception>
-#include <tuple>
 
 namespace MzPeak::Util {
 
@@ -136,12 +135,13 @@ void RowGroupCache::decode_ahead_locked_(std::unique_lock<std::mutex>& lock,
     const Key key(file, g);
     if (entries_.contains(key)) continue; // claimed by someone else
 
-    // Within the budget, both halves of it, and never by eviction of anything
-    // a reader still needs: the same in-flight room a miss is admitted into
-    // (without the progress escape -- nothing waits on this decode), and room
-    // to KEEP the group once decoded without dropping one that is in use or
-    // was itself decoded ahead.  A decode ahead that forced either would just
-    // move a wait to another reader.
+    // Within the budget, both halves of it: the same in-flight room a miss is
+    // admitted into (without the progress escape -- nothing waits on this
+    // decode), and room to KEEP the group next to everything resident_locked_
+    // counts, groups decoded ahead and not yet asked for included.  Eviction
+    // takes those in plain LRU order, so without counting them a burst would
+    // go on by evicting the groups it decoded first: work thrown away, and a
+    // wait moved to the reader that wanted them.
     const std::size_t bytes = ahead.bytes(g);
     if (in_flight_ + bytes > budget_ / 2) return;
     if (resident_locked_() + bytes > budget_) return;
@@ -230,13 +230,13 @@ void RowGroupCache::evict_locked_(const Key& keep)
     for (auto it = entries_.begin(); it != entries_.end(); ++it) {
       const Entry& e = it->second;
       if (!e.ready || it->first == keep || held_by_reader_(e)) continue;
-      // Oldest first, but a group decoded ahead and not yet asked for only
-      // when nothing else is left: dropping it throws away a decode that a
-      // reader is about to want.
-      if (victim == entries_.end() ||
-          std::tie(e.ahead, e.used) < std::tie(victim->second.ahead, victim->second.used)) {
-        victim = it;
-      }
+      // Oldest first, groups decoded ahead included.  One is claimed with a
+      // fresh tick, so it outlives every group used before it was decoded and
+      // then ages out like any other.  Keeping them until nothing else was
+      // left let one collision off a reader that does not walk forward fill
+      // the budget with groups nobody asks for, and every later miss then
+      // evicted a group of the working set instead.
+      if (victim == entries_.end() || e.used < victim->second.used) victim = it;
     }
     if (victim == entries_.end()) return; // everything left is in use; overshoot
     held_ -= victim->second.bytes;
