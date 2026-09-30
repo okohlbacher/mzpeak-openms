@@ -174,9 +174,12 @@ fields are scraped per spectrum in parallel from bytes already being decoded.
 Parallelising its first pass across row-group chunks is the obvious fix and is
 not attempted here.
 
-**Teardown, 1.48 s.** Freeing a 7.85 GB working set. Bounded by whatever the
-row-group cache budget is set to; the budget is a real ceiling now that its
-accounting is in decoded bytes.
+**Teardown, 1.48 s.** Freeing a 7.85 GB working set. Bounded by the row-group
+cache budget plus the groups live readers still hold. The budget is counted in
+decoded bytes, but each reader keeps the last group it read, which the cache
+never evicts, so readers on distinct groups add about one group each (two with
+a separate peaks file) on top of it; see `RowGroupCache`. (Corrected
+2026-09-30: this note used to call the budget a real ceiling.)
 
 **Reader construction, 0.24 s.** ~3.8 ms per reader, serialized on a
 process-global mutex in the adapter, times the thread count.
