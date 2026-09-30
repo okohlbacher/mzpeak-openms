@@ -282,9 +282,11 @@ Parquet::Impl::row_group(int32_t index)
     //
     // ponytail: the memo keeps its group alive past the cache's budget -- one
     // group per Parquet that reads through the shared cache, i.e. per reader
-    // thread (two with a separate peaks file).  Bounded by the thread count,
-    // and in practice the groups the cache holds anyway; accounting for it
-    // would need the very mutex this avoids.  Memo hits are not counted in
+    // thread (two with a separate peaks file) -- and the cache neither evicts
+    // a held group nor counts it as room.  Bounded by the thread count, not
+    // the budget: readers idle on distinct groups hold that many groups
+    // whatever the budget says, as row_group_cache.h documents.
+    // stats().held_bytes includes them.  Memo hits are not counted in
     // stats().hits; stats().decodes still counts every decode.
     std::size_t bytes = 0;
     {

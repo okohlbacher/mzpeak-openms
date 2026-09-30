@@ -9,15 +9,25 @@ directory of this repository.
 #define BOOST_TEST_MODULE RowGroupCache
 #include <boost/test/included/unit_test.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "mzpeak/open.h"
+#include "mzpeak/util/manager.h"
+#include "mzpeak/util/parquet.h"
+#include "mzpeak/util/parquet_writer.h"
 #include "mzpeak/util/row_group_cache.h"
 
 using MzPeak::Util::RowGroupCache;
@@ -392,4 +402,125 @@ BOOST_AUTO_TEST_CASE(a_failed_decode_ahead_is_not_the_readers_error)
     return empty_group();
   });
   BOOST_CHECK(!decoded);
+}
+
+/******************************************************************************/
+namespace {
+namespace fs = std::filesystem;
+
+/// A scratch directory removed on scope exit.
+struct Scratch {
+  fs::path path;
+  explicit Scratch(const char* name)
+      : path(fs::temp_directory_path() / name)
+  {
+    fs::remove_all(path);
+    fs::create_directories(path);
+  }
+  ~Scratch()
+  {
+    // error_code, not a throw: a destructor that throws terminates the process
+    // before Boost.Test reports anything. Windows refuses to delete a file that
+    // is still open, so a leaked handle shows up HERE, with its name -- after
+    // a few retries, because on GitHub's Windows runners the antivirus holds a
+    // freshly written file open for a moment.
+    std::error_code ec;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      fs::remove_all(path, ec);
+      if (!ec) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    BOOST_TEST(!ec, "remove_all " << path.string() << ": " << ec.message());
+  }
+};
+
+/// A point-layout archive of 60 spectra of 20 points in 100-row groups: 12
+/// row groups.  Returns its directory.
+fs::path write_archive(const Scratch& scratch)
+{
+  std::vector<uint64_t> index;
+  std::vector<double> mz;
+  std::vector<float> intensity;
+  for (uint64_t s = 0; s < 60; ++s) {
+    for (uint64_t p = 0; p < 20; ++p) {
+      index.push_back(s);
+      mz.push_back(100.0 + static_cast<double>(s) + static_cast<double>(p) / 1000.0);
+      intensity.push_back(static_cast<float>(s * 20 + p));
+    }
+  }
+  const std::string array_index =
+      R"({"prefix":"point","entries":[)"
+      R"({"context":"spectrum","path":"point.mz","data_type":"MS:1000523",)"
+      R"("array_type":"MS:1000514","array_name":"m/z array","unit":"MS:1000040",)"
+      R"("buffer_format":"point","transform":"MS:1003902",)"
+      R"("data_processing_id":null,"buffer_priority":"primary","sorting_rank":0},)"
+      R"({"context":"spectrum","path":"point.intensity","data_type":"MS:1000521",)"
+      R"("array_type":"MS:1000515","array_name":"intensity array",)"
+      R"("unit":"MS:1000131","buffer_format":"point","transform":"MS:1003901",)"
+      R"("data_processing_id":null,"buffer_priority":"primary",)"
+      R"("sorting_rank":null}]})";
+  const std::map<std::string, std::string> kv{
+      {"spectrum_count", "60"},
+      {"spectrum_data_point_count", std::to_string(index.size())},
+      {"spectrum_array_index", array_index},
+  };
+  MzPeak::Util::write_point_spectra_data((scratch.path / "spectra_data.parquet").string(),
+                                         index, mz, intensity, kv, 100);
+
+  std::ofstream json(scratch.path / "mzpeak_index.json");
+  json << R"({"files":[{"name":"spectra_data.parquet","entity_type":"spectrum",)"
+       << R"("data_kind":"data_arrays","column_mapping":[],"parameters":[]}],)"
+       << R"("metadata":{"version":"0.9.0"}})";
+  json.close();
+  return scratch.path;
+}
+} // namespace
+
+/******************************************************************************/
+/// What the budget does and does not bound, on real Parquet readers: each
+/// one reading through the cache holds the last group it read, and the cache
+/// never evicts it, so eight readers idle on eight groups under a two-group
+/// budget hold eight groups -- past the budget, but not past the budget plus
+/// one group per reader, because everything nobody holds is still evicted.
+/// This is the bound row_group_cache.h documents; a change to either side of
+/// it has to change that comment too.
+BOOST_AUTO_TEST_CASE(held_groups_come_on_top_of_the_budget)
+{
+  Scratch scratch("mzp-test-cache-held-bound");
+  auto index = MzPeak::open(write_archive(scratch));
+  const auto data = index.find_file(MzPeak::Schema::EntityType::Spectrum,
+                                    MzPeak::Schema::DataKind::Type::DataArray);
+  BOOST_TEST_REQUIRE((data != index.files().end()));
+
+  const auto md = index.manager()->parquet(*data)->file_metadata();
+  const int32_t groups = md->num_row_groups();
+  std::size_t group = 0; // the largest, in the budget's unit
+  for (int32_t g = 0; g < groups; ++g) {
+    group = std::max(group,
+                     MzPeak::Util::decoded_row_group_bytes(*md->RowGroup(g), *md->schema()));
+  }
+
+  constexpr int32_t kReaders = 8;
+  // More groups than the budget and the readers' together, so a cache that
+  // evicted nothing would break the upper bound as well.
+  BOOST_TEST_REQUIRE(groups > kReaders + 2);
+
+  auto& cache = index.manager()->row_group_cache();
+  cache.set_budget(2 * group);
+
+  // One reader walks every group and goes away: nothing it decoded is held.
+  {
+    auto walker = index.manager()->parquet(*data);
+    for (int32_t g = 0; g < groups; ++g) walker->row_group(g);
+  }
+  // Eight stay, each having read a group of its own.
+  std::vector<std::unique_ptr<MzPeak::Util::Parquet>> readers;
+  for (int32_t r = 0; r < kReaders; ++r) {
+    readers.push_back(index.manager()->parquet(*data));
+    readers.back()->row_group(r);
+  }
+
+  const std::size_t held = cache.stats().held_bytes;
+  BOOST_TEST(held > cache.budget());
+  BOOST_TEST(held <= cache.budget() + kReaders * group);
 }
