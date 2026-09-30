@@ -44,9 +44,12 @@ upstream `trunk` and adds the following.
   MS-Numpress (`MS:1002312` / `MS:1002314`) encodings.
 - Bruker TDF *ims-compact*, which stores no m/z array at all — m/z is
   reconstructed from a `tof` column as `(a + b*tof)^2`.
-- Per-peak ion mobility (`Spectrum::ion_mobility_array()`) and per-window
-  mobility limits, which diaPASEF needs: a frame is one spectrum carrying
-  several isolation windows over disjoint mobility ranges.
+- Per-peak ion mobility (`Spectrum::ion_mobility_array()`), validated against a
+  real Bruker diaPASEF acquisition: the array is parallel to m/z and matches the
+  vendor-derived values exactly (`test/files/diapasef.dir`). Per-window mobility
+  limits are also read, but no file seen so far carries them -- that converter
+  emits one spectrum per window with a single precursor, rather than one frame
+  spanning several.
 - Selection and batch access: `by_id`, `indices_in_time_range`,
   `extract_ion_chromatogram`, `get_spectra_batch`.
 - Streaming is preserved throughout: metadata is readable without decoding
@@ -74,13 +77,68 @@ not as a guarantee.
 
 ### What is NOT validated
 
-- **Ion mobility** — no bundled fixture carries a mobility array, so that code
-  is pinned only by its CV mapping and its absent-data behaviour.
-- **Bruker TDF** — exercised end to end by a hand-built fixture
-  (`test/files/ims_compact.dir`), not by a real vendor archive.
+- **Bruker TDF *ims-compact*** — exercised end to end by a hand-built fixture
+  (`test/files/ims_compact.dir`), not by a real vendor archive. A real diaPASEF
+  `.d` is now available and has been converted, but the conversion declares no
+  `ims_calibration` and stores explicit m/z, so the `(a + b*tof)^2`
+  reconstruction still has never run on vendor data.
+- **Per-window ion-mobility limits** — the acquisition validated below records
+  a mobility VALUE per selected ion and no limits, so
+  `ion_mobility_lower_limit`/`_upper_limit` remain unexercised.
 
 Both need real files before their numbers are trusted. Remaining known issues
 are listed in [docs/roadmap.md](docs/roadmap.md).
+
+## Building
+
+Three configurations are used here, and all three are expected green:
+
+```sh
+meson setup build                                          # debug
+meson setup build-release --buildtype=release
+meson setup build-tsan --buildtype=debug -Db_sanitize=thread
+
+meson compile -C build && meson test -C build
+```
+
+`scripts/e2e.sh` additionally rebuilds the Rust reference from `../hupo-mzpeak`
+and runs the cross-implementation stages; a stage whose dependencies are absent
+is skipped rather than failed.
+
+### When a build that used to work stops working
+
+Suspect the toolchain before the tree, and reach for the same fix in both cases
+below:
+
+```sh
+meson setup --reconfigure build build-release build-tsan
+```
+
+It re-runs dependency detection and keeps the options each directory was created
+with. Two distinct failures have been seen, days apart, neither caused by a
+change in this repository:
+
+**A dependency moved.** Homebrew keeps several versions installed at once, and a
+configured build directory caches the *absolute* path of the library it found.
+After a `brew upgrade` the headers under `/opt/homebrew/include` point at the new
+version while the build directory still links the old one. That surfaces as an
+undefined symbol in a third-party namespace, naming neither the version skew nor
+the fix:
+
+```
+Undefined symbols for architecture arm64:
+  "boost::program_options::detail::arg"
+```
+
+Observed with Boost 1.90 -> 1.92, both left in `/opt/homebrew/Cellar/boost`.
+
+**Meson itself moved.** A build directory records the version that generated it
+and refuses to run under another. This one at least names its own remedy:
+
+```
+ERROR: Build directory has been generated with Meson version 1.11.1,
+which is incompatible with the current version 1.12.0.
+```
 
 ## About
 

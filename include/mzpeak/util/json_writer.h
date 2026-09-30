@@ -66,6 +66,11 @@ struct IndexFileEntry {
   std::string entity_type;
   std::string data_kind;
   std::vector<IndexColumnMapping> column_mapping;
+
+  /// Lowercase, separator-free SHA-512 of this member's bytes.  The
+  /// specification requires one per indexed file; empty is serialised as JSON
+  /// null, which is what an archive written before that rule looks like.
+  std::string checksum;
 };
 
 /**

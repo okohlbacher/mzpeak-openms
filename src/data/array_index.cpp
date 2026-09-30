@@ -30,7 +30,8 @@ struct EntryCmpFn {
     // equivalent and equivalence stops being transitive.  std::ranges::sort
     // requires a strict weak order, so that form is undefined behaviour, and
     // this sort decides which entry a dimension sees first (i.e. which one
-    // counts as primary when coalescing).
+    // counts as primary when coalescing).  Upstream landed the same fix in
+    // 4637f85.
     if (a.array_name != b.array_name) return a.array_name < b.array_name;
     if (a.array_type != b.array_type) return a.array_type < b.array_type;
     if (a.data_type != b.data_type) return a.data_type < b.data_type;

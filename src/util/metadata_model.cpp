@@ -27,6 +27,8 @@ directory of this repository.
 #include <ranges>
 #include <span>
 #include <sstream>
+#include <cctype>
+#include <format>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
@@ -628,24 +630,203 @@ CvParam extract_one_cv_param(const Facet& items, int64_t k)
 /// Mirrors the offset/length idiom already used by read_mz_delta_models.
 /// Each item body is handled by extract_one_cv_param so plans 01-02/01-03
 /// can reuse that helper for lone-CvParam structs (not lists).
+/// Terms this reader already surfaces through a typed field.
+///
+/// A writer MAY set `term_marker` on a standardised column -- the
+/// specification's own examples do -- and appending those to `parameters` as
+/// well would report the same term twice, once typed and once not.  Only
+/// CURIE-valued terms can appear here: a term marker never describes a column
+/// that carries a value, so `ms_level` and the like cannot collide.
+/// Kept in step with what the reference writer actually flags: every accession
+/// it marks is listed here if this reader also types it.  As of prototype
+/// 1505fce that is exactly this set.
+constexpr std::string_view kTypedTermMarkers[] = {
+    "MS:1000525", // spectrum representation -> SpectrumMetadata::representation
+    "MS:1000559", // spectrum type           -> SpectrumMetadata::spectrum_type
+    "MS:1000465", // scan polarity           -> SpectrumMetadata::polarity
+    "MS:1000626", // chromatogram type       -> ChromatogramMetadata::type
+};
+
+/// Append the terms carried by this facet's `term_marker` columns.
+///
+/// A term marker states a term's PRESENCE rather than carrying its value, in
+/// one of the two shapes the specification defines:
+///
+///   - a BOOLEAN column, where `true` means this mapping's own accession
+///     applies to the row (`opt_calibration_spectrum` -> MS:1000928);
+///   - a STRING column, whose value is the CURIE of a CHILD of the mapping's
+///     accession (`dissociation_method` for MS:1000044 -> MS:1000422).
+///
+/// Without this they are invisible.  They are sibling COLUMNS of `parameters`,
+/// not entries inside it, so every pass that walks the list misses them
+/// entirely -- and on the activation facet, where nothing is typed, that is the
+/// difference between reporting the dissociation method and reporting nothing.
+/// They join the same list because that is where this API already reports the
+/// terms it does not give a field of their own.
+///
+/// The child term's NAME is deliberately left unset for the string form:
+/// turning a CURIE into a name needs a loaded controlled vocabulary, which this
+/// library does not carry, and inventing one would be worse than omitting it.
+/// The accession is what dispatch uses and it is preserved exactly.
+void append_term_markers(const Facet& facet, int64_t row, std::vector<CvParam>& out)
+{
+  if (facet.file == nullptr || !facet) return;
+
+  for (const auto& column : facet.file->columns()) {
+    if (!column.term_marker || !column.accession) continue;
+
+    bool typed = false;
+    for (const auto& known : kTypedTermMarkers) {
+      if (known == *column.accession) typed = true;
+    }
+    if (typed) continue;
+
+    // The mapping's path is file-absolute (`activation.dissociation_method`)
+    // while this facet IS the struct owning the leaf, so match the last
+    // component.  A leaf name repeated across two facets of one file would
+    // attach the term to both; no fixture or reference writer does that.
+    std::string_view leaf(column.path);
+    if (auto dot = leaf.rfind('.'); dot != std::string_view::npos) {
+      leaf.remove_prefix(dot + 1);
+    }
+
+    auto field = facet->GetFieldByName(std::string(leaf));
+    if (!field || row >= field->length() || field->IsNull(row)) continue;
+
+    std::optional<std::string> name;
+    if (!column.name.empty()) name = column.name;
+
+    if (auto flag = std::dynamic_pointer_cast<arrow::BooleanArray>(field)) {
+      // Presence marker: false and null alike mean the term is absent.
+      if (flag->Value(row)) {
+        out.push_back(CvParam{.accession = column.accession, .name = name});
+      }
+      continue;
+    }
+
+    std::optional<std::string> child;
+    if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+      child = large->GetString(row);
+    } else if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+      child = str->GetString(row);
+    }
+    // Anything that is neither boolean nor string is not a term marker,
+    // whatever the mapping claims; skip it rather than guess at a meaning.
+    if (child && !child->empty()) {
+      out.push_back(CvParam{.accession = std::move(child)});
+    }
+  }
+}
+
+/// Does @p text have the shape of a CURIE ("MS:1000422")?
+///
+/// Used to tell a column that names a CHILD TERM from one that carries an
+/// ordinary string value.  Shape only: resolving it to a real term would need
+/// a controlled vocabulary this library does not carry.
+bool looks_like_curie(std::string_view text)
+{
+  const auto colon = text.find(':');
+  if (colon == std::string_view::npos || colon == 0 || colon + 1 >= text.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < colon; ++i) {
+    if (!std::isalpha(static_cast<unsigned char>(text[i]))) return false;
+  }
+  for (std::size_t i = colon + 1; i < text.size(); ++i) {
+    if (!std::isdigit(static_cast<unsigned char>(text[i]))) return false;
+  }
+  return true;
+}
+
+/// Append the ACTIVATION facet's promoted columns as CV parameters.
+///
+/// Activation is the one facet this reader gives no typed fields at all, so
+/// everything a writer promotes out of `parameters` and into a column of its
+/// own -- `dissociation_method`, `collision_energy` -- simply disappeared.
+/// Confirmed on a real Bruker diaPASEF conversion, where both are columns and
+/// this reader reported an empty activation.
+///
+/// Deliberately scoped to activation rather than applied to every facet.  Every
+/// other facet surfaces its mapped columns as typed fields, so a general
+/// version would need a complete list of the accessions already typed, and a
+/// single omission from that list would silently report a term twice.  The
+/// narrow version cannot do that.
+void append_activation_columns(const Facet& facet,
+                               int64_t row,
+                               std::vector<CvParam>& out)
+{
+  if (facet.file == nullptr || !facet) return;
+
+  constexpr std::string_view kPrefix = "activation.";
+  for (const auto& column : facet.file->columns()) {
+    if (!std::string_view(column.path).starts_with(kPrefix)) continue;
+
+    const std::string_view leaf(
+        std::string_view(column.path).substr(kPrefix.size()));
+    if (leaf.empty() || leaf == "parameters") continue; // already read as a list
+
+    auto field = facet->GetFieldByName(std::string(leaf));
+    if (!field || row >= field->length() || field->IsNull(row)) continue;
+
+    CvParam param;
+    param.accession = column.accession;
+    if (!column.name.empty()) param.name = column.name;
+    if (column.unit.has_value() && !column.unit->empty()) param.unit = column.unit;
+
+    if (auto large = std::dynamic_pointer_cast<arrow::LargeStringArray>(field)) {
+      param.value = large->GetString(row);
+    } else if (auto str = std::dynamic_pointer_cast<arrow::StringArray>(field)) {
+      param.value = str->GetString(row);
+    } else if (auto dbl = std::dynamic_pointer_cast<arrow::DoubleArray>(field)) {
+      // std::format, not std::to_string: the latter is %f with six decimals,
+      // which silently truncates anything with more resolution than that.
+      param.value = std::format("{}", dbl->Value(row));
+    } else if (auto flt = std::dynamic_pointer_cast<arrow::FloatArray>(field)) {
+      param.value = std::format("{}", flt->Value(row));
+    } else if (auto i64 = std::dynamic_pointer_cast<arrow::Int64Array>(field)) {
+      param.value = std::format("{}", i64->Value(row));
+    } else if (auto i32 = std::dynamic_pointer_cast<arrow::Int32Array>(field)) {
+      param.value = std::format("{}", i32->Value(row));
+    } else {
+      continue; // a shape this reader has no honest representation for
+    }
+
+    // A string column mapped to a parent term carries the CURIE of a CHILD --
+    // `dissociation_method` for MS:1000044 holds MS:1000422.  The term that
+    // applies to the row is the child, so report that, not the parent with the
+    // child's name sitting in `value` where nothing would look for it.  The
+    // specification asks for `term_marker` on such columns, but lets the
+    // standardised ones omit it, and this one does.
+    if (param.value.has_value() && looks_like_curie(*param.value)) {
+      param.accession = param.value;
+      param.value.reset();
+      param.unit.reset();
+    }
+
+    out.push_back(std::move(param));
+  }
+}
+
 std::vector<CvParam> read_cv_params_from_list(const Facet& parent,
                                               const char* list_field_name,
                                               int64_t row)
 {
   std::vector<CvParam> out;
 
-  auto slice = list_slice(resolve_field(parent, list_field_name), row);
-  if (!slice) return out;
-
-  auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values);
-  if (!items) return out;
-
-  const int64_t begin = slice->begin;
-  const int64_t length = slice->length;
-  out.reserve(static_cast<std::size_t>(length));
-  for (int64_t k = 0; k < length; ++k) {
-    out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
+  // The list is optional, but term markers are columns in their own right, so
+  // they are collected whether or not this facet carries a `parameters` list.
+  if (auto slice = list_slice(resolve_field(parent, list_field_name), row)) {
+    if (auto items = std::dynamic_pointer_cast<arrow::StructArray>(slice->values)) {
+      const int64_t begin = slice->begin;
+      const int64_t length = slice->length;
+      out.reserve(static_cast<std::size_t>(length));
+      for (int64_t k = 0; k < length; ++k) {
+        out.push_back(extract_one_cv_param(Facet{items, parent.file}, begin + k));
+      }
+    }
   }
+
+  append_term_markers(parent, row, out);
   return out;
 }
 
@@ -710,8 +891,8 @@ void attach_precursors(Map& out,
     // built here once as well.  Built per row, each started with an empty memo,
     // so every member was resolved from scratch on every row -- failed exact
     // lookups, the name rewrite, the alias table, and a malloc per memo entry:
-    // a quarter of opening a 717,924-spectrum archive.  Activation holds
-    // nothing but its parameters list, so Lean skips resolving the struct.
+    // a quarter of opening a 717,924-spectrum archive.  Only Full reads
+    // activation, so Lean skips resolving the struct.
     const Facet iw{std::dynamic_pointer_cast<arrow::StructArray>(
                        resolve_field(prec, "isolation_window")),
                    prec.file};
@@ -764,6 +945,7 @@ void attach_precursors(Map& out,
 
       if (act && !act->IsNull(r)) {
         pi.activation_parameters = read_cv_params_from_list(act, "parameters", r);
+        append_activation_columns(act, r, pi.activation_parameters);
       }
 
       it->second.precursors.push_back(std::move(pi));
@@ -1482,7 +1664,7 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
     // Indexed by the spectrum's slot in `out`, which is one-to-one with its
     // source_index, rather than a std::map keyed by source_index: the map paid
     // a node allocation and two tree walks per scan row, most of this pass.
-    std::vector<std::optional<std::optional<float>>> earliest_scan(
+    std::vector<std::optional<std::optional<double>>> earliest_scan(
         static_cast<std::size_t>(std::ranges::distance(out)));
 
     for (const auto& scan : facets_for("scan", scans_table, files.scans)) {
@@ -1517,7 +1699,7 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
           // start time for a multi-scan spectrum; taking the last row's instead
           // reports a spectrum later than it is, so an RT-range query silently
           // misses it.  Scan windows still accumulate across every scan.
-          auto sst = opt_float(start_time, r);
+          auto sst = opt_double(start_time, r);
 
           auto& seen = earliest_scan[static_cast<std::size_t>(it - out.begin())];
           bool representative = true;
@@ -1541,12 +1723,13 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
             // docs/schemas/spectra.md).  ×60 -> seconds (a silent
             // minutes/seconds mismatch is a 60x error).
             //
-            // scan_start_time is float32 while spectrum.time is float64 and
-            // carries the same quantity, so when the two agree to within float32
-            // precision keep the PASS 1 value rather than losing digits at an
-            // exact range boundary.
+            // scan_start_time and spectrum.time carry the same quantity, so
+            // when the two agree keep the PASS 1 value rather than losing
+            // digits at an exact range boundary.  The tolerance stays at
+            // float32 scale because either column may still be stored float32:
+            // the specification only prefers double, it does not require it.
             if (sst) {
-              const double from_scan = static_cast<double>(*sst) * 60.0;
+              const double from_scan = *sst * 60.0;
               const double previous = it->second.retention_time.value_or(from_scan);
               const double scale = std::max(std::abs(from_scan), 1.0);
               if (std::abs(previous - from_scan) > 1e-6 * scale) {
@@ -1819,7 +2002,7 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
   // scan_windows are deliberately NOT read here.  The reference writer maps
   // their limits to m/z units even for wavelength spectra, so a nanometre bound
   // arrives labelled as m/z; reading it would launder that error into our API.
-  std::map<uint64_t, std::optional<float>> earliest_scan;
+  std::map<uint64_t, std::optional<double>> earliest_scan;
   for (const auto& scan :
        facets_of(table, "scan", scans_table, primary_file,
                  files.scans ? &files.scans->index_file() : nullptr)) {
@@ -1837,7 +2020,7 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
         continue;
       }
 
-      auto sst = opt_float(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
+      auto sst = opt_double(scan, "MS_1000016_scan_start_time_unit_UO_0000031", r);
 
       bool representative = true;
       if (auto seen = earliest_scan.find(*src_idx); seen != earliest_scan.end()) {
@@ -1849,11 +2032,11 @@ read_wavelength_spectrum_metadata(const WavelengthMetadataFiles& files)
 
       it->second.scan_parameters = read_cv_params_from_list(scan, "parameters", r);
 
-      // scan_start_time is float32 while spectrum.time is float64 and carries
-      // the same quantity, so keep the more precise value when the two agree to
-      // within float32 rounding.
+      // scan_start_time and spectrum.time carry the same quantity, so keep the
+      // PASS 1 value when the two agree.  The tolerance stays at float32 scale
+      // because either column may still be stored float32.
       if (sst) {
-        const double from_scan = static_cast<double>(*sst) * 60.0;
+        const double from_scan = *sst * 60.0;
         const double previous = it->second.time.value_or(from_scan);
         const double scale = std::max(std::abs(from_scan), 1.0);
         if (std::abs(previous - from_scan) > 1e-6 * scale) {

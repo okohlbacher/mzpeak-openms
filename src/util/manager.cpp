@@ -243,4 +243,10 @@ std::unique_ptr<Util::Parquet> Manager::parquet(const Schema::File& file) const
   return parquet;
 }
 
+/******************************************************************************/
+std::unique_ptr<MzPeak::IO::File> Manager::read_member(const std::string& name) const
+{
+  return archive_->read_file(name);
+}
+
 } // namespace MzPeak::Util

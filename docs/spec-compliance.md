@@ -2,6 +2,12 @@
 
 Audited against `HUPO-PSI/mzPeak-specification` at `85442bd`
 (`docs/conformance.md`), as both a conformant reader and a conformant writer.
+Re-checked against `d0c16b3` (2026-09-11), which formalised `term_marker`,
+raised column statistics from optional to required, and moved the example
+`scan_start_time` from float32 to double; and again against `e5e9021`
+(2026-09-22), which made a SHA-512 checksum per indexed file a MUST and
+extended the page-index requirement to cover row group statistics.  The deltas
+are folded into the rows below and into *Known deviations*.
 Two independent passes: this implementation's own, and an adversarial audit by
 an external model. Findings the audit raised are cited where they changed the
 verdict.
@@ -52,7 +58,7 @@ fixtures:
 | Req | Verdict | Notes |
 |---|---|---|
 | W1 produce a conformant archive | **PARTIAL** | subject to the S-invariants below; a NaN coordinate is now rejected rather than written non-ascending; caller-supplied unit CURIEs are not checked for CV ancestry (S8). |
-| W2 page index for index/coordinate columns | **OK** | `enable_write_page_index()` is the single choke point for every Parquet file written. |
+| W2 page index AND column statistics for index/coordinate columns | **OK** | `enable_write_page_index()` and `enable_statistics()` sit together in the single choke point for every Parquet file written (`parquet_writer.cpp`). `d0c16b3` raised statistics from "when present" to a writer MUST; this already satisfied it. |
 | W3 declare every CV used, version-pinned | **FIXED** | `cv_list` was hardcoded MS+UO regardless of content. It is now derived from every CURIE prefix reachable in the finished index; MS and UO are always present (the array index and column mappings use them); each prefix is pinned from a registry of the vocabularies a mass-spec archive plausibly cites. An unpinnable prefix is still declared with a visible placeholder and a warning, never silently omitted. |
 | W4 array index sufficient to reconstruct without names | **OK** (scope-limited) | full `path`/`data_type`/`array_type`/`unit`/`buffer_format`/`sorting_rank` per entry, in the spec-mandated Parquet KV location. Sufficiency holds for the writer's feature set: transforms, mobility and auxiliary arrays are not yet emitted. |
 
@@ -103,6 +109,63 @@ reference corpus or a well-formed archive from the reference writer.
   schema of every fixture Parquet file), because the one place raw bytes appear
   -- an auxiliary array's `data` -- is a list, not a binary column. It becomes
   real the moment the schema gains a binary field.
+- **R5, isolation-window terms beyond the three preferred ones** — the typed
+  `IsolationWindow` fields resolve `MS:1000827` (target m/z), `MS:1000828`
+  (lower offset) and `MS:1000829` (upper offset), which are the three the
+  specification names for that group. The *deprecated* limit terms
+  `MS:1000793`/`MS:1000794` and the no-isolation flag `MS:1003159` are also
+  children of `MS:1000792` (isolation window attribute), so a conformant archive
+  may carry them instead. They reach the caller through
+  `IsolationWindow::parameters` rather than a typed field: nothing is lost, but a
+  caller computing window bounds from the typed fields alone sees an empty
+  window rather than an error. `mzdata` added handling for exactly these terms
+  in `58e509b` (2026-09-10), which is evidence that real files carry them.
+- **`term_marker`, both forms — FIXED** (was a gap when `d0c16b3` landed). A
+  marker column states that a term APPLIES to a row rather than carrying its
+  value, and the terms live in sibling COLUMNS of `parameters` rather than
+  inside the list, so every pass that walked the list missed them. Both forms
+  now reach `parameters`: a boolean column contributes the mapping's own
+  accession when true, and a string column contributes the CURIE it carries,
+  which is a CHILD of the mapping's accession. The child's NAME is left unset,
+  because resolving a CURIE to a name needs a loaded CV this library does not
+  carry. Terms already surfaced as typed fields (`MS:1000525`, `MS:1000559`,
+  `MS:1000465`) are skipped so a writer that flags a standardised column does
+  not get it reported twice. Pinned by `test/term_marker_test.cpp` against
+  `test/files/term_markers.dir`, which was built for this because nothing in
+  either implementation's output carries such a column; the test fails if the
+  feature is removed. Residual limitation: a mapping is matched to a facet by
+  the LAST component of its path, so the same leaf name on two facets of one
+  file would attach the term to both.
+- **SHA-512 checksums — FIXED, both sides.** `e5e9021`
+  made a lowercase, separator-free SHA-512 digest per indexed file a MUST (the
+  ZIP container is explicitly excluded, since packed and unpacked archives are
+  equally valid). All four writer paths stamp one, and the reader verifies on
+  request: `MzPeak::open(path, Validate::Checksums)` refuses a mismatch and
+  `Index::verify_checksums()` reports one instead. Verification is opt in
+  because it costs a full pass over every indexed member. The report separates
+  `verified` from `unchecked`, so an archive predating the requirement -- which
+  passes having proved nothing -- stays distinguishable from one actually
+  checked; such an archive is not refused, since rejecting everything older than
+  the rule would be a worse reader rather than a stricter one. Semantics were
+  confirmed
+  against the reference rather than inferred -- all ten digests in
+  `small.unpacked.mzpeak` reproduce as a plain SHA-512 over each file's raw
+  bytes, no salt, no header exclusions -- and `test/sha512_test.cpp` recomputes
+  that same digest so the two implementations are checked against each other.
+- **Provenance and column-chunk checksums — not an obligation yet.** The
+  prototype gained per-column-chunk SHA-512 digests and a `write_provenance_table`
+  (`85ff6af`), which is the start of the specification's draft *Provenance*
+  section. Nothing calls that writer, the specification's index schema declares
+  no place for the table, and the section itself still says only that the file
+  "MUST be encrypted using a proprietary secret key". So there is nothing to
+  implement against and no member for a reader to encounter; recorded here only
+  so the mechanism's location is known when it is formalised.
+- **Grid encoding is refused, not read** — the prototype added a `grid` buffer
+  encoding (`e62e18c`) alongside `point` and `chunk`. `group_name_to_layout`
+  maps anything it does not know to `Layout::Unknown`, and the decoder raises
+  `UnknownLayoutError` rather than guessing, so such an archive is refused
+  cleanly instead of being misread. Supporting it is unstarted work, not a
+  latent corruption.
 - **S8, caller CURIE ancestry** — the writer does not verify that a
   caller-supplied unit or type CURIE descends from the required CV parent. The
   syntactic shape is a CURIE; the ancestry check needs a loaded controlled

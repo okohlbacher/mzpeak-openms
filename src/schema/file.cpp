@@ -26,6 +26,17 @@ void parse_columns(const json::array& input, std::vector<File::Column>& output)
     }
   };
 
+  auto get_bool = [](const json::object& ob,
+                     std::string_view key) -> std::optional<bool> {
+    auto it = ob.find(key);
+
+    if (it != ob.end() && it->value().is_bool()) {
+      return it->value().as_bool();
+    } else {
+      return {};
+    }
+  };
+
   output.reserve(input.size());
 
   for (const auto& column : input) {
@@ -43,6 +54,7 @@ void parse_columns(const json::array& input, std::vector<File::Column>& output)
                     .value_or(""),
         .accession = get_string(colobj, "accession"),
         .unit = get_string(colobj, "unit"),
+        .term_marker = get_bool(colobj, "term_marker").value_or(false),
     };
 
     // A mapping without a path binds nothing and would only ever produce a
@@ -70,6 +82,11 @@ try
 
   if (cs != o.end() && cs->value().is_array()) {
     parse_columns(cs->value().as_array(), columns_);
+  }
+
+  // Explicitly null is how an archive says "no digest", and is not an error.
+  if (auto sum = o.find("checksum"); sum != o.end() && sum->value().is_string()) {
+    checksum_ = std::string(sum->value().as_string());
   }
 } catch (const std::exception& e) {
   throw MzPeak::JsonError(std::string("schema::File: ") + e.what());

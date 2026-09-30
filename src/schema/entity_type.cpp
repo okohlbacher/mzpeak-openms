@@ -23,12 +23,11 @@ std::string entity_type_to_string(EntityType::Type t)
   case Chromatogram:
     return "chromatogram";
   case WavelengthSpectrum:
-    // UNDERSCORE, not "wavelength spectrum".  Two reasons: the specification
-    // canonicalised the underscore spelling (mzPeak-specification#18), and
-    // index_column_name()/array_index_name()/metadata_count_key() are all
-    // built by appending to this string -- the space form yields
-    // "wavelength spectrum_index", which matches no column in any archive.
-    // The space form is still ACCEPTED when parsing.
+    // UNDERSCORE, not "wavelength spectrum": index_column_name(),
+    // array_index_name() and metadata_count_key() are all built by appending
+    // to this string, and the space form yields "wavelength spectrum_index",
+    // which matches no column in any archive.  Upstream converged on the same
+    // spelling in d70ce3a.  The space form is still ACCEPTED when parsing.
     return "wavelength_spectrum";
   }
 
@@ -53,6 +52,9 @@ EntityType::value_type entity_type_from_string(std::string_view s)
   } else if (s == "wavelength_spectrum") {
     return WavelengthSpectrum;
   } else if (s == "wavelength spectrum") {
+    // Kept deliberately after upstream dropped it in d70ce3a: archives written
+    // before the rename still carry the space form, and refusing it degrades
+    // the entry to `Other` and empties the collection without an error.
     return WavelengthSpectrum;
   } else {
     return std::string(s);

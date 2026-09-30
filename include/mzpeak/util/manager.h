@@ -64,6 +64,15 @@ public:
   /// every Parquet over one member shares its parsed footer.  Thread-safe.
   std::unique_ptr<Util::Parquet> parquet(const Schema::File&) const;
 
+  /**
+   * Open a member for RAW byte access, without interpreting it as Parquet.
+   *
+   * Exists for integrity checking, which must hash exactly the bytes the
+   * archive stores; decoding and re-encoding would digest a different
+   * sequence.
+   */
+  std::unique_ptr<MzPeak::IO::File> read_member(const std::string&) const;
+
   /// The archive-wide decoded-row-group cache: size its budget to the number
   /// of readers you run, read its stats to see what they cost.
   RowGroupCache& row_group_cache() const { return *row_group_cache_; }

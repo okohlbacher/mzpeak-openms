@@ -212,6 +212,11 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
     }
     o["column_mapping"] = std::move(mapping);
     o["parameters"] = json::array();
+    if (file.checksum.empty()) {
+      o["checksum"] = nullptr;
+    } else {
+      o["checksum"] = file.checksum;
+    }
     file_array.push_back(std::move(o));
   }
 
