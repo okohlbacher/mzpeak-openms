@@ -1049,14 +1049,41 @@ void require_minimal_equals_lean(const std::string& path)
 
 BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
 {
+  // All of test/files but declares_sorted_lies.dir, whose peak decode throws
+  // by design (see sorting_declaration_test.cpp).
   for (const char* path :
        {"../test/files/small.mzpeak", "../test/files/small.chunked.mzpeak",
         "../test/files/small.numpress.mzpeak", "../test/files/has_uv.mzpeak",
         "../test/files/small.dir", "../test/files/ims_compact.dir",
         "../test/files/list32.dir", "../test/files/uint32_index.dir",
         "../test/files/v2/small.mzpeak", "../test/files/v2/has_uv.mzpeak",
-        "../test/files/v2/small.chunked.mzpeak", "../test/files/legacy/small.mzpeak"})
+        "../test/files/v2/small.chunked.mzpeak", "../test/files/legacy/small.mzpeak",
+        "../test/files/diapasef.dir", "../test/files/term_markers.dir",
+        "../test/files/no_page_index.dir", "../test/files/declares_sorted_honest.dir",
+        "../test/files/Example_Processed.img.mzpeak",
+        "../test/files/v2/Example_Processed.img.mzpeak",
+        "../test/files/v2/small.numpress.mzpeak", "../test/files/v2/small.unpacked.mzpeak"})
     require_minimal_equals_lean(path);
+}
+
+/******************************************************************************/
+// The comparison above covers only the fields Minimal keeps, so an archive
+// Minimal silently stopped holding -- read as Lean by the fallback -- would
+// pass it too.  The selected ion's mobility tells the two apart: diapasef.dir,
+// a real diaPASEF run, carries one (see ion_mobility_test.cpp), and Minimal
+// leaves it out.
+BOOST_AUTO_TEST_CASE(minimal_holds_diapasef_without_its_ion_mobility)
+{
+  auto lean_index = MzPeak::open("../test/files/diapasef.dir");
+  auto minimal_index = MzPeak::open("../test/files/diapasef.dir");
+  auto l = lean_index.spectra(MzPeak::MetadataDetail::Lean)[0];
+  auto m = minimal_index.spectra(MzPeak::MetadataDetail::Minimal)[0];
+  BOOST_TEST_REQUIRE(l.metadata().precursors.size() == 1u);
+  BOOST_TEST_REQUIRE(l.metadata().precursors[0].selected_ions.size() == 1u);
+  BOOST_TEST_REQUIRE(m.metadata().precursors.size() == 1u);
+  BOOST_TEST_REQUIRE(m.metadata().precursors[0].selected_ions.size() == 1u);
+  BOOST_TEST(l.metadata().precursors[0].selected_ions[0].ion_mobility_value.has_value());
+  BOOST_TEST(!m.metadata().precursors[0].selected_ions[0].ion_mobility_value.has_value());
 }
 
 /******************************************************************************/
