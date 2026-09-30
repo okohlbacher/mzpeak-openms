@@ -39,12 +39,14 @@ namespace MzPeak::Util {
 /// 64-128 KB (65,537 bytes take 128 KB).  On macOS that slack costs address
 /// space, not memory: a page costs RSS once it is touched.  On Linux the same
 /// holds for small pages, but slack that shares a huge page with written bytes
-/// is resident with it (see below).  A freed block goes onto its class's free
-/// list, shared by all threads, and the next request of that class on any
-/// thread takes the most recently freed one.  Which thread frees a block, and
-/// whether the thread that mapped it still exists, does not matter.  Smaller
-/// buffers, and any alignment above 64, go to Arrow's system allocator as
-/// before.
+/// is resident with it (see below).  On Windows the whole block is committed
+/// when it is mapped, so its slack, like a cached block, counts against the
+/// commit limit (RAM plus page file) from the start, though its pages take RAM
+/// only once touched.  A freed block goes onto its class's free list, shared
+/// by all threads, and the next request of that class on any thread takes the
+/// most recently freed one.  Which thread frees a block, and whether the
+/// thread that mapped it still exists, does not matter.  Smaller buffers, and
+/// any alignment above 64, go to Arrow's system allocator as before.
 ///
 /// On Linux the blocks are backed by transparent huge pages: smaller ones are
 /// carved from 64 MB regions, and blocks of 2 MB and more are mapped on their
@@ -124,7 +126,8 @@ public:
   std::string backend_name() const override;
 
   /// Bytes of blocks, allocated and cached.  The pool's share of RSS is about
-  /// this: less by what was never written, more by huge-page rounding.
+  /// this: less by what was never written, more by huge-page rounding.  On
+  /// Windows it is also the blocks' commit charge.
   int64_t bytes_mapped() const;
 
   /// Bytes of freed blocks kept for reuse.
