@@ -111,7 +111,10 @@ struct RowGroupBatches {
 /// can decode AHEAD instead: it claims the next group of the same file that
 /// nobody has claimed, decodes that, and only then comes back for its own.
 /// See get().  A group decoded that way is evicted like any other, least
-/// recently used first.
+/// recently used first.  And a reader does not decode ahead while its group
+/// is one the cache evicted lately and is decoding again: the budget is
+/// then too small for what readers come back to, and decoding ahead would
+/// evict more of it.
 class RowGroupCache final {
 public:
   using Batches = std::shared_ptr<const RowGroupBatches>;
@@ -142,8 +145,9 @@ public:
   ///
   /// With @p ahead, a call that would wait for another reader's decode of
   /// @p group first decodes later groups of @p file that nobody has claimed,
-  /// within the budget.  A failed decode AHEAD is not this call's error: it
-  /// reaches that group's own waiters and is forgotten like any other.
+  /// within the budget -- unless that decode brings back a group evicted
+  /// lately.  A failed decode AHEAD is not this call's error: it reaches that
+  /// group's own waiters and is forgotten like any other.
   Batches get(const std::string& file,
               int32_t group,
               std::size_t bytes,
@@ -183,7 +187,16 @@ private:
     std::uint64_t used = 0;
     bool ready = false;
     bool ahead = false; ///< decoded ahead, and no reader has asked for it yet
+    bool redecode = false; ///< claimed within lately_locked_() of its eviction; see get()
   };
+
+  /// How many ticks of the clock after its eviction a group claimed again
+  /// counts as a re-decode: a few turns of the clock over every entry.  A
+  /// working set that fits the budget, read at random, asks for each of its
+  /// groups again within about one turn; a walk asks again for a group it
+  /// left behind only on its next pass, after the rest of the file.  Caller
+  /// holds mutex_.
+  std::uint64_t lately_locked_() const { return 4 * entries_.size() + 16; }
 
   /// Is a READY entry still held by a reader (its per-reader memo, or a read
   /// in progress)?  Evicting such an entry frees nothing -- the reader keeps
@@ -217,13 +230,14 @@ private:
 
   /// Evict least-recently-used READY entries, never @p keep and never one a
   /// reader still holds, until the budget holds or nothing evictable is left.
-  /// Groups decoded ahead are ordered by the same clock as the rest.  Caller
-  /// holds mutex_.
+  /// Groups decoded ahead are ordered by the same clock as the rest.  Each
+  /// eviction is recorded in evicted_ for claim_locked_.  Caller holds mutex_.
   void evict_locked_(const Key& keep);
 
   mutable std::mutex mutex_;
   std::condition_variable admit_;
   std::map<Key, Entry> entries_;
+  std::map<Key, std::uint64_t> evicted_; ///< tick_ at each group's last eviction, lately
   std::size_t budget_;
   std::size_t held_ = 0;
   std::size_t in_flight_ = 0; ///< bytes of entries still decoding
