@@ -99,6 +99,12 @@ void Spectrum::decode_() const
     // stands in for it and m/z is reconstructed from the index calibration.
     std::vector<double> tof;
 
+    // The first mobility dimension decoded, if any.  `ion_mobility_array()` is
+    // ONE array, and appending every mobility dimension into it produced a
+    // concatenation of unrelated arrays -- raw and mean mobility, say -- twice
+    // as long as the peaks it was meant to be parallel to.
+    const Data::ArrayIndex::Dimension* mobility_dim = nullptr;
+
     for (const auto& dim : dims_) {
       if (dim.array_type == Schema::PSI::ArrayType::Mz) {
         decoder.decimal(dim, peaks_->mz);
@@ -121,7 +127,18 @@ void Spectrum::decode_() const
         // emit mobility terms this library may not model yet, and such a column
         // arrives typed NonStandard.  Matching only the modelled terms would
         // silently yield an empty mobility array rather than an error.
-        decoder.decimal(dim, peaks_->mobility);
+        if (mobility_dim == nullptr) {
+          decoder.decimal(dim, peaks_->mobility);
+          mobility_dim = &dim;
+        } else if (dim.array_type == mobility_dim->array_type) {
+          // The SAME mobility array in a second physical type: its rows are
+          // split between the two, so keeping one would drop the other's.
+          throw ParquetError("spectrum " + std::to_string(index_) +
+                             ": the ion mobility array is stored in more than one "
+                             "physical type; this reader cannot merge them");
+        }
+        // A different mobility array (raw beside mean, for instance) is a
+        // distinct quantity, not a fragment of this one; the first is exposed.
       }
     }
 

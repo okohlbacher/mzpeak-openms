@@ -12,6 +12,7 @@ directory of this repository.
 #include <arrow/array.h>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -207,17 +208,29 @@ inline std::optional<std::string> string_at(const arrow::Array& a, int64_t i)
   return std::nullopt;
 }
 
-/// The values of row @p i of a list column, tolerating both offset widths.
+/// The values of row @p i of a list column, or null for a null row.
+///
+/// Accepts exactly the five list layouts `Util::Decoders::visit` does, so a
+/// plain row decodes here whenever it would decode in a dimension with no grid
+/// rows.  Anything else is refused: returning null for an unrecognised layout
+/// used to hand a null array to the decoder, which dereferenced it.
 inline std::shared_ptr<arrow::Array> list_row(const arrow::Array& a, int64_t i)
 {
-  if (a.IsNull(i)) return nullptr;
-  if (a.type_id() == arrow::Type::LARGE_LIST) {
-    return static_cast<const arrow::LargeListArray&>(a).value_slice(i);
-  }
-  if (a.type_id() == arrow::Type::LIST) {
+  if (!a.IsValid(i)) return nullptr;
+  switch (a.type_id()) {
+  case arrow::Type::LIST:
     return static_cast<const arrow::ListArray&>(a).value_slice(i);
+  case arrow::Type::FIXED_SIZE_LIST:
+    return static_cast<const arrow::FixedSizeListArray&>(a).value_slice(i);
+  case arrow::Type::LARGE_LIST:
+    return static_cast<const arrow::LargeListArray&>(a).value_slice(i);
+  case arrow::Type::LIST_VIEW:
+    return static_cast<const arrow::ListViewArray&>(a).value_slice(i);
+  case arrow::Type::LARGE_LIST_VIEW:
+    return static_cast<const arrow::LargeListViewArray&>(a).value_slice(i);
+  default:
+    throw TypeError("expected an arrow list array but found: " + a.type()->name());
   }
-  return nullptr;
 }
 
 /// Read a numeric Arrow array as doubles (parameters are float64 by
@@ -387,15 +400,30 @@ evaluate(Row& row, bool delta_coded, std::string_view dim, std::vector<double>& 
   }
 }
 
-/// The distance from grid index @p idx to the next grid point: the resolution
-/// the model can express there.  Zero when it cannot be computed.
-inline double step_at(const Row& row, std::uint32_t idx)
+/// How far a coordinate snapped to grid index @p idx can lie from the model's
+/// value there: half the larger of the two adjacent grid steps.
+///
+/// A coordinate snaps to its NEAREST grid point, so it is at most half a step
+/// away -- and a transcription error that shifts the model by one whole index,
+/// which is exactly one step, is caught.  At one step it was not: a flight time
+/// off by one digitizer tick passed every endpoint of the fixture.  Both
+/// neighbours are consulted because the steps of a non-linear grid differ on
+/// either side, and only the ones that exist: `idx + 1` on the largest index
+/// used to wrap to zero and produce a "step" spanning the whole grid.
+inline double snap_tolerance(const Row& row, std::uint32_t idx)
 {
   const auto here = value_at(row.type, row.parameters, idx);
-  const auto next = value_at(row.type, row.parameters, idx + 1);
-  if (!here || !next) return 0.0;
-  const double step = std::fabs(*next - *here);
-  return std::isfinite(step) ? step : 0.0;
+  if (!here) return 0.0;
+  double step = 0.0;
+  const auto widen = [&](std::uint32_t other) {
+    if (const auto there = value_at(row.type, row.parameters, other)) {
+      const double d = std::fabs(*there - *here);
+      if (std::isfinite(d)) step = std::max(step, d);
+    }
+  };
+  if (idx < std::numeric_limits<std::uint32_t>::max()) widen(idx + 1);
+  if (idx > 0) widen(idx - 1);
+  return 0.5 * step;
 }
 
 /**
@@ -408,10 +436,11 @@ inline double step_at(const Row& row, std::uint32_t idx)
  * numbers.  But the specification does not say bounds ARE evaluations: grid
  * encoding is "likely to be a lossy transformation" and a writer may record
  * the original coordinate instead.  Snapping to the nearest grid point moves a
- * coordinate by at most half a step, so the tolerance is one grid step at that
- * index.  That admits every correctly snapped lossy grid and still refuses the
- * errors this is for, which are many steps wide.  Exactness is tested, not
- * enforced at read time: see test/grid_encoding_test.cpp.
+ * coordinate by at most half a step, so that is the tolerance (see
+ * snap_tolerance).  It admits every correctly snapped lossy grid and refuses a
+ * model shifted by a whole index or more.  It does NOT catch an error smaller
+ * than half a step, which only an exact reference can: exactness is enforced
+ * by the tests in test/grid_encoding_test.cpp, not at read time.
  *
  * A recorded `chunk_end` of exactly 0.0 below a positive start, on a chunk of
  * ONE point, is treated as unrecorded.  The reference writer read a chunk's
@@ -427,8 +456,8 @@ inline void check_bounds(double first,
                          std::size_t points,
                          std::optional<double> start,
                          std::optional<double> end,
-                         double step_first,
-                         double step_last,
+                         double tolerance_first,
+                         double tolerance_last,
                          std::string_view dim,
                          std::size_t chunk)
 {
@@ -437,10 +466,17 @@ inline void check_bounds(double first,
   if (points == 1 && end && *end == 0.0 && start && *start > 0.0) end.reset();
 
   const auto check = [&](const std::optional<double>& expected, double got,
-                         double step, const char* which) {
+                         double snap, const char* which) {
     if (!expected) return;
+    // A recorded bound of inf would make the tolerance below infinite and
+    // accept any value at all, so a non-finite bound is refused outright.
+    if (!std::isfinite(*expected)) {
+      throw InvalidFormatError(std::string(which) + " of chunk " +
+                               std::to_string(chunk) + " in " + std::string(dim) +
+                               " is not finite");
+    }
     const double tolerance =
-        std::max(kRelativeFloor * std::max(std::fabs(*expected), 1.0), step);
+        std::max(kRelativeFloor * std::max(std::fabs(*expected), 1.0), snap);
     // Written so a NaN on either side FAILS the check rather than passing it.
     if (!(std::fabs(got - *expected) <= tolerance)) {
       throw InvalidFormatError(
@@ -449,8 +485,8 @@ inline void check_bounds(double first,
           std::to_string(got) + ", file records " + std::to_string(*expected));
     }
   };
-  check(start, first, step_first, "chunk_start");
-  check(end, last, step_last, "chunk_end");
+  check(start, first, tolerance_first, "chunk_start");
+  check(end, last, tolerance_last, "chunk_end");
 }
 
 } // namespace MzPeak::Data::Transformer::Grid

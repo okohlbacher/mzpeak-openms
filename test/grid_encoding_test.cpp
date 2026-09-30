@@ -30,6 +30,7 @@ directory of this repository.
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <arrow/api.h>
 #include <limits>
 #include <optional>
 #include <string>
@@ -73,6 +74,25 @@ void expect_same_as_grid_dir(const char* path)
                path << " spectrum " << i << ": intensity differs");
     BOOST_TEST(o.ion_mobility_array() == g.ion_mobility_array(),
                path << " spectrum " << i << ": ion mobility differs");
+  }
+}
+
+/// Assert that @p path decodes exactly as @p reference does, on @p source.
+void expect_same_as(const char* reference,
+                    const char* path,
+                    MzPeak::Index::SpectraSource source)
+{
+  auto ref_index = MzPeak::open(reference);
+  auto other_index = MzPeak::open(path);
+  auto ref = ref_index.spectra(MzPeak::MetadataDetail::Full, source);
+  auto other = other_index.spectra(MzPeak::MetadataDetail::Full, source);
+  BOOST_REQUIRE_EQUAL(other.size(), ref.size());
+  for (std::size_t i = 0; i < ref.size(); ++i) {
+    const auto a = ref[i];
+    const auto b = other[i];
+    BOOST_TEST(b.mz() == a.mz(), path << " spectrum " << i << ": m/z differs");
+    BOOST_TEST(b.intensity() == a.intensity(),
+               path << " spectrum " << i << ": intensity differs");
   }
 }
 
@@ -434,7 +454,11 @@ BOOST_AUTO_TEST_CASE(a_zero_end_on_a_multi_point_chunk_is_refused)
 {
   const std::string what = refusal_of<MzPeak::InvalidFormatError>(
       "../test/files/grid_zero_end_multi.dir");
-  BOOST_TEST(what.find("chunk_end") != std::string::npos,
+  // "disagrees with chunk_end" is check_bounds() refusing the bound.  Matching
+  // plain "chunk_end" would also accept the structural check's "chunk_start
+  // exceeds chunk_end", which fires even if the zero-end exemption were wrongly
+  // widened again -- so the test would pass for the wrong reason.
+  BOOST_TEST(what.find("disagrees with chunk_end") != std::string::npos,
              "a zeroed end on an 11-point chunk was accepted; message: " << what);
 }
 
@@ -447,6 +471,148 @@ BOOST_AUTO_TEST_CASE(a_short_mobility_array_is_refused)
       refusal_of<MzPeak::ParquetError>("../test/files/grid_short_mobility.dir");
   BOOST_TEST(what.find("ion mobilities") != std::string::npos,
              "a short mobility array was returned; message: " << what);
+}
+
+BOOST_AUTO_TEST_CASE(numpress_rows_are_read_from_their_own_column)
+{
+  // Numpress keeps its bytes in a chunk_transform column, with chunk_values
+  // null.  Registering an unused, all-null grid column routes the dimension to
+  // the grid reader, whose plain-row path first read every row from
+  // chunk_values -- and so decoded an otherwise ordinary Numpress archive to
+  // nothing.  It must decode exactly as the archive it was built from.
+  expect_same_as("../test/files/small.numpress.mzpeak",
+                 "../test/files/grid_numpress.dir",
+                 MzPeak::Index::SpectraSource::Data);
+}
+
+BOOST_AUTO_TEST_CASE(every_list_layout_the_ordinary_decoder_reads_is_read)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // Util::Decoders::visit accepts five list layouts.  The grid reader's row
+  // accessor accepted two and returned null for the rest, which the decoder
+  // then dereferenced.
+  // Built with Arrow builders, which own their memory.  (Buffer::Wrap over a
+  // temporary vector would leave the array pointing at freed storage.)
+  const auto build = []<typename B, typename V>(std::initializer_list<V> items) {
+    B builder;
+    for (const V item : items) {
+      if (!builder.Append(item).ok()) throw std::runtime_error("append");
+    }
+    return builder.Finish().ValueOrDie();
+  };
+  const auto values = build.template operator()<arrow::DoubleBuilder, double>(
+      {101.0, 102.0, 201.0, 202.0});
+
+  auto fixed = arrow::FixedSizeListArray::FromArrays(values, 2).ValueOrDie();
+  const auto row = Grid::detail::list_row(*fixed, 1);
+  BOOST_REQUIRE(row != nullptr);
+  BOOST_REQUIRE_EQUAL(row->length(), 2);
+  BOOST_TEST(std::static_pointer_cast<arrow::DoubleArray>(row)->Value(0) == 201.0);
+
+  const auto offsets =
+      build.template operator()<arrow::Int32Builder, int32_t>({0, 2});
+  const auto sizes = build.template operator()<arrow::Int32Builder, int32_t>({2, 2});
+  auto view =
+      arrow::ListViewArray::FromArrays(*offsets, *sizes, *values).ValueOrDie();
+  const auto vrow = Grid::detail::list_row(*view, 1);
+  BOOST_REQUIRE(vrow != nullptr);
+  BOOST_TEST(std::static_pointer_cast<arrow::DoubleArray>(vrow)->Value(1) == 202.0);
+
+  // Not a list at all: refused with a type error, never a null to dereference.
+  BOOST_CHECK_THROW((void)Grid::detail::list_row(*values, 0), MzPeak::TypeError);
+}
+
+BOOST_AUTO_TEST_CASE(a_model_shifted_by_one_index_is_refused)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // A flight-time delay off by one digitizer tick shifts every index by one --
+  // a plausible transcription error, and exactly ONE grid step.  With a
+  // one-step tolerance it passed every endpoint of the fixture; half a step,
+  // the most a correctly snapped coordinate can move, refuses it.
+  Grid::Row row{"MS:9999002",
+                {320.480481, 2515.8383621118483, 0.00211500318015718, 0.0, -0.068565,
+                 0.2, 24833.0},
+                {60}};
+  const double right = *Grid::value_at(row.type, row.parameters, 60);
+  const double shifted = *Grid::value_at(row.type, row.parameters, 61);
+  const double tolerance = Grid::snap_tolerance(row, 60);
+
+  BOOST_CHECK_THROW(Grid::check_bounds(shifted, shifted, 1, right, std::nullopt,
+                                       tolerance, tolerance, "mz", 0),
+                    MzPeak::InvalidFormatError);
+  // A coordinate snapped from anywhere within half a step is still accepted.
+  BOOST_CHECK_NO_THROW(
+      Grid::check_bounds(right, right, 1, right + 0.4 * (shifted - right),
+                         std::nullopt, tolerance, tolerance, "mz", 0));
+}
+
+BOOST_AUTO_TEST_CASE(the_largest_index_does_not_wrap)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // The specification's own fitting example spans the whole uint32 range.  At
+  // the largest index `idx + 1` wrapped to zero, so the "step" spanned the
+  // entire grid and any bound at all was accepted there.
+  constexpr std::uint32_t max = std::numeric_limits<std::uint32_t>::max();
+  Grid::Row row{"MS:1003824", {100.0, 80.0 / max}, {max}};
+  const double tolerance = Grid::snap_tolerance(row, max);
+  BOOST_TEST(tolerance < 1e-6, "tolerance at the last index is " << tolerance);
+
+  const double last = *Grid::value_at(row.type, row.parameters, max);
+  BOOST_CHECK_THROW(Grid::check_bounds(last, last, 1, std::nullopt, 200.0, tolerance,
+                                       tolerance, "mz", 0),
+                    MzPeak::InvalidFormatError);
+}
+
+BOOST_AUTO_TEST_CASE(a_non_finite_recorded_bound_is_refused)
+{
+  namespace Grid = MzPeak::Data::Transformer::Grid;
+
+  // A bound of inf made the tolerance infinite, which accepted any value.
+  const double inf = std::numeric_limits<double>::infinity();
+  BOOST_CHECK_THROW(
+      Grid::check_bounds(100.0, 101.0, 2, inf, 101.0, 0.5, 0.5, "mz", 0),
+      MzPeak::InvalidFormatError);
+}
+
+BOOST_AUTO_TEST_CASE(chunk_order_is_enforced_past_a_missing_end)
+{
+  // Two chunks exchanged so they descend, and the first one's end removed.
+  // Ordering used to be checked only against the previous chunk's END, so a
+  // chunk without one let the next go unchecked.
+  const std::string what =
+      refusal_of<MzPeak::InvalidFormatError>("../test/files/grid_disordered.dir");
+  BOOST_TEST(what.find("out of order") != std::string::npos,
+             "descending chunks were accepted; message: " << what);
+}
+
+BOOST_AUTO_TEST_CASE(a_main_axis_without_chunk_encoding_is_refused)
+{
+  const std::string what =
+      refusal_of<MzPeak::InvalidFormatError>("../test/files/grid_no_encoding.dir");
+  BOOST_TEST(what.find("chunk_encoding") != std::string::npos,
+             "a main axis without chunk_encoding was decoded; message: " << what);
+}
+
+BOOST_AUTO_TEST_CASE(two_distinct_mobility_arrays_do_not_block_the_spectrum)
+{
+  // A point-layout file, nothing grid-encoded, carrying raw mobility beside the
+  // mean mobility it already had.  Every mobility dimension used to be appended
+  // into one vector, and the check that mobility is parallel to m/z then refused
+  // the spectrum -- m/z included -- over that concatenation.  The first array is
+  // exposed, whole.
+  auto index = MzPeak::open("../test/files/two_mobility.dir");
+  auto spectra = peaks_of(index);
+  auto reference_index = MzPeak::open("../test/files/diapasef.dir");
+  auto reference = peaks_of(reference_index);
+
+  const auto s = spectra[0];
+  const auto r = reference[0];
+  BOOST_REQUIRE_NO_THROW((void)s.mz());
+  BOOST_TEST(s.mz() == r.mz());
+  BOOST_TEST(s.ion_mobility_array() == r.ion_mobility_array());
 }
 
 BOOST_AUTO_TEST_CASE(the_fixture_verifies_its_own_checksums)

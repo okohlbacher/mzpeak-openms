@@ -309,6 +309,127 @@ def short_mobility(cols, si):
     return "mobility grid null on row 1"
 
 
+def numpress_with_grid(numpress_archive: Path, dest: Path) -> None:
+    """`small.numpress.mzpeak` with an all-null `mz_grid` column registered.
+
+    The m/z rows stay exactly as they are -- real MS-Numpress bytes, which live
+    in `mz_numpress_linear_bytes` while every `mz_chunk_values` is null -- and
+    the new grid column carries no data.  But its presence routes the dimension
+    to the grid reader, whose plain-row path first read Numpress rows from
+    `mz_chunk_values` and so found nothing at all.  The archive must therefore
+    decode exactly as `small.numpress.mzpeak` does."""
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    with zipfile.ZipFile(numpress_archive) as archive:
+        archive.extractall(dest)
+
+    path = dest / "spectra_data.parquet"
+    parquet = pq.ParquetFile(path)
+    table = parquet.read()
+    kv = dict(parquet.metadata.metadata)
+    st = table.column(0).combine_chunks()
+    names = [f.name for f in st.type]
+
+    grid_type = pa.struct([
+        pa.field("grid_type", pa.large_string(), nullable=False),
+        pa.field("parameters", pa.large_list(pa.field("item", pa.float64(), nullable=False)),
+                 nullable=False),
+        pa.field("indices", pa.large_list(pa.field("item", pa.uint32(), nullable=False)),
+                 nullable=False),
+    ])
+    empty_grid = pa.array([None] * len(st), grid_type)
+    out = pa.StructArray.from_arrays([st.field(n) for n in names] + [empty_grid],
+                                     names=names + ["mz_grid"])
+
+    index = json.loads(kv[b"spectrum_array_index"])
+    template = next(e for e in index["entries"] if e["path"].endswith("mz_numpress_linear_bytes"))
+    index["entries"].append(dict(template, path=index["prefix"] + ".mz_grid",
+                                 buffer_format="chunk_transform", transform="MS:1003826"))
+    kv[b"spectrum_array_index"] = json.dumps(index).encode()
+
+    schema = pa.schema([pa.field(table.schema.names[0], out.type)]).with_metadata(kv)
+    pq.write_table(pa.Table.from_arrays([out], schema=schema), path, write_statistics=True)
+
+    index_path = dest / "mzpeak_index.json"
+    file_index = json.loads(index_path.read_text())
+    for entry in file_index["files"]:
+        member = entry.get("path") or entry.get("name")
+        if (dest / member).exists():
+            entry["checksum"] = hashlib.sha512((dest / member).read_bytes()).hexdigest()
+    index_path.write_text(json.dumps(file_index, indent=2))
+    print(f"wrote {dest} (small.numpress.mzpeak + an all-null mz_grid)")
+
+
+def disordered(cols, si):
+    """Rows 0 and 1 of the first spectrum exchanged -- every column, so each row
+    still agrees with itself -- and the end of the row now first removed.
+
+    The chunks are then descending.  The ordinary chunk decoder checks order
+    only against the previous chunk's END and skips a row that has none, so the
+    descending step after it went unchecked; the grid reader inherited that and
+    must no longer."""
+    for name in list(cols):
+        values = cols[name].to_pylist()
+        values[0], values[1] = values[1], values[0]
+        cols[name] = pa.array(values, cols[name].type)
+    ends = cols["mz_chunk_end"].to_pylist()
+    ends[0] = None
+    cols["mz_chunk_end"] = pa.array(ends, cols["mz_chunk_end"].type)
+    return "rows 0/1 exchanged, row 0's chunk_end null"
+
+
+def no_encoding(cols, si):
+    """No `chunk_encoding` column.  The ordinary chunk decoder requires it; the
+    grid reader used to infer each row's kind from its grid struct instead,
+    which made the column's absence an error only for files with plain rows."""
+    del cols["chunk_encoding"]
+    return "chunk_encoding column and array-index entry removed"
+
+
+def drop_encoding_entry(entries):
+    return [e for e in entries if not e["path"].endswith("chunk_encoding")]
+
+
+def two_mobility(point_dir: Path, dest: Path) -> None:
+    """A POINT-layout archive carrying two distinct mobility arrays: the mean
+    1/K0 it already had, and a raw ion mobility array (MS:1003007) beside it.
+
+    Nothing grid-encoded here, and that is the point.  The reader appended every
+    mobility dimension into one vector; a new check that mobility is as long as
+    m/z then refused the whole spectrum -- m/z included -- over a concatenation
+    it had produced itself.  The two are different quantities, and the reader
+    now exposes the first rather than their sum."""
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(point_dir, dest)
+    path = dest / "spectra_peaks.parquet"
+    parquet = pq.ParquetFile(path)
+    table = parquet.read()
+    kv = dict(parquet.metadata.metadata)
+    st = table.column(0).combine_chunks()
+    names = [f.name for f in st.type]
+    mean = st.field(MOBILITY).to_pylist()
+    raw = pa.array([m * 1.001 for m in mean], pa.float64())
+    out = pa.StructArray.from_arrays([st.field(n) for n in names] + [raw],
+                                     names=names + ["raw_ion_mobility"])
+    index = json.loads(kv[b"spectrum_array_index"])
+    template = next(e for e in index["entries"] if e["path"].endswith(MOBILITY))
+    index["entries"].append(dict(template, path=index["prefix"] + ".raw_ion_mobility",
+                                 array_type="MS:1003007",
+                                 array_name="raw ion mobility array"))
+    kv[b"spectrum_array_index"] = json.dumps(index).encode()
+    schema = pa.schema([pa.field(table.schema.names[0], out.type)]).with_metadata(kv)
+    pq.write_table(pa.Table.from_arrays([out], schema=schema), path, write_statistics=True)
+
+    index_path = dest / "mzpeak_index.json"
+    file_index = json.loads(index_path.read_text())
+    for entry in file_index["files"]:
+        member = entry.get("path") or entry.get("name")
+        if (dest / member).exists():
+            entry["checksum"] = hashlib.sha512((dest / member).read_bytes()).hexdigest()
+    index_path.write_text(json.dumps(file_index, indent=2))
+    print(f"wrote {dest} (diapasef.dir + a second, distinct mobility array)")
+
+
 def write_variant(source: Path, name: str, mutate, edit_index=None) -> None:
     out_dir = source.parent / name
     shutil.rmtree(out_dir, ignore_errors=True)
@@ -395,6 +516,12 @@ def main() -> int:
                   add_secondary_entry)
     write_variant(dest, "grid_no_end.dir", no_end, drop_end_entry)
     write_variant(dest, "grid_short_mobility.dir", short_mobility)
+    numpress_with_grid(Path(__file__).parent / "small.numpress.mzpeak",
+                       dest.parent / "grid_numpress.dir")
+    write_variant(dest, "grid_disordered.dir", disordered)
+    write_variant(dest, "grid_no_encoding.dir", no_encoding, drop_encoding_entry)
+    two_mobility(Path(__file__).parent / "diapasef.dir",
+                 dest.parent / "two_mobility.dir")
     return 0
 
 

@@ -186,19 +186,33 @@ reference corpus or a well-formed archive from the reference writer.
   error exceeds its threshold "SHOULD fall back to use a different encoding",
   so one dimension may hold grid rows beside uncompressed, delta or Numpress
   ones. Every row is decoded in order: grid rows through the model, plain rows
-  through exactly the transform the ordinary chunk decoder applies. On a
-  secondary axis a row is grid when its grid struct is present; a row carrying
-  both a plain list and a grid is refused. (An earlier version refused any
-  non-grid main-axis row, and on a secondary axis silently DROPPED the grid
-  rows when a plain column was also present.)
+  through exactly the transform the ordinary chunk decoder applies, read from
+  the column that encoding keeps its data in -- Numpress bytes live in their
+  own `chunk_transform` column, not in `chunk_values`. A main axis must carry
+  `chunk_encoding`, as the ordinary decoder requires. On a secondary axis a row
+  is grid when its grid struct is present; a row carrying both a plain list and
+  a grid is refused, and a plain secondary column with a zero-intensity
+  transform (a pass-through) is decoded while a Numpress-transformed one is
+  refused. Chunk order is enforced on every row: the ordinary decoder checks it
+  only against the previous chunk's END and skips a row without one, which let
+  a descending chunk through after it; here the order of starts is always
+  checked and a missing end is replaced by the row's last decoded value. (An
+  earlier version refused any non-grid main-axis row, silently DROPPED the grid
+  rows of a secondary axis that also had a plain column, and read Numpress rows
+  from the wrong column.)
 
   *Bounds.* Every grid row's first and last value is checked against the
-  `chunk_start`/`chunk_end` it recorded, with a tolerance of one grid step. The
-  specification calls grid encoding "likely to be a lossy transformation" and
-  does not say the bounds are the model's evaluation, so a writer may record
-  the original coordinate, which snapping to the grid moves by at most half a
-  step; wrong models are off by many. Non-finite coordinates are refused, and
-  a missing bound column is skipped rather than read.
+  `chunk_start`/`chunk_end` it recorded, with a tolerance of HALF a grid step,
+  taken from whichever neighbouring indices exist. The specification calls grid
+  encoding "likely to be a lossy transformation" and does not say the bounds are
+  the model's evaluation, so a writer may record the original coordinate, which
+  snapping to the grid moves by at most half a step. A model shifted by one
+  whole index -- a flight-time delay off by a single digitizer tick -- is one
+  step off and refused; at a tolerance of one step it passed every endpoint of
+  the fixture. An error smaller than half a step is NOT caught at read time:
+  only an exact reference can see it, and exactness is enforced by the tests.
+  Non-finite coordinates and non-finite recorded bounds are refused, and a
+  missing bound column is skipped rather than read.
 
   *Arithmetic.* There is no single reference to be bit-identical to: the grid
   codec `grid.rs` fuses the flight-time multiply-add, while mzdata 0.66.7's
@@ -217,6 +231,16 @@ reference corpus or a well-formed archive from the reference writer.
   is excused only on one-point chunks; the second is resolved by magnitude
   under stated physical assumptions and every result is checked against a
   physical fence, so a misreading is refused rather than returned.
+
+  *Ion mobility is one array.* Every mobility dimension used to be appended
+  into `ion_mobility_array()`, so a file carrying raw beside mean mobility
+  produced their concatenation. The first is now exposed; the same mobility
+  array split across two physical types is refused, as m/z and intensity
+  already are. A PRESENT mobility array must be as long as m/z. Two limitations
+  are recorded rather than fixed: a spectrum whose every mobility row is null
+  returns an empty array, which cannot be told apart from a spectrum that
+  legitimately has none; and the parallel-array check is by total length, so a
+  row that is short and another that is long by the same amount would cancel.
 
   Validated on a real Bruker diaPASEF conversion (C2 != 0, C4 != 0): ion
   mobility and intensity bit-identical on all 291,453 points; m/z within one
