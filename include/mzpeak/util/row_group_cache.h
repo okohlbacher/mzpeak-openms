@@ -226,9 +226,10 @@ private:
                             const Ahead& ahead);
 
   /// Bytes a decode ahead must not count as room: groups in flight and groups
-  /// a reader holds, which eviction cannot reclaim, and groups decoded ahead
-  /// that nobody has asked for yet, which it can but which the same burst must
-  /// not push out to go on.  Caller holds mutex_.
+  /// a reader holds, which eviction cannot reclaim, and every group decoded
+  /// ahead that nobody has asked for yet, from this burst or an earlier one,
+  /// until it is asked for or evicted -- eviction could reclaim those, but a
+  /// burst must not push them out to go on.  Caller holds mutex_.
   std::size_t resident_locked_() const;
 
   /// Evict least-recently-used READY entries, never @p keep and never one a
