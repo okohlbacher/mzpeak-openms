@@ -59,6 +59,12 @@ public:
     ///
     /// Parameters `[c6, c7, offset, slope]` (exactly four), where
     /// `offset + slope * scan` is the TIMS ramp voltage.
+    ///
+    /// Archives written before the reference implementation's
+    /// `eb08ba0` carry that last pair the other way round, as
+    /// `[c6, c7, slope, offset]`.  Both spellings are read: the ramp
+    /// offset is the larger of the two in magnitude by a factor of
+    /// the mobility scan count, so the roles are not in doubt.
     TimsTofTims2,
   };
 

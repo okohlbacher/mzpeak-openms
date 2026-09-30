@@ -16,6 +16,7 @@ directory of this repository.
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 
 #include "mzpeak/data/grid.h"
 #include "mzpeak/data/grid_chunk.h"
@@ -60,6 +61,27 @@ GridModel::GridModel(Kind kind, const double* parameters, std::size_t count)
   if (kind == Kind::Linear || kind == Kind::SquareRootLinear) p_[2] = 1.0;
 
   std::copy_n(parameters, std::min(count, p_.size()), p_.begin());
+
+  // MS:9999001's last two parameters are the TIMS ramp, `offset + slope *
+  // scan`: a voltage of order 100 V that falls by `slope` volts per mobility
+  // scan.  The reference writer emitted that pair as [slope, offset] until
+  // upstream's `eb08ba0`, while its reader has always read [offset, slope]
+  // (the order mzdata's `TimsCalibrationModel2::as_param` writes).  Archives
+  // from before that fix therefore decode to ~45 instead of a 1/K0 of
+  // 0.6-1.6 -- through upstream's own reader as much as through this one --
+  // and nothing in the file says which of the two orders it used.
+  //
+  // The roles are recovered from the model's own algebra rather than from a
+  // threshold: `slope = (C3 - C2)/C1` and `offset = C2 - slope*(C4 + C0)`,
+  // where C2 and C3 are the ramp's two end voltages and C1 is its length in
+  // mobility scans.  So |slope| is the whole voltage span divided by the scan
+  // count while |offset| is about C2 itself -- the offset is the larger of
+  // the two by a factor of the scan count, on any ramp longer than a single
+  // scan.  Ordering them by magnitude reads both spellings, and leaves a
+  // conforming file untouched.
+  if (kind == Kind::TimsTofTims2 && std::abs(p_[2]) < std::abs(p_[3])) {
+    std::swap(p_[2], p_[3]);
+  }
 }
 
 /******************************************************************************/
