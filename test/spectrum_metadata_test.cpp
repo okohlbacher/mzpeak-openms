@@ -30,6 +30,7 @@ directory of this repository.
 #include <arrow/io/file.h>
 #include <arrow/table.h>
 #include <boost/json.hpp>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -37,12 +38,44 @@ directory of this repository.
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <string>
+#include <thread>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/open.h"
 #include "mzpeak/schema/psi/array_type.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/util/arrow.h"
+
+namespace {
+
+/// A scratch directory removed on scope exit.  Declare it before anything that
+/// opens a file inside it, so it is destroyed after all of them.
+struct Scratch {
+  std::filesystem::path path;
+  explicit Scratch(const char* name)
+      : path(std::filesystem::temp_directory_path() / name)
+  {
+    std::filesystem::remove_all(path);
+    std::filesystem::create_directories(path);
+  }
+  ~Scratch()
+  {
+    // error_code, not a throw: a destructor that throws terminates the process
+    // before Boost.Test reports anything. Windows refuses to delete a file that
+    // is still open, so a leaked handle shows up HERE, with its name -- after
+    // a few retries, because on GitHub's Windows runners the antivirus holds a
+    // freshly written file open for a moment (see row_group_test.cpp).
+    std::error_code ec;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      std::filesystem::remove_all(path, ec);
+      if (!ec) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    BOOST_TEST(!ec, "remove_all " << path.string() << ": " << ec.message());
+  }
+};
+
+} // namespace
 
 /******************************************************************************/
 BOOST_AUTO_TEST_CASE(opens_and_reads_metadata)
@@ -890,11 +923,10 @@ BOOST_AUTO_TEST_CASE(uint32_index_and_narrow_strings_read)
 BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
 {
   namespace fs = std::filesystem;
-  const fs::path scratch(fs::temp_directory_path() / "mzp-test-multi-scan");
-  fs::remove_all(scratch);
-  fs::copy("../test/files/small.dir", scratch, fs::copy_options::recursive);
+  Scratch scratch("mzp-test-multi-scan");
+  fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
 
-  const fs::path table_path(scratch / "spectra_metadata_scans.parquet");
+  const fs::path table_path(scratch.path / "spectra_metadata_scans.parquet");
   std::shared_ptr<arrow::Table> scans;
   {
     auto file = arrow::io::ReadableFile::Open(table_path.string()).ValueOrDie();
@@ -930,7 +962,7 @@ BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
 
   for (auto detail : {MzPeak::MetadataDetail::Full, MzPeak::MetadataDetail::Lean,
                       MzPeak::MetadataDetail::Minimal}) {
-    auto spectra = MzPeak::open(scratch).spectra(detail);
+    auto spectra = MzPeak::open(scratch.path).spectra(detail);
     std::optional<MzPeak::SpectrumMetadata> s0, s1;
     for (std::size_t i = 0; i < spectra.size(); ++i) {
       auto s = spectra[i];
@@ -951,8 +983,6 @@ BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
     BOOST_TEST_REQUIRE(s1->retention_time.has_value());
     BOOST_TEST(std::abs(*s1->retention_time - 0.4738) < 1e-9);
   }
-
-  fs::remove_all(scratch);
 }
 
 /******************************************************************************/
@@ -1037,11 +1067,10 @@ BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
 BOOST_AUTO_TEST_CASE(minimal_reads_a_second_precursor_as_lean)
 {
   namespace fs = std::filesystem;
-  const fs::path scratch(fs::temp_directory_path() / "mzp-test-minimal-fallback");
-  fs::remove_all(scratch);
-  fs::copy("../test/files/small.dir", scratch, fs::copy_options::recursive);
+  Scratch scratch("mzp-test-minimal-fallback");
+  fs::copy("../test/files/small.dir", scratch.path, fs::copy_options::recursive);
 
-  const fs::path table_path(scratch / "spectra_metadata_precursors.parquet");
+  const fs::path table_path(scratch.path / "spectra_metadata_precursors.parquet");
   std::shared_ptr<arrow::Table> precursors;
   {
     auto file = arrow::io::ReadableFile::Open(table_path.string()).ValueOrDie();
@@ -1074,11 +1103,9 @@ BOOST_AUTO_TEST_CASE(minimal_reads_a_second_precursor_as_lean)
     BOOST_TEST_REQUIRE(sink->Close().ok());
   }
 
-  auto spectra = MzPeak::open(scratch).spectra(MzPeak::MetadataDetail::Minimal);
+  auto spectra = MzPeak::open(scratch.path).spectra(MzPeak::MetadataDetail::Minimal);
   auto s2 = spectra[2];
   BOOST_TEST_REQUIRE(s2.metadata().precursors.size() == 2u);
   BOOST_TEST((s2.metadata().precursors[1].precursor_index == std::optional<uint64_t>(99)));
-  require_minimal_equals_lean(scratch.string());
-
-  fs::remove_all(scratch);
+  require_minimal_equals_lean(scratch.path.string());
 }
