@@ -8,6 +8,7 @@ directory of this repository.
 
 #pragma once
 
+#include <algorithm>
 #include <utility>
 
 #include "mzpeak/data/array_index.h"
@@ -121,7 +122,7 @@ Decoder<T>::Decoder(std::shared_ptr<Signals> signals,
   // keep `chunk_values` as well.  A file may mix the two encodings --
   // the SCIEX SWATH corpus does -- and a chunk whose chunk_encoding is
   // not MS:1003826 has its values there, with the grid struct null.
-  if (dim.entry_with(Schema::BufferFormat::ChunkTransform).has_value()) {
+  if (dim.values_entry().buffer_format == Schema::BufferFormat::ChunkTransform) {
     std::optional<Schema::Column> values_col =
         signals->column(dim, Schema::BufferFormat::ChunkValues);
 
