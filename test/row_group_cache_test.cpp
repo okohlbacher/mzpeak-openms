@@ -353,3 +353,43 @@ BOOST_AUTO_TEST_CASE(groups_decoded_ahead_do_not_outlive_the_working_set)
   BOOST_CHECK_EQUAL(after.hits - before.hits, 96u);
   BOOST_CHECK_EQUAL(calls.load(), 7);
 }
+
+/******************************************************************************/
+/// A failed decode AHEAD is not the waiting reader's error: its get() still
+/// returns the group it asked for, it goes on past the failed group, and that
+/// group is forgotten -- its budget released, and decoded afresh when asked
+/// for -- rather than cached as a failure.
+BOOST_AUTO_TEST_CASE(a_failed_decode_ahead_is_not_the_readers_error)
+{
+  constexpr std::size_t kGroup = 1024 * 1024;
+  RowGroupCache cache(64 * kGroup);
+  std::atomic<int> calls{0};
+  auto ahead = instant_ahead(4, kGroup, calls);
+  std::vector<int32_t> tried; // by the colliding reader only; read after it joined
+  ahead.decode = [&tried](int32_t g) -> RowGroupCache::Batches {
+    tried.push_back(g);
+    if (g == 2) throw std::runtime_error("group 2 is corrupt");
+    return empty_group();
+  };
+
+  RowGroupCache::Batches got;
+  BOOST_CHECK_NO_THROW(got = collide(cache, kGroup, ahead));
+  BOOST_CHECK(got != nullptr);
+  BOOST_CHECK((tried == std::vector<int32_t>{1, 2, 3}));
+  BOOST_CHECK_EQUAL(cache.stats().ahead_decodes, 3u);          // the failed one too
+  BOOST_CHECK_EQUAL(cache.stats().held_bytes, 3 * kGroup);     // but not its bytes
+
+  bool decoded = false;
+  cache.get("f", 2, kGroup, [&] {
+    decoded = true;
+    return empty_group();
+  });
+  BOOST_CHECK(decoded);
+
+  decoded = false;
+  cache.get("f", 3, kGroup, [&] {
+    decoded = true;
+    return empty_group();
+  });
+  BOOST_CHECK(!decoded);
+}
