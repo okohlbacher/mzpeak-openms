@@ -151,7 +151,9 @@ void RowGroupCache::decode_ahead_locked_(std::unique_lock<std::mutex>& lock,
     // counts, groups decoded ahead and not yet asked for included.  Eviction
     // takes those in plain LRU order, so without counting them a burst would
     // go on by evicting the groups it decoded first: work thrown away, and a
-    // wait moved to the reader that wanted them.
+    // wait moved to the reader that wanted them.  It counts every one of them,
+    // an earlier burst's too, until it is asked for or evicted; those leave
+    // this burst less room, which errs toward decoding less ahead.
     const std::size_t bytes = ahead.bytes(g);
     if (in_flight_ + bytes > budget_ / 2) return;
     if (resident_locked_() + bytes > budget_) return;
