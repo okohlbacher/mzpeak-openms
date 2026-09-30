@@ -187,7 +187,25 @@ reference corpus or a well-formed archive from the reference writer.
   the writer's own evaluation of the same model, so a model transcribed with one
   wrong operation is caught rather than trusted. Validated against a real Bruker
   diaPASEF conversion with `C2 != 0` and `C4 != 0`: m/z is bit-identical to the
-  reference's explicitly-stored values on all 205,921 points of the MS1 frame.
+  reference's explicitly-stored values on all 205,921 points of the MS1 frame,
+  and so is ion mobility on all 291,453 points of the run.
+  A column may mix the encodings -- `chunk_encoding` is a property of the CHUNK,
+  so a row may leave its `<array>_grid` struct null, declare `MS:1000576` and
+  carry its coordinates in `chunk_values` with the first of them in
+  `chunk_start`. Those rows are decoded, never skipped: skipping them returns a
+  SHORTER array rather than a visibly wrong one and mis-pairs every later peak
+  with another peak's intensity. A null grid row this reader cannot reconstruct
+  is refused and named.
+  Two quirks of the reference WRITER are tolerated, because archives carrying
+  them exist and the reference reads them. Its `TimsTofTimsLinearGrid2` emitted
+  `[C6, C7, slope, offset]` until `eb08ba0`, where everything reading the model
+  -- mzdata's `as_param`, its own `from_parameters` -- uses
+  `[C6, C7, offset, slope]`; the ramp offset exceeds the slope in magnitude by
+  a factor of the mobility scan count, so the roles are recovered rather than
+  guessed, and a conforming file is untouched. And a chunk that reduces to ONE
+  point has `chunk_end = 0.0`, because the writer read both bounds from a single
+  iterator; a 0.0 end below a positive start is taken as unset rather than as a
+  contradiction, on one-point chunks only, and `chunk_start` is still checked.
   Unimplemented still: WRITING grid-encoded archives, and the materialised grid
   form the specification also allows.
 - **Imaging profile — ignored, as a Core reader must.** `840ba4a` added it,
