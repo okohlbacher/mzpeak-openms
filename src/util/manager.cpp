@@ -104,21 +104,30 @@ void parse_index(std::shared_ptr<MzPeak::IO::Archive>& archive,
           return std::string_view(f->value().as_string()) == expected;
         };
 
-        if (!declares("mz_from_tof", "(a + b*tof)^2")) {
-          throw MzPeak::JsonError(
-              "ims_calibration declares an m/z transform this reader does not "
-              "implement; refusing rather than applying the wrong one");
-        }
-        if (!declares("tof_encoding", "absolute")) {
-          throw MzPeak::JsonError(
-              "ims_calibration declares a non-absolute TOF encoding; this "
-              "reader would treat the stored values as absolute");
-        }
-
         // Both coefficients are required: half a calibration is not one.
         const bool have_a = number("a", ims.a);
         const bool have_b = number("b", ims.b);
         ims.valid = have_a && have_b;
+
+        // The declaration guards below apply only when the block actually
+        // hands us coefficients to apply.  A block with no `a`/`b` is
+        // DESCRIPTIVE -- the grid-transform layout writes one to document its
+        // models and column names, and there is no formula there for this
+        // reader to get wrong.  Refusing it would reject a well-formed archive
+        // over metadata nothing here consumes, which is what happened before
+        // this ordering was fixed.
+        if (ims.valid) {
+          if (!declares("mz_from_tof", "(a + b*tof)^2")) {
+            throw MzPeak::JsonError(
+                "ims_calibration declares an m/z transform this reader does not "
+                "implement; refusing rather than applying the wrong one");
+          }
+          if (!declares("tof_encoding", "absolute")) {
+            throw MzPeak::JsonError(
+                "ims_calibration declares a non-absolute TOF encoding; this "
+                "reader would treat the stored values as absolute");
+          }
+        }
       }
     }
   }
