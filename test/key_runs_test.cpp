@@ -38,6 +38,7 @@ directory of this repository.
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -291,6 +292,47 @@ void pad_key_indices(const fs::path& path)
   stream.put(0x03);
   stream.close();
   BOOST_TEST_REQUIRE(!stream.fail());
+}
+
+/// Cut the key's footer statistics in @p path short: its @p min and @p max,
+/// each stored as eight bytes (`08`, then the value little-endian), become
+/// seven (`07`, then the first seven), which no longer decode as an INT64.
+/// The footer shrinks by two bytes, and its length is rewritten to match.
+void truncate_key_statistics(const fs::path& path, uint64_t min, uint64_t max)
+{
+  const auto le = [](uint64_t v, int bytes) {
+    std::string out;
+    for (int i = 0; i < bytes; ++i) {
+      out.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
+    }
+    return out;
+  };
+  std::string file;
+  {
+    std::ifstream in(path, std::ios::binary);
+    const std::istreambuf_iterator<char> begin(in), end;
+    file.assign(begin, end);
+  }
+  BOOST_TEST_REQUIRE(file.size() > 12u);
+  const std::size_t tail = file.size() - 8; // footer length, then "PAR1"
+  std::size_t length = 0;
+  for (int i = 3; i >= 0; --i) {
+    length = length << 8 | static_cast<unsigned char>(file[tail + i]);
+  }
+  BOOST_TEST_REQUIRE(length <= tail);
+  std::string footer = file.substr(tail - length, length);
+  for (const uint64_t v : {min, max}) {
+    const std::string whole = std::string(1, '\x08') + le(v, 8);
+    const std::size_t at = footer.find(whole);
+    BOOST_TEST_REQUIRE(at != std::string::npos, "no statistic " << v);
+    footer.replace(at, whole.size(), std::string(1, '\x07') + le(v, 7));
+  }
+  file.resize(tail - length);
+  file += footer + le(footer.size(), 4) + "PAR1";
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out.write(file.data(), static_cast<std::streamsize>(file.size()));
+  out.close();
+  BOOST_TEST_REQUIRE(!out.fail());
 }
 
 /// The signal table of an archive, through the archive's shared cache.
@@ -797,6 +839,45 @@ BOOST_AUTO_TEST_CASE(a_padded_dictionary_page_does_not_hide_a_null)
         }
       }
     }
+  }
+}
+
+/******************************************************************************/
+// A footer whose statistics do not decode gives no null count: the definition
+// levels decide, as when there are no statistics at all.  Here the key's min
+// and max are cut to seven bytes, which Arrow refuses to decode as an INT64.
+// The key is held as runs, and restored it reads back as the same points
+// declared unsorted read.  Keeping the column would not do: Arrow's full
+// decode of the key decodes the same statistics, and fails.
+BOOST_AUTO_TEST_CASE(key_statistics_that_do_not_decode_leave_it_to_the_levels)
+{
+  Scratch scratch("mzp-test-keyruns-badstats");
+  Points points;
+  add_spectrum(points, 42, 5);
+  add_spectrum(points, 43, 5);
+  const fs::path sorted = scratch.path / "sorted.parquet";
+  const fs::path unsorted = scratch.path / "unsorted.parquet";
+  write_points(sorted, points, true, 1 << 20);
+  write_points(unsorted, points, false, 1 << 20);
+  truncate_key_statistics(sorted, 42, 43);
+
+  auto a = open_table(sorted, "data_arrays");
+  auto b = open_table(unsorted, "data_arrays");
+  const auto fmd = a->file_metadata();
+  const auto chunk = fmd->RowGroup(0)->ColumnChunk(0);
+  BOOST_CHECK_THROW((void)(chunk->is_stats_set() && chunk->statistics()),
+                    std::exception);
+
+  std::shared_ptr<const Util::RowGroupBatches> group;
+  BOOST_REQUIRE_NO_THROW(group = a->row_group(0));
+  BOOST_TEST_REQUIRE(held_as_runs(*a, 0));
+  BOOST_TEST((group->key_runs->key == std::vector<uint64_t>{42, 43}));
+  BOOST_TEST((group->key_runs->start == std::vector<int64_t>{0, 5, 10}));
+  const auto restored = Util::restore_key_column(*group);
+  const auto full = b->row_group(0);
+  BOOST_TEST_REQUIRE(restored->batches.size() == full->batches.size());
+  for (std::size_t i = 0; i < full->batches.size(); ++i) {
+    BOOST_TEST(restored->batches[i]->Equals(*full->batches[i]), "batch " << i);
   }
 }
 
