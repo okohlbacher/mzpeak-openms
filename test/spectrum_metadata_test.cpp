@@ -1000,6 +1000,47 @@ BOOST_AUTO_TEST_CASE(multi_scan_spectrum_takes_its_earliest_scan)
 // every bundled archive -- and so must the peaks, which the decode reads
 // through that metadata (representation, point counts, delta model).
 namespace {
+/// An archive's spectrum metadata members, opened for the Util readers and
+/// closed when this goes.
+struct MetadataMembers {
+  std::shared_ptr<MzPeak::Util::Manager> manager;
+  std::unique_ptr<MzPeak::Util::Parquet> primary, scans, precursors, selected_ions;
+
+  explicit MetadataMembers(const std::filesystem::path& archive)
+      : manager(MzPeak::open(archive).manager())
+  {
+    using MzPeak::Schema::DataKind;
+    const auto member =
+        [this](DataKind::Type kind) -> std::unique_ptr<MzPeak::Util::Parquet> {
+      const auto file = manager->find_file(MzPeak::Schema::EntityType::Spectrum, kind);
+      return file == manager->files().end() ? nullptr : manager->parquet(*file);
+    };
+    primary = member(DataKind::Metadata);
+    scans = member(DataKind::Scans);
+    precursors = member(DataKind::Precursors);
+    selected_ions = member(DataKind::SelectedIons);
+  }
+
+  MzPeak::Util::SpectraMetadataFiles files() const
+  {
+    return {primary.get(), scans.get(), precursors.get(), selected_ions.get()};
+  }
+};
+
+MzPeak::Util::IndexMap<MzPeak::SpectrumMetadata>
+read_metadata(const std::filesystem::path& archive, MzPeak::MetadataDetail detail)
+{
+  const MetadataMembers members(archive);
+  return MzPeak::Util::read_spectra_metadata(members.files(), detail);
+}
+
+std::optional<MzPeak::Util::IndexMap<MzPeak::MinimalSpectrumMetadata>>
+read_minimal_metadata(const std::filesystem::path& archive)
+{
+  const MetadataMembers members(archive);
+  return MzPeak::Util::read_minimal_spectra_metadata(members.files());
+}
+
 void require_minimal_equals_lean(const std::string& path)
 {
   BOOST_TEST_CONTEXT(path)
@@ -1059,7 +1100,9 @@ void require_minimal_equals_lean(const std::string& path)
 BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
 {
   // All of test/files but declares_sorted_lies.dir, whose peak decode throws
-  // by design (see sorting_declaration_test.cpp).
+  // by design (see sorting_declaration_test.cpp).  Minimal must hold each of
+  // them: on an archive it fell back on, the comparison would pass Lean
+  // against Lean.
   for (const char* path :
        {"../test/files/small.mzpeak", "../test/files/small.chunked.mzpeak",
         "../test/files/small.numpress.mzpeak", "../test/files/has_uv.mzpeak",
@@ -1071,16 +1114,18 @@ BOOST_AUTO_TEST_CASE(minimal_equals_lean_on_every_bundled_archive)
         "../test/files/no_page_index.dir", "../test/files/declares_sorted_honest.dir",
         "../test/files/Example_Processed.img.mzpeak",
         "../test/files/v2/Example_Processed.img.mzpeak",
-        "../test/files/v2/small.numpress.mzpeak", "../test/files/v2/small.unpacked.mzpeak"})
+        "../test/files/v2/small.numpress.mzpeak", "../test/files/v2/small.unpacked.mzpeak"}) {
+    BOOST_TEST(read_minimal_metadata(path).has_value(), path << " is read as Lean");
     require_minimal_equals_lean(path);
+  }
 }
 
 /******************************************************************************/
-// The comparison above covers only the fields Minimal keeps, so an archive
-// Minimal silently stopped holding -- read as Lean by the fallback -- would
-// pass it too.  The selected ion's mobility tells the two apart: diapasef.dir,
-// a real diaPASEF run, carries one (see ion_mobility_test.cpp), and Minimal
-// leaves it out.
+// The test above asks the Util reader whether Minimal holds an archive; this
+// asks Index::spectra, which would hand out Lean's records had it fallen back.
+// The selected ion's mobility tells the two apart: diapasef.dir, a real
+// diaPASEF run, carries one (see ion_mobility_test.cpp), and Minimal leaves it
+// out.
 BOOST_AUTO_TEST_CASE(minimal_holds_diapasef_without_its_ion_mobility)
 {
   auto lean_index = MzPeak::open("../test/files/diapasef.dir");
@@ -1241,47 +1286,6 @@ BOOST_AUTO_TEST_CASE(minimal_reads_an_ion_of_another_precursor_as_lean)
 // one-range path.  The copies have no peak data of their own, so this reads
 // through the metadata readers, not Spectra.
 namespace {
-
-/// An archive's spectrum metadata members, opened for the Util readers and
-/// closed when this goes.
-struct MetadataMembers {
-  std::shared_ptr<MzPeak::Util::Manager> manager;
-  std::unique_ptr<MzPeak::Util::Parquet> primary, scans, precursors, selected_ions;
-
-  explicit MetadataMembers(const std::filesystem::path& archive)
-      : manager(MzPeak::open(archive).manager())
-  {
-    using MzPeak::Schema::DataKind;
-    const auto member =
-        [this](DataKind::Type kind) -> std::unique_ptr<MzPeak::Util::Parquet> {
-      const auto file = manager->find_file(MzPeak::Schema::EntityType::Spectrum, kind);
-      return file == manager->files().end() ? nullptr : manager->parquet(*file);
-    };
-    primary = member(DataKind::Metadata);
-    scans = member(DataKind::Scans);
-    precursors = member(DataKind::Precursors);
-    selected_ions = member(DataKind::SelectedIons);
-  }
-
-  MzPeak::Util::SpectraMetadataFiles files() const
-  {
-    return {primary.get(), scans.get(), precursors.get(), selected_ions.get()};
-  }
-};
-
-MzPeak::Util::IndexMap<MzPeak::SpectrumMetadata>
-read_metadata(const std::filesystem::path& archive, MzPeak::MetadataDetail detail)
-{
-  const MetadataMembers members(archive);
-  return MzPeak::Util::read_spectra_metadata(members.files(), detail);
-}
-
-std::optional<MzPeak::Util::IndexMap<MzPeak::MinimalSpectrumMetadata>>
-read_minimal_metadata(const std::filesystem::path& archive)
-{
-  const MetadataMembers members(archive);
-  return MzPeak::Util::read_minimal_spectra_metadata(members.files());
-}
 
 template <typename T> void put(std::ostream& out, const char* name, const T& value)
 {
