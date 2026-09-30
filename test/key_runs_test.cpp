@@ -37,6 +37,7 @@ directory of this repository.
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -45,6 +46,7 @@ directory of this repository.
 #include <vector>
 
 #include "mzpeak/exception.h"
+#include "mzpeak/io/directory.h"
 #include "mzpeak/open.h"
 #include "mzpeak/spectra.h"
 #include "mzpeak/spectrum.h"
@@ -144,14 +146,16 @@ const char* kArrayIndex =
     R"("sorting_rank":null}]})";
 
 /// Write @p points as a point-layout spectra_data.parquet, declaring the key
-/// sorted or not, with its own key/value metadata or the fixture defaults.
+/// sorted or not, with its own key/value metadata or the fixture defaults, and
+/// any further writer properties @p tune sets.
 void write_points(const fs::path& path,
                   const Points& points,
                   bool declare_sorted,
                   int64_t group_rows,
                   bool signed_key = false,
                   std::shared_ptr<const arrow::KeyValueMetadata> kv = nullptr,
-                  bool statistics = true)
+                  bool statistics = true,
+                  const std::function<void(parquet::WriterProperties::Builder&)>& tune = {})
 {
   std::shared_ptr<arrow::Array> key;
   if (signed_key) {
@@ -194,6 +198,7 @@ void write_points(const fs::path& path,
   if (declare_sorted) {
     props.set_sorting_columns({parquet::SortingColumn{0, false, false}});
   }
+  if (tune) tune(props);
   auto arrow_props = parquet::ArrowWriterProperties::Builder().store_schema()->build();
   auto out = value(arrow::io::FileOutputStream::Open(path.string()));
   check(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(), out, group_rows,
@@ -217,6 +222,44 @@ fs::path write_archive(const fs::path& dir,
        << R"("data_kind":"data_arrays","column_mapping":[],"parameters":[]}],)"
        << R"("metadata":{"version":"0.9.0"}})";
   return dir;
+}
+
+/// One Parquet file on its own, outside any archive, as a @p data_kind member.
+std::unique_ptr<Util::Parquet> open_table(const fs::path& path, const char* data_kind)
+{
+  IO::Directory directory(path.parent_path());
+  return std::make_unique<Util::Parquet>(
+      directory.read_file(path.filename()),
+      Schema::File(boost::json::object{{"name", path.filename().string()},
+                                       {"data_kind", data_kind},
+                                       {"entity_type", "spectrum"}}));
+}
+
+/// Rewrite the key's dictionary indices in @p path -- one RLE run of five
+/// zeros, `01 0a 00` (bit width 1, header 5 << 1, value 0) -- as one
+/// bit-packed group of eight, `01 03 00` (header 1 << 1 | 1, eight zero bits):
+/// the same five indices, then three zeros of padding.  The key must be the
+/// first leaf, uncompressed, and those three bytes the end of its chunk.
+void pad_key_indices(const fs::path& path)
+{
+  int64_t end = 0;
+  {
+    auto file = value(arrow::io::ReadableFile::Open(path.string()));
+    const auto metadata = parquet::ReadMetaData(file); // the chunk points into it
+    const auto chunk = metadata->RowGroup(0)->ColumnChunk(0);
+    BOOST_TEST_REQUIRE(chunk->has_dictionary_page());
+    end = chunk->dictionary_page_offset() + chunk->total_compressed_size();
+    check(file->Close());
+  }
+  std::fstream stream(path, std::ios::in | std::ios::out | std::ios::binary);
+  char tail[3] = {};
+  stream.seekg(end - 3);
+  stream.read(tail, 3);
+  BOOST_TEST_REQUIRE((tail[0] == 0x01 && tail[1] == 0x0a && tail[2] == 0x00));
+  stream.seekp(end - 2);
+  stream.put(0x03);
+  stream.close();
+  BOOST_TEST_REQUIRE(!stream.fail());
 }
 
 /// The signal table of an archive, through the archive's shared cache.
@@ -510,10 +553,10 @@ BOOST_AUTO_TEST_CASE(a_false_sorted_declaration_keeps_the_column)
 }
 
 /******************************************************************************/
-// A null in a declared-sorted key keeps the column.  The decode does not ask
-// the footer (see the next test); it reads the key's VALUES only, and a chunk
-// with a null holds fewer values than rows, so the read comes up short.  Both
-// a trailing null (still "sorted, nulls last") and one mid-group are caught.
+// A null in a declared-sorted key keeps the column: here the footer counts it
+// (without a count, the definition levels show it -- see
+// a_padded_dictionary_page_does_not_hide_a_null).  Both a trailing null (still
+// "sorted, nulls last") and one mid-group are caught.
 BOOST_AUTO_TEST_CASE(a_nullable_key_with_a_null_keeps_the_column)
 {
   Scratch scratch("mzp-test-keyruns-null");
@@ -556,6 +599,78 @@ BOOST_AUTO_TEST_CASE(without_statistics_the_data_decides)
   for (uint64_t s = 0; s < 30; ++s) {
     BOOST_TEST_REQUIRE(spectra[s].mz().size() == 100u);
     BOOST_TEST(spectra[s].mz()[42] == mz_of(static_cast<int64_t>(s), 42));
+  }
+}
+
+/******************************************************************************/
+// The null check must PROVE there is none, and the key's values alone cannot.
+// A dictionary page holds one index per non-null row, but may end its index
+// stream in a bit-packed group zero-padded to eight, and the padding reads back
+// as the dictionary's first value.  Here five points of spectrum 42 and two
+// null-key rows end that way (patched in: Arrow writes the five indices as an
+// RLE run), so a values-only read finds seven values, all 42 -- one sorted run
+// over every row.  The footer's null count refuses it; without statistics, the
+// definition levels do; on data page V1 and V2 alike.  The group keeps its
+// column, and reads back as the same points declared unsorted read.
+BOOST_AUTO_TEST_CASE(a_padded_dictionary_page_does_not_hide_a_null)
+{
+  Scratch scratch("mzp-test-keyruns-padded");
+  Points points;
+  add_spectrum(points, 42, 5);
+  for (uint64_t p = 0; p < 2; ++p) {
+    points.key.push_back(std::nullopt);
+    points.mz.push_back(mz_of(43, p));
+    points.intensity.push_back(intensity_of(43, p));
+  }
+
+  for (const auto version :
+       {parquet::ParquetDataPageVersion::V1, parquet::ParquetDataPageVersion::V2}) {
+    for (bool statistics : {true, false}) {
+      const std::string name = std::string(version == parquet::ParquetDataPageVersion::V1
+                                               ? "v1"
+                                               : "v2") +
+                               (statistics ? "-stats" : "-nostats");
+      const auto tune = [version](parquet::WriterProperties::Builder& props) {
+        props.compression(arrow::Compression::UNCOMPRESSED);
+        props.data_page_version(version);
+      };
+      const fs::path sorted = scratch.path / (name + "-sorted.parquet");
+      const fs::path unsorted = scratch.path / (name + "-unsorted.parquet");
+      write_points(sorted, points, true, 1 << 20, false, nullptr, statistics, tune);
+      write_points(unsorted, points, false, 1 << 20, false, nullptr, statistics, tune);
+      pad_key_indices(sorted);
+      pad_key_indices(unsorted);
+
+      auto a = open_table(sorted, "data_arrays");
+      auto b = open_table(unsorted, "data_arrays");
+      BOOST_TEST_REQUIRE(a->file_metadata()->RowGroup(0)->ColumnChunk(0)->is_stats_set() ==
+                         statistics);
+      BOOST_TEST(!Util::scan_key_runs(a->reader(), 0), name);
+      auto group = a->row_group(0);
+      BOOST_TEST(!group->key_runs, name);
+
+      // The full decode: 42 five times, then the two nulls.
+      BOOST_TEST_REQUIRE(group->batches.size() == 1u);
+      const auto& point = static_cast<const arrow::StructArray&>(*group->batches[0]->column(0));
+      const auto key = std::dynamic_pointer_cast<arrow::UInt64Array>(point.field(0));
+      const bool decoded = key && key->length() == 7;
+      BOOST_TEST(decoded, name << ": the key column is not decoded");
+      for (int64_t r = 0; decoded && r < 7; ++r) {
+        BOOST_TEST(key->IsNull(r) == (r >= 5), name << " row " << r);
+        if (r < 5) BOOST_TEST(key->Value(r) == 42u, name << " row " << r);
+      }
+
+      const auto key_a = a->field("point", "spectrum_index").value();
+      const auto key_b = b->field("point", "spectrum_index").value();
+      for (uint64_t s : {uint64_t{42}, uint64_t{7}}) {
+        for (bool with_key : {true, false}) {
+          const Read ra = run_query(*a, Util::Query::Builder(key_a).eq<uint64_t>(s), with_key);
+          const Read rb = run_query(*b, Util::Query::Builder(key_b).eq<uint64_t>(s), with_key);
+          BOOST_TEST((ra == rb), name << " spectrum " << s << " with_key " << with_key);
+          BOOST_TEST(same_bytes(ra.mz, rb.mz), name << " spectrum " << s);
+        }
+      }
+    }
   }
 }
 
