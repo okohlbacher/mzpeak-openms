@@ -89,6 +89,14 @@ not as a guarantee.
 Both need real files before their numbers are trusted. Remaining known issues
 are listed in [docs/roadmap.md](docs/roadmap.md).
 
+### Data used for development and benchmarking
+
+Only public datasets deposited in ProteomeXchange (PXD accessions) are used for
+development, testing and benchmarking. The fixtures in `test/files` are cut from
+those, or from the public test files the upstream projects ship (mzdata, the
+HUPO-PSI prototype). Unpublished or collaborator data has no place in this
+repository: not in fixtures, benchmarks, logs, commit messages or documentation.
+
 ## Building
 
 Three configurations are used here, and all three are expected green:

@@ -490,6 +490,9 @@ def main() -> int:
 
     index_path = dest / "mzpeak_index.json"
     index = json.loads(index_path.read_text())
+    # The converter's free-text verification note cites runs that are not part
+    # of the public test data; nothing reads it, so the fixtures leave it out.
+    index.get("metadata", {}).get("vendor_mz_calibration", {}).pop("model_type_1_verified", None)
     kept = []
     for entry in index["files"]:
         name = entry.get("path") or entry.get("name")
