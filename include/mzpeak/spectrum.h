@@ -31,6 +31,20 @@ namespace MzPeak {
 // Forward declaration.
 class Spectra;
 
+namespace Detail {
+/// Decode one spectrum's rows (@p slice) into its arrays, with every check the
+/// lazy Spectrum decode makes. Shared by Spectrum and the partitioned read.
+void decode_spectrum(const std::shared_ptr<Data::Signals>& signals,
+                     const std::vector<Data::ArrayIndex::Dimension>& dims,
+                     std::shared_ptr<Util::Slice> slice,
+                     uint64_t index,
+                     const SpectrumMetadata& md,
+                     const ImsCalibration& ims,
+                     std::vector<double>& mz,
+                     std::vector<float>& intensity,
+                     std::vector<double>& mobility);
+} // namespace Detail
+
 /**
  * Access to a single spectrum in an MzPeak file.
  *

@@ -8,15 +8,18 @@ top-level directory of this repository.
 
 #include "mzpeak/data/signals.h"
 
-#include <chrono>
-
+#include <algorithm>
 #include <arrow/record_batch.h>
 #include <bit>
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <parquet/arrow/reader.h>
 #include <parquet/statistics.h>
+#include <utility>
 
 #include "mzpeak/data/array_index.h"
+#include "mzpeak/exception.h"
 #include "mzpeak/schema/entity_type.h"
 #include "mzpeak/util/executor.h"
 #include "mzpeak/util/planner.h"
@@ -210,6 +213,125 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
 
   Util::Executor executor = impl_->parquet_->executor(columns);
   return executor.execute(plan);
+}
+
+/******************************************************************************/
+std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>
+Signals::select_range(const std::vector<ArrayIndex::Dimension>& projection,
+                      uint64_t first,
+                      uint64_t last)
+{
+  // The same columns select() projects, in the same order.
+  std::vector<Schema::Column> fields;
+  for (const auto& dim : projection) {
+    for (const auto& entry : dim.entries) {
+      if (!entry.needed_for_decoding()) continue;
+      auto field =
+          impl_->array_index_->entry_column(*impl_->parquet_->groups(), entry);
+      if (!field.has_value()) {
+        throw InvalidFormatError("array entry not present in schema: " + entry.name);
+      }
+      fields.push_back(field.value());
+    }
+  }
+
+  // Plus the index column, which tells the rows apart.
+  const auto index_name = impl_->array_index_->entity_type().index_column_name();
+  const auto index_field = column(index_name);
+  if (!index_field.has_value()) {
+    throw InvalidFormatError("parquet file is missing the index column: " +
+                             index_name);
+  }
+  const auto key = [](const Schema::Column& c) {
+    return c.second->absolute_index();
+  };
+  const bool index_projected = std::ranges::any_of(
+      fields, [&](const auto& f) { return key(f) == key(*index_field); });
+
+  Util::Projection columns;
+  for (const auto& f : fields)
+    columns.project(f);
+  if (!index_projected) columns.project(*index_field);
+
+  const Util::Query query = index().ge(first).and_then(index().le(last));
+  Util::Planner planner = impl_->parquet_->planner(query);
+  auto plan = planner.plan();
+  Util::Executor executor = impl_->parquet_->executor(columns);
+  std::unique_ptr<Util::Slice> whole = executor.execute(plan);
+
+  std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>> out;
+  if (!whole) return out;
+
+  // raw() hands each column over once.  The executor appends one array per
+  // field per record batch, so chunk c of every field covers the same rows.
+  std::shared_ptr<Util::Slice::Raw> ids = whole->raw(*index_field);
+  if (!ids) return out;
+  std::vector<std::shared_ptr<Util::Slice::Raw>> raws;
+  for (const auto& f : fields) {
+    raws.push_back(key(f) == key(*index_field) ? ids : whole->raw(f));
+    if (!raws.back() || raws.back()->size() != ids->size()) {
+      throw ParquetError(
+          "range read: column chunks do not line up with the index column");
+    }
+  }
+
+  const auto id_at = [](const std::shared_ptr<arrow::Array>& a,
+                        int64_t r) -> std::optional<uint64_t> {
+    if (a->IsNull(r)) return std::nullopt;
+    switch (a->type_id()) {
+    case arrow::Type::UINT64:
+      return std::static_pointer_cast<arrow::UInt64Array>(a)->Value(r);
+    case arrow::Type::INT64:
+      return static_cast<uint64_t>(
+          std::static_pointer_cast<arrow::Int64Array>(a)->Value(r));
+    case arrow::Type::UINT32:
+      return std::static_pointer_cast<arrow::UInt32Array>(a)->Value(r);
+    case arrow::Type::INT32:
+      return static_cast<uint64_t>(
+          std::static_pointer_cast<arrow::Int32Array>(a)->Value(r));
+    default:
+      throw ParquetError("range read: unsupported index column type " +
+                         a->type()->ToString());
+    }
+  };
+
+  // Append rows [begin, begin + length) of chunk c to the slice for spectrum id;
+  // a spectrum that continues into the next batch keeps its slice.
+  const auto emit = [&](uint64_t id, std::size_t c, int64_t begin, int64_t length) {
+    if (out.empty() || out.back().first != id) {
+      out.emplace_back(id, std::unique_ptr<Util::Slice>(new Util::Slice(fields)));
+    }
+    for (std::size_t f = 0; f < fields.size(); ++f) {
+      out.back().second->append(fields[f], (*raws[f])[c]->Slice(begin, length));
+    }
+  };
+
+  for (std::size_t c = 0; c < ids->size(); ++c) {
+    const auto& chunk = (*ids)[c];
+    int64_t begin = 0;
+    std::optional<uint64_t> current;
+    for (int64_t r = 0; r < chunk->length(); ++r) {
+      const auto id = id_at(chunk, r);
+      if (id != current) {
+        if (current.has_value()) emit(*current, c, begin, r - begin);
+        current = id;
+        begin = r;
+      }
+    }
+    if (current.has_value()) emit(*current, c, begin, chunk->length() - begin);
+  }
+
+  // Rows sorted by index give one slice per spectrum.  A file whose rows are not
+  // sorted would split a spectrum into several slices; refuse it here rather
+  // than hand out fragments.
+  for (std::size_t i = 1; i < out.size(); ++i) {
+    if (out[i].first <= out[i - 1].first) {
+      throw ParquetError("range read: rows are not sorted by spectrum index (" +
+                         std::to_string(out[i - 1].first) + " then " +
+                         std::to_string(out[i].first) + ")");
+    }
+  }
+  return out;
 }
 
 } // namespace MzPeak::Data

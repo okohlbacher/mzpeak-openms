@@ -259,19 +259,8 @@ Spectra::get_spectra_batch(const std::vector<std::size_t>& indices) const
 }
 
 /******************************************************************************/
-Spectrum Spectra::fetch_(uint64_t index) const
+std::shared_ptr<Data::Signals> Spectra::signals_for_(uint64_t index) const
 {
-  // Choose the table this spectrum lives in.  Read from the cached metadata map
-  // rather than re-querying the metadata file per spectrum: the old projection
-  // needed a `spectrum` struct group, which the flat layout does not have, so it
-  // silently fell through to the profile table.
-  //
-  // The spectrum REPRESENTATION decides, not merely "does it have peaks".  A
-  // spectrum may carry both a profile array and a centroid array — in
-  // small.chunked.mzpeak spectrum 0 declares number_of_data_points 13589 AND
-  // number_of_peaks 1612 while being profile (MS:1000128).  Dispatching on the
-  // peak count alone handed back 1612 centroids for a profile spectrum: the
-  // wrong array, silently, and with a plausible length.
   std::shared_ptr<Data::Signals> signals = data_;
   if (peaks_) {
     with_metadata_(index, [&](const auto& md) {
@@ -289,7 +278,14 @@ Spectrum Spectra::fetch_(uint64_t index) const
       }
     });
   }
+  return signals;
+}
 
+/******************************************************************************/
+std::vector<Data::ArrayIndex::Dimension>
+Spectra::dims_for_(const Data::Signals& signals_ref) const
+{
+  const Data::Signals* signals = &signals_ref;
   // A plain copy_if rather than views::filter | ranges::to: ranges::to is a
   // C++23 LIBRARY feature Apple's clang 15 libc++ lacks.
   std::vector<Data::ArrayIndex::Dimension> dims;
@@ -306,6 +302,25 @@ Spectrum Spectra::fetch_(uint64_t index) const
                // selecting it here the spectrum has no coordinate at all.
                d.name.find("tof") != std::string::npos;
                        });
+  return dims;
+}
+
+/******************************************************************************/
+Spectrum Spectra::fetch_(uint64_t index) const
+{
+  // Choose the table this spectrum lives in.  Read from the cached metadata map
+  // rather than re-querying the metadata file per spectrum: the old projection
+  // needed a `spectrum` struct group, which the flat layout does not have, so it
+  // silently fell through to the profile table.
+  //
+  // The spectrum REPRESENTATION decides, not merely "does it have peaks".  A
+  // spectrum may carry both a profile array and a centroid array — in
+  // small.chunked.mzpeak spectrum 0 declares number_of_data_points 13589 AND
+  // number_of_peaks 1612 while being profile (MS:1000128).  Dispatching on the
+  // peak count alone handed back 1612 centroids for a profile spectrum: the
+  // wrong array, silently, and with a plausible length.
+  std::shared_ptr<Data::Signals> signals = signals_for_(index);
+  std::vector<Data::ArrayIndex::Dimension> dims = dims_for_(*signals);
 
   // A Minimal entry is expanded here, once per Spectrum: that is the
   // SpectrumMetadata its metadata() hands out, and what the decode reads.
@@ -316,6 +331,107 @@ Spectrum Spectra::fetch_(uint64_t index) const
       own = std::make_shared<const SpectrumMetadata>(it->second.expand());
   }
   return Spectrum(index, signals, std::move(dims), meta_, md_map_, ims_, std::move(own));
+}
+
+/******************************************************************************/
+std::vector<Spectra::Partition> Spectra::partitions(std::size_t count) const
+{
+  const std::size_t n = size();
+  std::vector<Partition> out;
+  if (n == 0 || count == 0) return out;
+
+  // Weight each spectrum by its declared size, so one partition of MS1 profile
+  // spectra is not ten times the work of the next; +1 so empty spectra count.
+  std::vector<uint64_t> weight(n, 1);
+  for_each_metadata_([&](uint64_t index, const auto& md) {
+    if (index >= n) return;
+    const bool centroid = md.representation == "MS:1000127";
+    weight[index] +=
+        centroid ? md.number_of_peaks.value_or(0)
+                 : md.number_of_data_points.value_or(md.number_of_peaks.value_or(0));
+  });
+  uint64_t total = 0;
+  for (uint64_t w : weight)
+    total += w;
+
+  const std::size_t parts = std::min(count, n);
+  uint64_t first = 0;
+  uint64_t acc = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    acc += weight[i];
+    const uint64_t cut = total * (out.size() + 1) / parts;
+    if (acc >= cut && out.size() + 1 < parts) {
+      out.push_back({first, i});
+      first = i + 1;
+    }
+  }
+  if (first < n) out.push_back({first, n - 1});
+  return out;
+}
+
+/******************************************************************************/
+void Spectra::decode(const Partition& partition, const SpectrumSink& sink) const
+{
+  const uint64_t last =
+      std::min<uint64_t>(partition.last_index, size() == 0 ? 0 : size() - 1);
+  if (size() == 0 || partition.first_index > last) return;
+
+  // One range read per signal table, split per spectrum.
+  struct Facet {
+    std::shared_ptr<Data::Signals> signals;
+    std::vector<Data::ArrayIndex::Dimension> dims;
+    std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>> slices;
+    std::size_t next = 0;
+  };
+  std::vector<Facet> facets;
+  for (const auto& s : {data_, peaks_}) {
+    if (!s) continue;
+    Facet f{s, dims_for_(*s), {}, 0};
+    f.slices = s->select_range(f.dims, partition.first_index, last);
+    facets.push_back(std::move(f));
+  }
+
+  static const SpectrumMetadata empty{};
+  std::vector<double> mz;
+  std::vector<float> intensity;
+  std::vector<double> mobility;
+  for (uint64_t i = partition.first_index; i <= last; ++i) {
+    // The metadata the lazy decode would use for this spectrum.
+    SpectrumMetadata expanded;
+    const SpectrumMetadata* md = &empty;
+    if (md_map_) {
+      auto it = md_map_->find(i);
+      if (it != md_map_->end()) md = &it->second;
+    } else if (md_minimal_) {
+      auto it = md_minimal_->find(i);
+      if (it != md_minimal_->end()) {
+        expanded = it->second.expand();
+        md = &expanded;
+      }
+    }
+
+    const std::shared_ptr<Data::Signals> signals = signals_for_(i);
+    mz.clear();
+    intensity.clear();
+    mobility.clear();
+    for (auto& f : facets) {
+      while (f.next < f.slices.size() && f.slices[f.next].first < i)
+        ++f.next;
+      if (f.signals != signals) continue;
+      std::shared_ptr<Util::Slice> slice;
+      if (f.next < f.slices.size() && f.slices[f.next].first == i) {
+        slice = std::move(f.slices[f.next].second);
+      } else {
+        // No rows in the range read.  Read it the per-spectrum way, so a
+        // spectrum the file declares as non-empty fails the same count check
+        // the lazy decode applies; a genuinely empty one decodes to nothing.
+        slice = f.signals->select(f.dims, f.signals->index().eq(i));
+      }
+      Detail::decode_spectrum(f.signals, f.dims, std::move(slice), i, *md, ims_, mz,
+                              intensity, mobility);
+    }
+    sink(i, mz, intensity);
+  }
 }
 
 } // namespace MzPeak
