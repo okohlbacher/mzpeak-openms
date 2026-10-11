@@ -216,6 +216,32 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
 }
 
 /******************************************************************************/
+std::optional<std::vector<std::pair<uint64_t, uint64_t>>>
+Signals::row_group_index_bounds() const
+{
+  const auto index_field =
+      column(impl_->array_index_->entity_type().index_column_name());
+  if (!index_field.has_value()) return std::nullopt;
+  const int col = index_field->second->absolute_index();
+  auto fmd = impl_->parquet_->file_metadata();
+
+  std::vector<std::pair<uint64_t, uint64_t>> out;
+  for (int g = 0; g < fmd->num_row_groups(); ++g) {
+    if (fmd->RowGroup(g)->num_rows() == 0) continue;
+    auto chunk = fmd->RowGroup(g)->ColumnChunk(col);
+    if (!chunk->is_stats_set()) return std::nullopt;
+    auto stats = chunk->statistics();
+    if (!stats || !stats->HasMinMax()) return std::nullopt;
+    // Unsigned 64-bit stored with a signed physical type, as in record_count().
+    auto typed = std::dynamic_pointer_cast<parquet::Int64Statistics>(stats);
+    if (!typed) return std::nullopt;
+    out.emplace_back(std::bit_cast<uint64_t>(typed->min()),
+                     std::bit_cast<uint64_t>(typed->max()));
+  }
+  return out;
+}
+
+/******************************************************************************/
 std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>>
 Signals::select_range(const std::vector<ArrayIndex::Dimension>& projection,
                       uint64_t first,

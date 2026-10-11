@@ -38,6 +38,11 @@ public:
    */
   std::size_t record_count() const;
 
+  /// Per row group, the {min, max} of the entity index from the column
+  /// statistics; nullopt when any group lacks them.
+  std::optional<std::vector<std::pair<uint64_t, uint64_t>>>
+  row_group_index_bounds() const;
+
   /**
    * Return a query builder for the index column.
    *
