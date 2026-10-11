@@ -195,6 +195,20 @@ public:
       null_decoder_.chunk(casted);
     }
 
+    // No nulls and a plain value buffer: the loop below would only push every
+    // value in order, so append the buffer in one go. Numpress byte lists and
+    // intensity lists take this path; it was a fifth of a full decode.
+    if constexpr (std::is_same_v<C, std::vector<V>> && std::is_arithmetic_v<V> &&
+                  requires {
+                    { casted->raw_values() } -> std::convertible_to<const V*>;
+                  }) {
+      if (casted->null_count() == 0) {
+        const V* values = casted->raw_values();
+        dst.insert(dst.end(), values, values + casted->length());
+        return;
+      }
+    }
+
     for (int64_t i : std::views::iota(0, casted->length())) {
       if (casted->IsNull(i)) {
         std::optional<V> value = std::invoke(null_decoder_, i);
