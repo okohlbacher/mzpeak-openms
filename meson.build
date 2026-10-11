@@ -263,6 +263,7 @@ test_names = [
     'validation',
     'ion_mobility',
     'grid_encoding',
+    'partition',
 ]
 
 # A timed-out test is reported as neither pass nor fail: it drops out of the

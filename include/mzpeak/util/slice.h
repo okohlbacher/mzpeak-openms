@@ -14,6 +14,10 @@ top-level directory of this repository.
 #include "mzpeak/util/compat.h" // IWYU pragma: keep
 #include "mzpeak/util/decoders.h"
 
+namespace MzPeak::Data {
+class Signals;
+}
+
 namespace MzPeak::Util {
 
 // Forward declarations.
@@ -125,6 +129,7 @@ public:
 
 private:
   friend class MzPeak::Util::Executor;
+  friend class MzPeak::Data::Signals; // splits a range read per spectrum
 
   /// Constructor.
   Slice(const std::vector<Column>&);

@@ -38,6 +38,11 @@ public:
    */
   std::size_t record_count() const;
 
+  /// Per row group, the {min, max} of the entity index from the column
+  /// statistics; nullopt when any group lacks them.
+  std::optional<std::vector<std::pair<uint64_t, uint64_t>>>
+  row_group_index_bounds() const;
+
   /**
    * Return a query builder for the index column.
    *
@@ -50,6 +55,20 @@ public:
    */
   std::unique_ptr<Util::Slice> select(const std::vector<ArrayIndex::Dimension>&,
                                       const Util::Query&);
+
+  /**
+   * Read every row of the spectra with index in [@p first, @p last] in ONE
+   * query, and split the result into one slice per spectrum, in ascending index
+   * order.  Spectra with no rows are absent.  Each slice is what select() with
+   * `index().eq(i)` returns for that spectrum, so it decodes identically.
+   *
+   * Returns nullopt when the rows are not in index order: the format does not
+   * require that, so the caller reads those spectra one at a time instead.
+   */
+  std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>>
+  select_range(const std::vector<ArrayIndex::Dimension>&,
+               uint64_t first,
+               uint64_t last);
 
   /**
    * Low-level interface for accessing a column given its name.

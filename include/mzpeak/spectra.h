@@ -9,11 +9,14 @@ top-level directory of this repository.
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 #include "mzpeak/ims_calibration.h"
 #include "mzpeak/spectrum.h"
@@ -115,6 +118,37 @@ public:
    * scan=1") to its index, or nullopt when no spectrum carries that id.
    */
   std::optional<std::size_t> index_for_id(const std::string& id) const;
+
+  /// A contiguous, inclusive range of spectrum indices; see partitions().
+  struct Partition {
+    uint64_t first_index = 0;
+    uint64_t last_index = 0;
+  };
+
+  /// Receives one spectrum of a partition.  The spans are valid for the
+  /// duration of the call only.
+  using SpectrumSink = std::function<void(
+      uint64_t index, std::span<const double> mz, std::span<const float> intensity)>;
+
+  /**
+   * Split the run [0, size()) into at most @p count contiguous partitions of
+   * roughly equal declared point count, in ascending order.  Together they
+   * cover every spectrum exactly once, including spectra with no peaks.
+   */
+  std::vector<Partition> partitions(std::size_t count) const;
+
+  /**
+   * Decode every spectrum of @p partition and hand it to @p sink, in ascending
+   * index order, exactly once each -- a spectrum with no rows arrives with
+   * empty spans.  Each signal table is read with ONE range query for the whole
+   * partition instead of one query per spectrum; the arrays are what mz() and
+   * intensity() return for the same spectrum.
+   *
+   * Thread safety is that of this class: one Spectra per thread.  Different
+   * partitions may be decoded concurrently by different Spectra objects
+   * obtained from the same Index.
+   */
+  void decode(const Partition& partition, const SpectrumSink& sink) const;
 
   /**
    * Fetch the spectrum with the given native id.
@@ -240,6 +274,11 @@ private:
   // state — the metadata cache is built in the constructor — which lets the
   // selection helpers above be const without casting.
   Spectrum fetch_(uint64_t) const;
+
+  // The signal table spectrum @p index is read from (its representation
+  // decides), and the dimensions read from a table.  Shared by fetch_ and decode.
+  std::shared_ptr<Data::Signals> signals_for_(uint64_t index) const;
+  std::vector<Data::ArrayIndex::Dimension> dims_for_(const Data::Signals&) const;
 
   /// EnumerableProxy's fetch is a non-const pure virtual; ours is const so the
   /// const public API (by_id, range queries) still works.  Forward.
