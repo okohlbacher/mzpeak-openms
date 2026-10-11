@@ -56,9 +56,14 @@ public:
    * query, and split the result into one slice per spectrum, in ascending index
    * order.  Spectra with no rows are absent.  Each slice is what select() with
    * `index().eq(i)` returns for that spectrum, so it decodes identically.
+   *
+   * Returns nullopt when the rows are not in index order: the format does not
+   * require that, so the caller reads those spectra one at a time instead.
    */
-  std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>> select_range(
-      const std::vector<ArrayIndex::Dimension>&, uint64_t first, uint64_t last);
+  std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>>
+  select_range(const std::vector<ArrayIndex::Dimension>&,
+               uint64_t first,
+               uint64_t last);
 
   /**
    * Low-level interface for accessing a column given its name.

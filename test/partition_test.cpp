@@ -1,10 +1,13 @@
 #define BOOST_TEST_MODULE Partition
 #include <boost/test/included/unit_test.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "mzpeak/open.h"
@@ -35,6 +38,14 @@ struct Decoded {
   std::vector<std::vector<double>> mz;
   std::vector<std::vector<float>> intensity;
 };
+
+// Bit for bit: value equality would accept -0.0 for 0.0 and reject equal NaNs.
+template <typename T>
+bool same_bits(const std::vector<T>& a, const std::vector<T>& b)
+{
+  return a.size() == b.size() &&
+         (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0);
+}
 
 Decoded decode_all(const MzPeak::Spectra& spectra, std::size_t parts)
 {
@@ -125,8 +136,8 @@ BOOST_AUTO_TEST_CASE(decode_matches_the_lazy_spectrum_for_any_partition_count)
           for (std::size_t k = 0; k < d.order.size(); ++k)
             BOOST_TEST(d.order[k] == k);
           for (std::size_t i = 0; i < spectra.size(); ++i) {
-            BOOST_TEST(d.mz[i] == lazy.mz[i], "m/z of spectrum " << i);
-            BOOST_TEST(d.intensity[i] == lazy.intensity[i],
+            BOOST_TEST(same_bits(d.mz[i], lazy.mz[i]), "m/z of spectrum " << i);
+            BOOST_TEST(same_bits(d.intensity[i], lazy.intensity[i]),
                        "intensity of spectrum " << i);
           }
         }
@@ -161,15 +172,24 @@ BOOST_AUTO_TEST_CASE(partitions_decode_concurrently_to_the_same_result)
   for (auto& th : pool)
     th.join();
 
+  // Each worker delivered exactly its partition, in order; together, every
+  // spectrum once.
+  std::vector<int> times(serial_spectra.size(), 0);
   std::size_t seen = 0;
   for (std::size_t t = 0; t < ps.size(); ++t) {
+    BOOST_REQUIRE_EQUAL(per[t].order.size(),
+                        ps[t].last_index - ps[t].first_index + 1);
+    for (std::size_t k = 0; k < per[t].order.size(); ++k)
+      BOOST_TEST(per[t].order[k] == ps[t].first_index + k);
     for (uint64_t i : per[t].order) {
+      ++times[i];
       ++seen;
-      BOOST_TEST(per[t].mz[i] == serial.mz[i]);
-      BOOST_TEST(per[t].intensity[i] == serial.intensity[i]);
+      BOOST_TEST(same_bits(per[t].mz[i], serial.mz[i]));
+      BOOST_TEST(same_bits(per[t].intensity[i], serial.intensity[i]));
     }
   }
   BOOST_TEST(seen == serial_spectra.size());
+  BOOST_TEST(std::ranges::all_of(times, [](int n) { return n == 1; }));
 }
 
 // Spectra with no peaks have metadata rows but no signal rows.  They must still
@@ -179,7 +199,8 @@ BOOST_AUTO_TEST_CASE(spectra_without_peaks_are_delivered_in_place)
 {
   namespace fs = std::filesystem;
   const fs::path path =
-      fs::temp_directory_path() / "mzpeak_partition_test_empty.mzpeak";
+      fs::temp_directory_path() /
+      ("mzpeak_partition_test_empty_" + std::to_string(::getpid()) + ".mzpeak");
   std::error_code ec;
   fs::remove(path, ec);
 

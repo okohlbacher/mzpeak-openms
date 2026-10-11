@@ -216,7 +216,7 @@ Signals::select(const std::vector<ArrayIndex::Dimension>& projection,
 }
 
 /******************************************************************************/
-std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>
+std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>>>
 Signals::select_range(const std::vector<ArrayIndex::Dimension>& projection,
                       uint64_t first,
                       uint64_t last)
@@ -321,15 +321,11 @@ Signals::select_range(const std::vector<ArrayIndex::Dimension>& projection,
     if (current.has_value()) emit(*current, c, begin, chunk->length() - begin);
   }
 
-  // Rows sorted by index give one slice per spectrum.  A file whose rows are not
-  // sorted would split a spectrum into several slices; refuse it here rather
-  // than hand out fragments.
+  // Rows sorted by index give one slice per spectrum.  Unsorted rows would
+  // split a spectrum into several slices; the format allows them, so report it
+  // and let the caller read per spectrum rather than hand out fragments.
   for (std::size_t i = 1; i < out.size(); ++i) {
-    if (out[i].first <= out[i - 1].first) {
-      throw ParquetError("range read: rows are not sorted by spectrum index (" +
-                         std::to_string(out[i - 1].first) + " then " +
-                         std::to_string(out[i].first) + ")");
-    }
+    if (out[i].first <= out[i - 1].first) return std::nullopt;
   }
   return out;
 }

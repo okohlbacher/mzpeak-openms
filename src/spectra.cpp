@@ -345,10 +345,14 @@ std::vector<Spectra::Partition> Spectra::partitions(std::size_t count) const
   std::vector<uint64_t> weight(n, 1);
   for_each_metadata_([&](uint64_t index, const auto& md) {
     if (index >= n) return;
+    // The count of the array the decode will read: the same rule as fetch_.
+    const uint64_t points = md.number_of_data_points.value_or(0);
+    const uint64_t peaks = md.number_of_peaks.value_or(0);
     const bool centroid = md.representation == "MS:1000127";
-    weight[index] +=
-        centroid ? md.number_of_peaks.value_or(0)
-                 : md.number_of_data_points.value_or(md.number_of_peaks.value_or(0));
+    const bool profile = md.representation == "MS:1000128";
+    weight[index] += centroid  ? peaks
+                     : profile ? points
+                               : (points == 0 && peaks > 0 ? peaks : points);
   });
   uint64_t total = 0;
   for (uint64_t w : weight)
@@ -376,18 +380,34 @@ void Spectra::decode(const Partition& partition, const SpectrumSink& sink) const
       std::min<uint64_t>(partition.last_index, size() == 0 ? 0 : size() - 1);
   if (size() == 0 || partition.first_index > last) return;
 
-  // One range read per signal table, split per spectrum.
+  // The table each spectrum is decoded from, so a table no spectrum of this
+  // partition uses is not read at all.
+  bool uses_data = false;
+  bool uses_peaks = false;
+  for (uint64_t i = partition.first_index; i <= last; ++i) {
+    if (peaks_ && signals_for_(i) == peaks_) uses_peaks = true;
+    else
+      uses_data = true;
+  }
+
+  // One range read per table used, split per spectrum.  A table whose rows are
+  // not in index order is read per spectrum (`per_spectrum`).
   struct Facet {
     std::shared_ptr<Data::Signals> signals;
     std::vector<Data::ArrayIndex::Dimension> dims;
     std::vector<std::pair<uint64_t, std::unique_ptr<Util::Slice>>> slices;
     std::size_t next = 0;
+    bool per_spectrum = false;
   };
   std::vector<Facet> facets;
-  for (const auto& s : {data_, peaks_}) {
-    if (!s) continue;
-    Facet f{s, dims_for_(*s), {}, 0};
-    f.slices = s->select_range(f.dims, partition.first_index, last);
+  for (const auto& [s, used] :
+       {std::pair{data_, uses_data}, std::pair{peaks_, uses_peaks}}) {
+    if (!s || !used) continue;
+    Facet f{s, dims_for_(*s), {}, 0, false};
+    auto split = s->select_range(f.dims, partition.first_index, last);
+    if (split) f.slices = std::move(*split);
+    else
+      f.per_spectrum = true;
     facets.push_back(std::move(f));
   }
 
@@ -419,12 +439,14 @@ void Spectra::decode(const Partition& partition, const SpectrumSink& sink) const
         ++f.next;
       if (f.signals != signals) continue;
       std::shared_ptr<Util::Slice> slice;
-      if (f.next < f.slices.size() && f.slices[f.next].first == i) {
+      if (!f.per_spectrum && f.next < f.slices.size() &&
+          f.slices[f.next].first == i) {
         slice = std::move(f.slices[f.next].second);
       } else {
-        // No rows in the range read.  Read it the per-spectrum way, so a
-        // spectrum the file declares as non-empty fails the same count check
-        // the lazy decode applies; a genuinely empty one decodes to nothing.
+        // No rows in the range read, or a table read per spectrum: read it the
+        // per-spectrum way, so a spectrum the file declares as non-empty fails
+        // the same count check the lazy decode applies; a genuinely empty one
+        // decodes to nothing.
         slice = f.signals->select(f.dims, f.signals->index().eq(i));
       }
       Detail::decode_spectrum(f.signals, f.dims, std::move(slice), i, *md, ims_, mz,
