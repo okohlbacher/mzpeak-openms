@@ -624,4 +624,67 @@ std::unique_ptr<Executor::Slice> Executor::execute(const Planner::Plan& plan)
   return std::move(impl_->slice_);
 }
 
+/******************************************************************************/
+std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Executor::Slice>>>>
+Executor::execute_runs(const Planner::Plan& plan, uint64_t first, uint64_t last)
+{
+  // The planned groups, in file order.
+  std::vector<int32_t> groups;
+  for (const auto& range : plan.ranges)
+    groups.push_back(range.row_group);
+  std::ranges::sort(groups);
+  groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+
+  std::vector<std::pair<uint64_t, std::unique_ptr<Slice>>> out;
+  for (int32_t g : groups) {
+    auto batches = impl_->source_.row_group(g);
+    if (!batches->key_runs) return std::nullopt;
+    const KeyRuns& runs = *batches->key_runs;
+    for (const auto& column : impl_->projection_.get()) {
+      if (column.second->absolute_index() == runs.leaf) return std::nullopt;
+    }
+    // The runs hold 64-bit patterns; a signed key with negative values does
+    // not order the same way, and an index never is negative.
+    if (!runs.is_unsigned && !runs.key.empty() &&
+        static_cast<int64_t>(runs.key.front()) < 0) {
+      return std::nullopt;
+    }
+
+    const auto& offsets = batches->row_offset;
+    auto it = std::lower_bound(runs.key.begin(), runs.key.end(), first);
+    for (auto r = static_cast<std::size_t>(it - runs.key.begin());
+         r < runs.key.size() && runs.key[r] <= last; ++r) {
+      const uint64_t key = runs.key[r];
+      const int64_t begin = runs.start[r];
+      const int64_t end = runs.start[r + 1];
+      if (out.empty() || out.back().first != key) {
+        out.emplace_back(
+            key, std::unique_ptr<Slice>(new Slice(impl_->projection_.get())));
+      }
+      Slice& slice = *out.back().second;
+
+      // Rows [begin, end) of the group, across its batches.
+      auto bi = static_cast<std::size_t>(
+          std::upper_bound(offsets.begin(), offsets.end(), begin) - offsets.begin());
+      for (bi = bi > 0 ? bi - 1 : 0;
+           bi < batches->batches.size() && offsets[bi] < end; ++bi) {
+        const std::shared_ptr<arrow::RecordBatch>& batch = batches->batches[bi];
+        const int64_t start = offsets[bi];
+        const int64_t lo = std::max<int64_t>(begin - start, 0);
+        const int64_t hi = std::min<int64_t>(end - start, batch->num_rows());
+        if (hi <= lo) continue;
+        auto sliced = batch->Slice(lo, hi - lo);
+        for (const auto& field : slice.fields())
+          slice.append(field, impl_->array(sliced, field));
+      }
+    }
+  }
+
+  // One slice per key only if the keys ascend across groups too.
+  for (std::size_t k = 1; k < out.size(); ++k) {
+    if (out[k].first <= out[k - 1].first) return std::nullopt;
+  }
+  return out;
+}
+
 } // namespace MzPeak::Util

@@ -358,45 +358,18 @@ std::vector<Spectra::Partition> Spectra::partitions(std::size_t count) const
   for (uint64_t w : weight)
     total += w;
 
-  // Blocks: runs of spectra that start a row group of either signal table, so
-  // a partition reads whole row groups and no group is filtered by several
-  // partitions.  A spectrum whose rows continue into the next group stays with
-  // the group it starts in.  Without statistics, every spectrum is a block.
-  std::vector<uint64_t> starts{0};
-  bool aligned = true;
-  for (const auto& s : {data_, peaks_}) {
-    if (!s) continue;
-    auto bounds = s->row_group_index_bounds();
-    if (!bounds) {
-      aligned = false;
-      break;
-    }
-    for (std::size_t g = 1; g < bounds->size(); ++g) {
-      uint64_t cut = (*bounds)[g].first;
-      if ((*bounds)[g - 1].second >= cut) cut = (*bounds)[g - 1].second + 1;
-      if (cut < n) starts.push_back(cut);
-    }
-  }
-  if (!aligned) {
-    starts.resize(n);
-    for (std::size_t i = 0; i < n; ++i)
-      starts[i] = i;
-  }
-  std::ranges::sort(starts);
-  starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
-
-  // Merge consecutive blocks into at most `count` partitions of about equal weight.
-  const std::size_t parts = std::min(count, starts.size());
+  // Cut where the running weight crosses each equal share.  Partitions need
+  // not align with row groups: the range read finds each spectrum's rows by
+  // their key runs, and aligning capped the partitions at the number of groups.
+  const std::size_t parts = std::min(count, n);
   uint64_t first = 0;
   uint64_t acc = 0;
-  for (std::size_t k = 0; k < starts.size(); ++k) {
-    const uint64_t end = k + 1 < starts.size() ? starts[k + 1] : n; // exclusive
-    for (uint64_t i = starts[k]; i < end; ++i)
-      acc += weight[i];
+  for (std::size_t i = 0; i < n; ++i) {
+    acc += weight[i];
     const uint64_t cut = total * (out.size() + 1) / parts;
-    if (acc >= cut && out.size() + 1 < parts && end < n) {
-      out.push_back({first, end - 1});
-      first = end;
+    if (acc >= cut && out.size() + 1 < parts && i + 1 < n) {
+      out.push_back({first, i});
+      first = i + 1;
     }
   }
   if (first < n) out.push_back({first, n - 1});

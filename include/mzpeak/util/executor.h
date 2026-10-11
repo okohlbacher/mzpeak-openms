@@ -8,6 +8,12 @@ top-level directory of this repository.
 
 #pragma once
 
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include "mzpeak/util/planner.h"
 #include "mzpeak/util/projection.h"
 #include "mzpeak/util/slice.h"
@@ -35,6 +41,16 @@ public:
    * Execute a query and extract the requested projection.
    */
   std::unique_ptr<Slice> execute(const Planner::Plan&);
+
+  /**
+   * The rows of every key in [@p first, @p last], one slice per key in
+   * ascending order, taken from the planned row groups' KeyRuns: no filter,
+   * no key column.  nullopt when a planned group holds no runs (its key is not
+   * declared sorted, or the projection includes the key) or the keys do not
+   * ascend across groups; the caller then filters instead.
+   */
+  std::optional<std::vector<std::pair<uint64_t, std::unique_ptr<Slice>>>>
+  execute_runs(const Planner::Plan&, uint64_t first, uint64_t last);
 
 private:
   friend class Parquet;
