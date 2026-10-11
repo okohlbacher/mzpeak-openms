@@ -8,6 +8,7 @@ top-level directory of this repository.
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
