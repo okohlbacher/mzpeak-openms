@@ -261,6 +261,9 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
     for (const auto& entry_obj : entries_ary) {
       if (entry_obj.is_object()) {
         const auto& eo(entry_obj.as_object());
+        // `index` entries describe the per-entity key and time columns, which
+        // are scalar per spectrum, not signal arrays (spec signal-data.md).
+        if (eo.at("buffer_format").as_string() == "index") continue;
         Entry entry;
         entry.array_name = eo.at("array_name").as_string();
         entry.buffer_format =
@@ -295,7 +298,8 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
 
         entry.array_type =
             PSI::array_type_from_string(eo.at("array_type").as_string());
-        entry.unit = eo.at("unit").as_string();
+        if (const auto& unit = eo.at("unit"); unit.is_string())
+          entry.unit = unit.as_string();
 
         if (auto bp = eo.find("buffer_priority");
             bp != eo.end() && bp->value().is_string()) {
@@ -329,6 +333,21 @@ ArrayIndex::ArrayIndex(EntityType entity_type, const json::object& obj)
 
         entries_.push_back(std::move(entry));
       }
+    }
+  }
+
+  // With the `index` entries skipped, the key column's sorting_rank 0 is gone
+  // and the main axis may start at 1 (writers since the index buffer format).
+  // Re-base the ranks so the main axis is 0 either way: needs_delta_model()
+  // keys on it.
+  std::optional<int64_t> lowest;
+  for (const auto& e : entries_) {
+    if (e.sorting_rank && (!lowest || *e.sorting_rank < *lowest))
+      lowest = e.sorting_rank;
+  }
+  if (lowest && *lowest != 0) {
+    for (auto& e : entries_) {
+      if (e.sorting_rank) *e.sorting_rank -= *lowest;
     }
   }
 

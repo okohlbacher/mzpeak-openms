@@ -11,6 +11,7 @@ directory of this repository.
 
 #include "mzpeak/data/signals.h"
 #include "mzpeak/open.h"
+#include "mzpeak/spectra.h"
 #include "mzpeak/util/manager.h"
 
 /******************************************************************************/
@@ -84,4 +85,25 @@ BOOST_AUTO_TEST_CASE(can_read_mz_array)
 
   BOOST_TEST(index_field.has_value());
   BOOST_TEST(mz_column.has_value());
+}
+
+/******************************************************************************/
+// Writers since the reference implementation's "add index buffer format" list
+// the key and time columns in the array index with buffer_format `index` and a
+// null unit.  small.index.dir is the reference's small.unpacked.mzpeak at that
+// change; it must decode exactly as small.dir, written before it.
+BOOST_AUTO_TEST_CASE(index_buffer_entries_are_not_signal_arrays)
+{
+  using namespace MzPeak;
+
+  auto with = MzPeak::open("../test/files/small.index.dir").spectra();
+  auto without = MzPeak::open("../test/files/small.dir").spectra();
+  BOOST_REQUIRE_EQUAL(with.size(), without.size());
+  for (std::size_t i = 0; i < with.size(); ++i) {
+    auto a = with[i];
+    auto b = without[i];
+    BOOST_TEST(a.mz() == b.mz(), "m/z of spectrum " << i);
+    BOOST_TEST(a.intensity() == b.intensity(), "intensity of spectrum " << i);
+    BOOST_TEST((a.retention_time() == b.retention_time()), "RT of spectrum " << i);
+  }
 }

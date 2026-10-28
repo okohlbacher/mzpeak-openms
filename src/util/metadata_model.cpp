@@ -213,6 +213,9 @@ std::shared_ptr<arrow::Array> resolve_field_uncached(const Facet& facet,
       {"isolation_window_target_mz", "isolation_window_target"},
       // data_processing_ref became data_processing_id.
       {"data_processing_ref", "data_processing_id"},
+      // The m/z delta model became the coordinate spacing model (MS:1003821).
+      {"mz_delta_model", "polynomial_delta_coordinate_interpolation"},
+      {"mz_delta_model", "coordinate_spacing_model"},
   };
   for (const auto& [from, to] : kAliases) {
     if (plain == from) {

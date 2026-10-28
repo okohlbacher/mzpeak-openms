@@ -170,6 +170,14 @@ BOOST_AUTO_TEST_CASE(point_directory)
 }
 
 /******************************************************************************/
+// The same run from a writer that lists the index columns in the array index.
+BOOST_AUTO_TEST_CASE(point_directory_with_index_buffers)
+{
+  exercise_reader("../test/files/small.index.dir", 48u);
+  exercise_round_trip("../test/files/small.index.dir", 8u);
+}
+
+/******************************************************************************/
 // Chunked layout (delta / basic encoded chunks).
 BOOST_AUTO_TEST_CASE(chunked)
 {
