@@ -201,9 +201,9 @@ point_spectra_table(const std::vector<uint64_t>& spectrum_index,
 
 // The project's standard writer properties: ZSTD, statistics, page index,
 // and -- when @p entity_index_leaf names one -- a sorting column on it.
-std::shared_ptr<parquet::WriterProperties>
-standard_writer_properties(std::optional<int> entity_index_leaf,
-                           std::optional<int64_t> max_row_group_length = std::nullopt)
+std::shared_ptr<parquet::WriterProperties> standard_writer_properties(
+    std::optional<int> entity_index_leaf,
+    std::optional<int64_t> max_row_group_length = std::nullopt)
 {
   parquet::WriterProperties::Builder props_builder;
   props_builder.compression(arrow::Compression::ZSTD);
@@ -520,11 +520,10 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
   for (const auto& r : rows) {
     source_index.push_back(r.index);
     scan_index.push_back(0);
-    scan_start_time.push_back(
-        r.retention_time
-            // Seconds -> minutes, as for `time` above.
-            ? std::optional<double>(*r.retention_time / 60.0)
-            : std::nullopt);
+    scan_start_time.push_back(r.retention_time
+                                  // Seconds -> minutes, as for `time` above.
+                                  ? std::optional<double>(*r.retention_time / 60.0)
+                                  : std::nullopt);
   }
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
@@ -574,9 +573,9 @@ precursors_table(const std::vector<SpectrumMetaRow>& rows)
       arrow::field("precursor_index", arrow::uint64(), true),
       arrow::field("isolation_window", (*window)->type(), true),
   }));
-  return arrow::Table::Make(schema, {build_array<arrow::UInt64Builder>(source_index),
-                                     build_array<arrow::UInt64Builder>(precursor_index),
-                                     *window});
+  return arrow::Table::Make(
+      schema, {build_array<arrow::UInt64Builder>(source_index),
+               build_array<arrow::UInt64Builder>(precursor_index), *window});
 }
 
 /// Selected-ion facet: one row per (spectrum, precursor, ion), attached to its
@@ -607,12 +606,12 @@ selected_ions_table(const std::vector<SpectrumMetaRow>& rows)
       arrow::field("charge_state", arrow::int32(), true),
       arrow::field("peak_intensity", arrow::float32(), true),
   }));
-  return arrow::Table::Make(
-      schema, {build_array<arrow::UInt64Builder>(source_index),
-               build_array<arrow::UInt64Builder>(precursor_index),
-               build_optional_array<arrow::DoubleBuilder>(mz),
-               build_optional_array<arrow::Int32Builder>(charge),
-               build_optional_array<arrow::FloatBuilder>(intensity)});
+  return arrow::Table::Make(schema,
+                            {build_array<arrow::UInt64Builder>(source_index),
+                             build_array<arrow::UInt64Builder>(precursor_index),
+                             build_optional_array<arrow::DoubleBuilder>(mz),
+                             build_optional_array<arrow::Int32Builder>(charge),
+                             build_optional_array<arrow::FloatBuilder>(intensity)});
 }
 
 std::string table_bytes(const std::shared_ptr<arrow::Table>& table,
@@ -1005,9 +1004,9 @@ PointTableStream::PointTableStream(const std::string& path)
                                                std::numeric_limits<int64_t>::max()));
   auto arrow_props(
       parquet::ArrowWriterProperties::Builder().store_schema()->build());
-  auto writer_result(parquet::arrow::FileWriter::Open(
-      *schema, arrow::default_memory_pool(), impl_->sink, writer_props,
-      arrow_props));
+  auto writer_result(
+      parquet::arrow::FileWriter::Open(*schema, arrow::default_memory_pool(),
+                                       impl_->sink, writer_props, arrow_props));
   if (!writer_result.ok()) {
     throw ParquetError("open parquet writer: " + writer_result.status().ToString());
   }
@@ -1035,13 +1034,14 @@ void PointTableStream::write_row_group(const std::vector<uint64_t>& spectrum_ind
   // The file declares the index sorted; keep that true across groups.
   if (impl_->rows > 0 && spectrum_index.front() < impl_->last_index) {
     throw ParquetError("PointTableStream: spectrum index " +
-                       std::to_string(spectrum_index.front()) +
-                       " arrives after " + std::to_string(impl_->last_index) +
+                       std::to_string(spectrum_index.front()) + " arrives after " +
+                       std::to_string(impl_->last_index) +
                        "; groups must be appended in ascending index order");
   }
   for (std::size_t i = 1; i < spectrum_index.size(); ++i) {
     if (spectrum_index[i] < spectrum_index[i - 1]) {
-      throw ParquetError("PointTableStream: spectrum index not ascending within a group");
+      throw ParquetError(
+          "PointTableStream: spectrum index not ascending within a group");
     }
   }
   auto table(point_spectra_table(spectrum_index, mz, intensity));

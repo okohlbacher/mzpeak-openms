@@ -6,12 +6,13 @@ directory of this repository.
 
 */
 
+#include "mzpeak/util/numpress.h"
+
 #include <MSNumpress.hpp>
 
 #include "mzpeak/exception.h"
 #include "mzpeak/util/compat.h" // IWYU pragma: keep
 #include "mzpeak/util/decoders.h"
-#include "mzpeak/util/numpress.h"
 
 namespace MzPeak::Util::Numpress {
 

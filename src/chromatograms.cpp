@@ -72,10 +72,10 @@ Chromatogram Chromatograms::fetch_(uint64_t index) const
   // A plain copy_if rather than views::filter | ranges::to: ranges::to is a
   // C++23 LIBRARY feature Apple's clang 15 libc++ lacks.
   std::vector<Data::ArrayIndex::Dimension> dims;
-  std::ranges::copy_if(data_->array_index()->dimensions(), std::back_inserter(dims),
-                       [](auto& d) {
+  std::ranges::copy_if(
+      data_->array_index()->dimensions(), std::back_inserter(dims), [](auto& d) {
         return d.array_type == RelativeTimeOffset || d.array_type == Intensity;
-                       });
+      });
 
   std::unique_ptr<Util::Slice> slice = data_->select(dims, data_->index().eq(index));
   return Chromatogram(index, data_, dims, std::move(slice), md_map_);

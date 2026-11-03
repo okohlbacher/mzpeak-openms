@@ -6,17 +6,14 @@ top-level directory of this repository.
 
 */
 
-#include <atomic>
-#include <deque>
 #include "mzpeak/util/planner.h"
 
 #include <algorithm>
-
-#include "mzpeak/util/parquet.h"
-
 #include <arrow/array.h>
 #include <arrow/record_batch.h>
+#include <atomic>
 #include <bit>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <parquet/api/reader.h>
@@ -27,6 +24,7 @@ top-level directory of this repository.
 #include <ranges>
 
 #include "mzpeak/util/algorithm.h"
+#include "mzpeak/util/parquet.h"
 #include "mzpeak/util/types.h"
 
 namespace MzPeak::Util {
@@ -82,8 +80,8 @@ struct StatsIndex::Impl {
     // read with one atomic load and no lock.  The mutex still guards FILLING,
     // which keeps the class safe for the shared use its header promises even
     // though each Parquet object owns its own index today.
-    if (row_group < 0 || row_group >= metadata_->num_row_groups() ||
-        column < 0 || column >= columns_) {
+    if (row_group < 0 || row_group >= metadata_->num_row_groups() || column < 0 ||
+        column >= columns_) {
       return nullptr;
     }
     Slot& slot = slots_[static_cast<std::size_t>(row_group) *
@@ -135,7 +133,8 @@ struct StatsIndex::Impl {
   bool all_sorted_ascending(int32_t column)
   {
     std::lock_guard<std::mutex> guard(mutex_);
-    if (auto it = all_sorted_.find(column); it != all_sorted_.end()) return it->second;
+    if (auto it = all_sorted_.find(column); it != all_sorted_.end())
+      return it->second;
     bool all = metadata_->num_row_groups() > 0;
     for (int32_t g = 0; all && g < metadata_->num_row_groups(); ++g) {
       bool one = false;
@@ -719,7 +718,8 @@ const Planner::Plan& Planner::Impl::plan()
   bool ordered = false;
   if (auto equality = plan_.query.as_equality()) {
     if (equality->first.second->type().has_value()) {
-      ordered = stats_->all_sorted_ascending(equality->first.second->absolute_index());
+      ordered =
+          stats_->all_sorted_ascending(equality->first.second->absolute_index());
     }
   }
 
@@ -781,8 +781,8 @@ Planner::Planner(parquet::arrow::FileReader& reader,
                  const Query& query,
                  std::shared_ptr<StatsIndex> stats,
                  std::shared_ptr<parquet::PageIndexReader> page_index)
-    : impl_(std::make_unique<Impl>(*reader.parquet_reader(), query, std::move(stats),
-                                   std::move(page_index)))
+    : impl_(std::make_unique<Impl>(
+          *reader.parquet_reader(), query, std::move(stats), std::move(page_index)))
 {
 }
 

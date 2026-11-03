@@ -25,14 +25,13 @@ Spectrum::Spectrum()
 }
 
 /******************************************************************************/
-Spectrum::Spectrum(
-    uint64_t index,
-    std::shared_ptr<Data::Signals> data,
-    std::vector<Data::ArrayIndex::Dimension> dims,
-    std::shared_ptr<Metadata::Table> metadata,
-    std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
-    ImsCalibration ims,
-    std::shared_ptr<const SpectrumMetadata> md_own)
+Spectrum::Spectrum(uint64_t index,
+                   std::shared_ptr<Data::Signals> data,
+                   std::vector<Data::ArrayIndex::Dimension> dims,
+                   std::shared_ptr<Metadata::Table> metadata,
+                   std::shared_ptr<const Util::IndexMap<SpectrumMetadata>> md_map,
+                   ImsCalibration ims,
+                   std::shared_ptr<const SpectrumMetadata> md_own)
     : index_(index)
     , md_table_(std::move(metadata))
     , md_map_(std::move(md_map))

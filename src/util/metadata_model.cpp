@@ -9,15 +9,17 @@ directory of this repository.
 #include "mzpeak/util/metadata_model.h"
 
 #include <algorithm>
-#include <atomic>
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/array_primitive.h>
 #include <arrow/table.h>
+#include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <format>
 #include <future>
 #include <iomanip>
 #include <limits>
@@ -27,8 +29,6 @@ directory of this repository.
 #include <ranges>
 #include <span>
 #include <sstream>
-#include <cctype>
-#include <format>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
@@ -79,7 +79,10 @@ read_metadata_table(Parquet& metadata, std::span<const std::string_view> skip = 
     keep.reserve(static_cast<std::size_t>(leaves));
     for (int i = 0; i < leaves; ++i) {
       const parquet::schema::Node* root = schema->GetColumnRoot(i);
-      if (!root) { keep.push_back(i); continue; }
+      if (!root) {
+        keep.push_back(i);
+        continue;
+      }
       if (std::ranges::find(skip, std::string_view(root->name())) == skip.end())
         keep.push_back(i);
     }
@@ -137,9 +140,13 @@ struct Facet {
   };
   struct Eq {
     using is_transparent = void;
-    bool operator()(std::string_view a, std::string_view b) const noexcept { return a == b; }
+    bool operator()(std::string_view a, std::string_view b) const noexcept
+    {
+      return a == b;
+    }
   };
-  mutable std::unordered_map<std::string, std::shared_ptr<arrow::Array>, Hash, Eq> resolved;
+  mutable std::unordered_map<std::string, std::shared_ptr<arrow::Array>, Hash, Eq>
+      resolved;
 
   const arrow::StructArray* operator->() const { return array.get(); }
   const arrow::StructArray& operator*() const { return *array; }
@@ -172,7 +179,7 @@ std::optional<std::string> accession_of(std::string_view name)
 /// de-suffixed form, then the handful of genuine renames that transformation
 /// cannot reach.
 std::shared_ptr<arrow::Array> resolve_field_uncached(const Facet& facet,
-                                                    std::string_view name)
+                                                     std::string_view name)
 {
   const arrow::StructArray& s = *facet;
   if (auto f = s.GetFieldByName(std::string(name))) return f;
@@ -258,13 +265,13 @@ std::shared_ptr<arrow::Array> resolve_field_uncached(const Facet& facet,
 /// The result depends only on (facet.array, facet.file, name), all fixed for
 /// the life of a facet, so caching it cannot change what any caller sees.
 const std::shared_ptr<arrow::Array>& resolve_field(const Facet& facet,
-                                                  std::string_view name)
+                                                   std::string_view name)
 {
   if (auto it = facet.resolved.find(name); it != facet.resolved.end()) {
     return it->second;
   }
-  auto [it, _] = facet.resolved.emplace(std::string(name),
-                                        resolve_field_uncached(facet, name));
+  auto [it, _] =
+      facet.resolved.emplace(std::string(name), resolve_field_uncached(facet, name));
   return it->second;
 }
 
@@ -1228,8 +1235,7 @@ IndexMap<SpectrumMetadata> read_spectra_metadata(Parquet& metadata)
 }
 
 /******************************************************************************/
-IndexMap<SpectrumMetadata>
-read_spectra_metadata(const SpectraMetadataFiles& files)
+IndexMap<SpectrumMetadata> read_spectra_metadata(const SpectraMetadataFiles& files)
 {
   return read_spectra_metadata(files, MetadataDetail::Full);
 }
@@ -1280,7 +1286,7 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
   // deciding to EXPOSE a field is a separate call from deciding to stop paying
   // for one nobody reads.  Adding any of them means deleting it from this list.
   std::vector<std::string_view> skip_scan = {
-      "scan_index", "preset_scan_configuration", "filter_string",
+      "scan_index",         "preset_scan_configuration",   "filter_string",
       "ion_injection_time", "instrument_configuration_id", "spectrum_reference"};
   // Named once: adding one of the above to SpectrumMetadata means deleting it
   // from this list, and Lean's extras are appended rather than re-typed.
@@ -1331,10 +1337,10 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
                : nullptr;
   });
   auto selected_ions_read = std::async(std::launch::async, [&] {
-    return files.selected_ions ? (lean ? read_metadata_table(*files.selected_ions,
-                                                             skip_ions)
-                                       : read_metadata_table(*files.selected_ions))
-                               : nullptr;
+    return files.selected_ions
+               ? (lean ? read_metadata_table(*files.selected_ions, skip_ions)
+                       : read_metadata_table(*files.selected_ions))
+               : nullptr;
   });
   auto table = lean ? read_metadata_table(*files.primary, skip_primary)
                     : read_metadata_table(*files.primary);
@@ -1483,170 +1489,174 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
       // below: that check is a CONFORMANCE assertion about the file, not
       // something any decode depends on, so a caller that opted out of
       // auxiliary arrays is not owed it.  Full still performs it.
-      if constexpr (full_record) if (detail == MetadataDetail::Full) {
-        // Read number_of_auxiliary_arrays (uint32) for the count-consistency
-        // assert (T-03-02 mitigation).  Absent/null counts as 0.
-        uint64_t declared_count = 0;
-        if (auto cnt =
-                opt_int<uint64_t>(spectrum, "number_of_auxiliary_arrays", r)) {
-          declared_count = *cnt;
-        }
+      if constexpr (full_record)
+        if (detail == MetadataDetail::Full) {
+          // Read number_of_auxiliary_arrays (uint32) for the count-consistency
+          // assert (T-03-02 mitigation).  Absent/null counts as 0.
+          uint64_t declared_count = 0;
+          if (auto cnt =
+                  opt_int<uint64_t>(spectrum, "number_of_auxiliary_arrays", r)) {
+            declared_count = *cnt;
+          }
 
-        auto aux_slice = list_slice(resolve_field(spectrum, "auxiliary_arrays"), r);
-        if (aux_slice) {
-          {
-            auto aux_items =
-                std::dynamic_pointer_cast<arrow::StructArray>(aux_slice->values);
-            if (aux_items) {
-              int64_t begin = aux_slice->begin;
-              int64_t length = aux_slice->length;
-              m.auxiliary_arrays.reserve(static_cast<std::size_t>(length));
+          auto aux_slice =
+              list_slice(resolve_field(spectrum, "auxiliary_arrays"), r);
+          if (aux_slice) {
+            {
+              auto aux_items =
+                  std::dynamic_pointer_cast<arrow::StructArray>(aux_slice->values);
+              if (aux_items) {
+                int64_t begin = aux_slice->begin;
+                int64_t length = aux_slice->length;
+                m.auxiliary_arrays.reserve(static_cast<std::size_t>(length));
 
-              for (int64_t k = 0; k < length; ++k) {
-                AuxiliaryArray aa;
+                for (int64_t k = 0; k < length; ++k) {
+                  AuxiliaryArray aa;
 
-                // name: lone CvParam struct — reuse extract_one_cv_param
-                // (plan-01 helper; do NOT re-inline the value-union decode).
-                auto name_field = aux_items->GetFieldByName("name");
-                if (name_field && !name_field->IsNull(begin + k)) {
-                  auto name_struct =
-                      std::dynamic_pointer_cast<arrow::StructArray>(name_field);
-                  if (name_struct) {
-                    aa.name = extract_one_cv_param(Facet{name_struct, spectrum.file},
-                                                   begin + k);
+                  // name: lone CvParam struct — reuse extract_one_cv_param
+                  // (plan-01 helper; do NOT re-inline the value-union decode).
+                  auto name_field = aux_items->GetFieldByName("name");
+                  if (name_field && !name_field->IsNull(begin + k)) {
+                    auto name_struct =
+                        std::dynamic_pointer_cast<arrow::StructArray>(name_field);
+                    if (name_struct) {
+                      aa.name = extract_one_cv_param(
+                          Facet{name_struct, spectrum.file}, begin + k);
+                    }
                   }
-                }
 
-                // Scalar string fields.
-                const Facet aux{aux_items, spectrum.file};
-                aa.data_type = get_string(aux, "data_type", begin + k);
-                aa.compression = get_string(aux, "compression", begin + k);
-                aa.unit = get_string(aux, "unit", begin + k);
-                aa.data_processing_ref =
-                    get_string(aux, "data_processing_ref", begin + k);
+                  // Scalar string fields.
+                  const Facet aux{aux_items, spectrum.file};
+                  aa.data_type = get_string(aux, "data_type", begin + k);
+                  aa.compression = get_string(aux, "compression", begin + k);
+                  aa.unit = get_string(aux, "unit", begin + k);
+                  aa.data_processing_ref =
+                      get_string(aux, "data_processing_ref", begin + k);
 
-                // parameters: large_list<CvParam>.
-                aa.parameters =
-                    read_cv_params_from_list(aux, "parameters", begin + k);
+                  // parameters: large_list<CvParam>.
+                  aa.parameters =
+                      read_cv_params_from_list(aux, "parameters", begin + k);
 
-                // ---------------------------------------------------------
-                // PART B — RAW-BYTE VALUE DECODE (FIXTURE-GATED FOLLOW-UP).
-                //
-                // FIXTURE-GATED FOLLOW-UP — no bundled fixture carries aux
-                // bytes (number_of_auxiliary_arrays==0 everywhere), so this
-                // VALUE decode is UNVERIFIED against ground truth.  It is
-                // byte-length-guarded and flagged via values_decoded; value-
-                // level correctness awaits a fixture with populated aux data
-                // (honors CONTEXT.md "do not ship unvalidated decode paths"
-                // — this path is gated, not asserted as validated).
-                //
-                // Treat data_type as an opaque lowercase Arrow dtype string
-                // (Pitfall 5) — do NOT route through any PSI::DataType enum.
-                // ---------------------------------------------------------
-                auto data_slice = list_slice(resolve_field(aux, "data"), begin + k);
-                if (data_slice) {
-                  {
-                    auto data_values = std::dynamic_pointer_cast<arrow::UInt8Array>(
-                        data_slice->values);
-                    if (data_values) {
-                      int64_t d_begin = data_slice->begin;
-                      int64_t d_length = data_slice->length;
+                  // ---------------------------------------------------------
+                  // PART B — RAW-BYTE VALUE DECODE (FIXTURE-GATED FOLLOW-UP).
+                  //
+                  // FIXTURE-GATED FOLLOW-UP — no bundled fixture carries aux
+                  // bytes (number_of_auxiliary_arrays==0 everywhere), so this
+                  // VALUE decode is UNVERIFIED against ground truth.  It is
+                  // byte-length-guarded and flagged via values_decoded; value-
+                  // level correctness awaits a fixture with populated aux data
+                  // (honors CONTEXT.md "do not ship unvalidated decode paths"
+                  // — this path is gated, not asserted as validated).
+                  //
+                  // Treat data_type as an opaque lowercase Arrow dtype string
+                  // (Pitfall 5) — do NOT route through any PSI::DataType enum.
+                  // ---------------------------------------------------------
+                  auto data_slice =
+                      list_slice(resolve_field(aux, "data"), begin + k);
+                  if (data_slice) {
+                    {
+                      auto data_values =
+                          std::dynamic_pointer_cast<arrow::UInt8Array>(
+                              data_slice->values);
+                      if (data_values) {
+                        int64_t d_begin = data_slice->begin;
+                        int64_t d_length = data_slice->length;
 
-                      if (d_length == 0) {
-                        // Legitimately empty decoded array.
-                        aa.values.clear();
-                        aa.values_decoded = true;
-                      } else {
-                        // Determine element size from opaque data_type string.
-                        std::size_t element_size = 0;
-                        if (aa.data_type == "float32" || aa.data_type == "int32") {
-                          element_size = 4;
-                        } else if (aa.data_type == "float64") {
-                          element_size = 8;
-                        }
-                        // else: unknown data_type — decode deferred.
-
-                        if (element_size == 0) {
-                          std::fprintf(
-                              stderr,
-                              "AuxiliaryArray: unknown data_type '%s' at spectrum "
-                              "%zu; values_decoded=false\n",
-                              aa.data_type.c_str(), static_cast<std::size_t>(r));
-                          aa.values_decoded = false;
+                        if (d_length == 0) {
+                          // Legitimately empty decoded array.
+                          aa.values.clear();
+                          aa.values_decoded = true;
                         } else {
-                          // BYTE-LENGTH GUARD (T-03-01 mitigation): require
-                          // data.size() % element_size == 0 before any
-                          // reinterpret; a truncated/misaligned buffer MUST
-                          // NOT be reinterpreted.
-                          auto byte_count = static_cast<std::size_t>(d_length);
-                          if (byte_count % element_size != 0) {
-                            // Misaligned buffer — leave values empty, undecoded.
+                          // Determine element size from opaque data_type string.
+                          std::size_t element_size = 0;
+                          if (aa.data_type == "float32" || aa.data_type == "int32") {
+                            element_size = 4;
+                          } else if (aa.data_type == "float64") {
+                            element_size = 8;
+                          }
+                          // else: unknown data_type — decode deferred.
+
+                          if (element_size == 0) {
+                            std::fprintf(
+                                stderr,
+                                "AuxiliaryArray: unknown data_type '%s' at spectrum "
+                                "%zu; values_decoded=false\n",
+                                aa.data_type.c_str(), static_cast<std::size_t>(r));
                             aa.values_decoded = false;
                           } else {
-                            std::size_t n_elems = byte_count / element_size;
-                            aa.values.reserve(n_elems);
-                            for (std::size_t ei = 0; ei < n_elems; ++ei) {
-                              if (aa.data_type == "float32") {
-                                float fv = 0.0f;
-                                std::uint8_t buf[4];
-                                for (std::size_t bi = 0; bi < 4; ++bi) {
-                                  buf[bi] =
-                                      static_cast<std::uint8_t>(data_values->Value(
-                                          d_begin +
-                                          static_cast<int64_t>(ei * 4 + bi)));
+                            // BYTE-LENGTH GUARD (T-03-01 mitigation): require
+                            // data.size() % element_size == 0 before any
+                            // reinterpret; a truncated/misaligned buffer MUST
+                            // NOT be reinterpreted.
+                            auto byte_count = static_cast<std::size_t>(d_length);
+                            if (byte_count % element_size != 0) {
+                              // Misaligned buffer — leave values empty, undecoded.
+                              aa.values_decoded = false;
+                            } else {
+                              std::size_t n_elems = byte_count / element_size;
+                              aa.values.reserve(n_elems);
+                              for (std::size_t ei = 0; ei < n_elems; ++ei) {
+                                if (aa.data_type == "float32") {
+                                  float fv = 0.0f;
+                                  std::uint8_t buf[4];
+                                  for (std::size_t bi = 0; bi < 4; ++bi) {
+                                    buf[bi] =
+                                        static_cast<std::uint8_t>(data_values->Value(
+                                            d_begin +
+                                            static_cast<int64_t>(ei * 4 + bi)));
+                                  }
+                                  std::memcpy(&fv, buf, 4);
+                                  aa.values.push_back(fv);
+                                } else if (aa.data_type == "int32") {
+                                  std::int32_t iv = 0;
+                                  std::uint8_t buf[4];
+                                  for (std::size_t bi = 0; bi < 4; ++bi) {
+                                    buf[bi] =
+                                        static_cast<std::uint8_t>(data_values->Value(
+                                            d_begin +
+                                            static_cast<int64_t>(ei * 4 + bi)));
+                                  }
+                                  std::memcpy(&iv, buf, 4);
+                                  aa.values.push_back(static_cast<float>(iv));
+                                } else if (aa.data_type == "float64") {
+                                  double dv = 0.0;
+                                  std::uint8_t buf[8];
+                                  for (std::size_t bi = 0; bi < 8; ++bi) {
+                                    buf[bi] =
+                                        static_cast<std::uint8_t>(data_values->Value(
+                                            d_begin +
+                                            static_cast<int64_t>(ei * 8 + bi)));
+                                  }
+                                  std::memcpy(&dv, buf, 8);
+                                  aa.values.push_back(static_cast<float>(dv));
                                 }
-                                std::memcpy(&fv, buf, 4);
-                                aa.values.push_back(fv);
-                              } else if (aa.data_type == "int32") {
-                                std::int32_t iv = 0;
-                                std::uint8_t buf[4];
-                                for (std::size_t bi = 0; bi < 4; ++bi) {
-                                  buf[bi] =
-                                      static_cast<std::uint8_t>(data_values->Value(
-                                          d_begin +
-                                          static_cast<int64_t>(ei * 4 + bi)));
-                                }
-                                std::memcpy(&iv, buf, 4);
-                                aa.values.push_back(static_cast<float>(iv));
-                              } else if (aa.data_type == "float64") {
-                                double dv = 0.0;
-                                std::uint8_t buf[8];
-                                for (std::size_t bi = 0; bi < 8; ++bi) {
-                                  buf[bi] =
-                                      static_cast<std::uint8_t>(data_values->Value(
-                                          d_begin +
-                                          static_cast<int64_t>(ei * 8 + bi)));
-                                }
-                                std::memcpy(&dv, buf, 8);
-                                aa.values.push_back(static_cast<float>(dv));
                               }
+                              aa.values_decoded = true;
                             }
-                            aa.values_decoded = true;
                           }
                         }
                       }
                     }
                   }
-                }
-                // End Part B.
+                  // End Part B.
 
-                m.auxiliary_arrays.push_back(std::move(aa));
+                  m.auxiliary_arrays.push_back(std::move(aa));
+                }
               }
             }
           }
-        }
 
-        // COUNT-CONSISTENCY ASSERT (T-03-02 / Codex review): the file's
-        // self-declared number_of_auxiliary_arrays must equal the number of
-        // items materialised from the list.  A mismatch is a corruption signal.
-        if (declared_count != m.auxiliary_arrays.size()) {
-          throw ParquetError(
-              "auxiliary_arrays count mismatch: number_of_auxiliary_arrays=" +
-              std::to_string(declared_count) + " but list has " +
-              std::to_string(m.auxiliary_arrays.size()) + " items (spectrum index " +
-              std::to_string(m.index) + ")");
+          // COUNT-CONSISTENCY ASSERT (T-03-02 / Codex review): the file's
+          // self-declared number_of_auxiliary_arrays must equal the number of
+          // items materialised from the list.  A mismatch is a corruption signal.
+          if (declared_count != m.auxiliary_arrays.size()) {
+            throw ParquetError(
+                "auxiliary_arrays count mismatch: number_of_auxiliary_arrays=" +
+                std::to_string(declared_count) + " but list has " +
+                std::to_string(m.auxiliary_arrays.size()) +
+                " items (spectrum index " + std::to_string(m.index) + ")");
+          }
         }
-      }
     }
   }
   out.sort();
@@ -1716,10 +1726,11 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
           if (representative) {
             seen.emplace(sst);
 
-            if constexpr (full_record) if (detail == MetadataDetail::Full) {
-              it->second.scan_parameters =
-                  read_cv_params_from_list(scan, "parameters", r);
-            }
+            if constexpr (full_record)
+              if (detail == MetadataDetail::Full) {
+                it->second.scan_parameters =
+                    read_cv_params_from_list(scan, "parameters", r);
+              }
 
             // RT (seconds): scan.MS_1000016_scan_start_time is the authoritative,
             // unit-annotated field (UO_0000031 = minutes — normative MUST, see
@@ -1753,30 +1764,31 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
           auto sw_slice = detail == MetadataDetail::Full
                               ? list_slice(resolve_field(scan, "scan_windows"), r)
                               : std::nullopt;
-          if constexpr (full_record) if (sw_slice) {
-            {
-              auto sw_items =
-                  std::dynamic_pointer_cast<arrow::StructArray>(sw_slice->values);
-              if (sw_items) {
-                int64_t begin = sw_slice->begin;
-                int64_t length = sw_slice->length;
-                it->second.scan_windows.reserve(static_cast<std::size_t>(length));
-                const Facet window{sw_items, scan.file};
-                for (int64_t k = 0; k < length; ++k) {
-                  ScanWindow sw;
-                  sw.lower_limit = opt_float(
-                      window, "MS_1000501_scan_window_lower_limit_unit_MS_1000040",
-                      begin + k);
-                  sw.upper_limit = opt_float(
-                      window, "MS_1000500_scan_window_upper_limit_unit_MS_1000040",
-                      begin + k);
-                  sw.parameters =
-                      read_cv_params_from_list(window, "parameters", begin + k);
-                  it->second.scan_windows.push_back(std::move(sw));
+          if constexpr (full_record)
+            if (sw_slice) {
+              {
+                auto sw_items =
+                    std::dynamic_pointer_cast<arrow::StructArray>(sw_slice->values);
+                if (sw_items) {
+                  int64_t begin = sw_slice->begin;
+                  int64_t length = sw_slice->length;
+                  it->second.scan_windows.reserve(static_cast<std::size_t>(length));
+                  const Facet window{sw_items, scan.file};
+                  for (int64_t k = 0; k < length; ++k) {
+                    ScanWindow sw;
+                    sw.lower_limit = opt_float(
+                        window, "MS_1000501_scan_window_lower_limit_unit_MS_1000040",
+                        begin + k);
+                    sw.upper_limit = opt_float(
+                        window, "MS_1000500_scan_window_upper_limit_unit_MS_1000040",
+                        begin + k);
+                    sw.parameters =
+                        read_cv_params_from_list(window, "parameters", begin + k);
+                    it->second.scan_windows.push_back(std::move(sw));
+                  }
                 }
               }
             }
-          }
         }
       }
     }
@@ -1806,22 +1818,27 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
   // -------------------------------------------------------------------
   std::atomic<bool> fits{true};
   {
-    const auto precursor_facets = facets_for("precursor", precursors_table, files.precursors);
-    const auto ion_facets = facets_for("selected_ion", selected_ions_table, files.selected_ions);
+    const auto precursor_facets =
+        facets_for("precursor", precursors_table, files.precursors);
+    const auto ion_facets =
+        facets_for("selected_ion", selected_ions_table, files.selected_ions);
     const auto n = static_cast<std::size_t>(std::ranges::distance(out));
     // n >= 4 whatever the threshold: bound() reads the entry at t*n/4, which
     // is end() for n == 0, and four ranges of n >= 4 each hold a spectrum.
     const std::size_t parts = (n >= kParallelAttachMinSpectra && n >= 4) ? 4 : 1;
     // First index of range t; the last range runs to the end of uint64.
     const auto bound = [&](std::size_t t) -> uint64_t {
-      return t == 0 || t == parts ? 0 : (out.begin() + static_cast<std::ptrdiff_t>(t * n / parts))->first;
+      return t == 0 || t == parts
+                 ? 0
+                 : (out.begin() + static_cast<std::ptrdiff_t>(t * n / parts))->first;
     };
     const auto attach = [&](std::size_t t) {
       const std::vector<Facet> precursors = precursor_facets, ions = ion_facets;
       if constexpr (full_record) {
         attach_precursors(out, precursors, detail, bound(t), bound(t + 1) - 1);
         attach_selected_ions(out, ions, detail, bound(t), bound(t + 1) - 1);
-      } else if (!attach_minimal(out, precursors, ions, bound(t), bound(t + 1) - 1)) {
+      } else if (!attach_minimal(out, precursors, ions, bound(t),
+                                 bound(t + 1) - 1)) {
         fits = false;
       }
     };
@@ -1829,7 +1846,8 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
     for (std::size_t t = 1; t < parts; ++t)
       others.push_back(std::async(std::launch::async, attach, t));
     attach(0);
-    for (auto& f : others) f.get();
+    for (auto& f : others)
+      f.get();
   }
   if (!fits) return std::nullopt;
   scans_done.get();
@@ -1840,8 +1858,8 @@ read_spectra_metadata_(const SpectraMetadataFiles& files, MetadataDetail detail)
 } // namespace
 
 /******************************************************************************/
-IndexMap<SpectrumMetadata>
-read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
+IndexMap<SpectrumMetadata> read_spectra_metadata(const SpectraMetadataFiles& files,
+                                                 MetadataDetail detail)
 {
   return *read_spectra_metadata_<SpectrumMetadata>(files, detail);
 }
@@ -1850,7 +1868,8 @@ read_spectra_metadata(const SpectraMetadataFiles& files, MetadataDetail detail)
 std::optional<IndexMap<MinimalSpectrumMetadata>>
 read_minimal_spectra_metadata(const SpectraMetadataFiles& files)
 {
-  return read_spectra_metadata_<MinimalSpectrumMetadata>(files, MetadataDetail::Minimal);
+  return read_spectra_metadata_<MinimalSpectrumMetadata>(files,
+                                                         MetadataDetail::Minimal);
 }
 
 /******************************************************************************/

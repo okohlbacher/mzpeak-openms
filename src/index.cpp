@@ -18,8 +18,8 @@ directory of this repository.
 #include "mzpeak/io/archive.h"
 #include "mzpeak/metadata/table.h"
 #include "mzpeak/util/manager.h"
-#include "mzpeak/util/sha512.h"
 #include "mzpeak/util/metadata_model.h"
+#include "mzpeak/util/sha512.h"
 
 namespace MzPeak {
 
