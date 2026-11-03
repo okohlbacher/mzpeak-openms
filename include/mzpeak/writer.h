@@ -37,15 +37,28 @@ struct SelectedIonData {
  * (MS:1000827-9 are float32 columns in every archive this library has seen);
  * a double here would promise precision the file cannot keep.
  *
- * Activation parameters and a precursor id are not carried yet -- nothing
- * this writer serves needs them, and an empty list is honest where an
- * invented one is not.
+ * The activation is written as the reference writer lays it out: the
+ * `activation` struct of the precursor facet, with `dissociation_method` (a
+ * term-marker column holding the CURIE of a child of MS:1000044),
+ * `collision_energy` (MS:1000045, electronvolt) and a `parameters` list for
+ * every other term.  A precursor id is not carried yet.
  */
 struct PrecursorData {
   std::optional<float> isolation_target_mz;
   std::optional<float> isolation_lower_offset;
   std::optional<float> isolation_upper_offset;
   std::vector<SelectedIonData> selected_ions;
+
+  /// The dissociation method, as a CURIE ("MS:1000422" beam-type collision-induced
+  /// dissociation).  A second method (EThcD, say) goes in activation_parameters.
+  std::optional<std::string> dissociation_method;
+  /// MS:1000045 collision energy, in electronvolt.
+  std::optional<float> collision_energy;
+  /// Every other activation term (MS:1000509 activation energy, a second
+  /// dissociation method, ...).  A value that reads as an integer or a number is
+  /// stored in the `integer` or `float` arm of the parameter's value, any other
+  /// in the `string` arm.
+  std::vector<CvParam> activation_parameters;
 };
 
 /**

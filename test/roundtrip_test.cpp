@@ -419,3 +419,61 @@ BOOST_AUTO_TEST_CASE(run_without_points_reports_its_spectra)
   BOOST_TEST_REQUIRE(spectra.size() == 3u);
   BOOST_TEST(spectra[2].mz().empty());
 }
+
+/******************************************************************************/
+// Activation, in the reference writer's layout: the dissociation method and the
+// collision energy as columns of their own, every other term in `parameters`.
+// Each term comes back exactly once, also from a reference archive.
+BOOST_AUTO_TEST_CASE(activation_round_trip)
+{
+  using namespace MzPeak;
+  SpectrumData ms2;
+  ms2.mz = {150.0};
+  ms2.intensity = {3.0f};
+  ms2.ms_level = 2;
+  PrecursorData p;
+  p.isolation_target_mz = 500.25f;
+  p.dissociation_method = "MS:1000422";
+  p.collision_energy = 27.0f;
+  p.activation_parameters = {
+      {.accession = "MS:1000598", .name = "electron transfer dissociation"},
+      {.accession = "MS:1000509",
+       .name = "activation energy",
+       .unit = "UO:0000266",
+       .value = "30.5"},
+      {.accession = "MS:1000133",
+       .name = "collision-induced dissociation",
+       .value = "7"},
+      {.name = "a user term", .value = "some text"}};
+  ms2.precursors.push_back(p);
+
+  const auto count = [](const std::vector<CvParam>& ps,
+                        const std::string& accession) {
+    return std::ranges::count_if(
+        ps, [&](const CvParam& c) { return c.accession == accession; });
+  };
+  const auto value = [](const std::vector<CvParam>& ps, const std::string& key) {
+    for (const CvParam& c : ps) {
+      if (c.accession == key || c.name == key) return c.value;
+    }
+    return std::optional<std::string>();
+  };
+
+  TempDir dir;
+  write_spectra_directory(dir.path, std::vector<SpectrumData>{ms2});
+  Spectra spectra = open(dir.path.string()).spectra();
+  BOOST_TEST_REQUIRE(spectra[0].metadata().precursors.size() == 1u);
+  const auto& act = spectra[0].metadata().precursors[0].activation_parameters;
+  BOOST_TEST(count(act, "MS:1000422") == 1);
+  BOOST_TEST(count(act, "MS:1000598") == 1);
+  BOOST_TEST((value(act, "MS:1000045") == std::optional<std::string>("27")));
+  BOOST_TEST((value(act, "MS:1000509") == std::optional<std::string>("30.5")));
+  BOOST_TEST((value(act, "MS:1000133") == std::optional<std::string>("7")));
+  BOOST_TEST((value(act, "a user term") == std::optional<std::string>("some text")));
+
+  // the reference writer's small.mzpeak: CID at 35 eV, each reported once
+  Spectra ref = open("../test/files/small.index.dir").spectra();
+  const auto& ref_act = ref[2].metadata().precursors.at(0).activation_parameters;
+  BOOST_TEST(count(ref_act, "MS:1000133") == 1);
+  BOOST_TEST((value(ref_act, "MS:1000045") == std::optional<std::string>("35")));
+}

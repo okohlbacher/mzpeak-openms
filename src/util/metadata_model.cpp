@@ -779,6 +779,9 @@ void append_activation_columns(const Facet& facet,
     const std::string_view leaf(
         std::string_view(column.path).substr(kPrefix.size()));
     if (leaf.empty() || leaf == "parameters") continue; // already read as a list
+    // A term marker (`dissociation_method` in the reference writer's index) is
+    // reported by append_term_markers(); here it was reported a second time.
+    if (column.term_marker) continue;
 
     auto field = facet->GetFieldByName(std::string(leaf));
     if (!field || row >= field->length() || field->IsNull(row)) continue;

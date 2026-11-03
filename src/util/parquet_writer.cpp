@@ -11,6 +11,7 @@ directory of this repository.
 #include <algorithm>
 #include <arrow/array/array_nested.h>
 #include <arrow/array/builder_binary.h>
+#include <arrow/array/builder_nested.h>
 #include <arrow/array/builder_primitive.h>
 #include <arrow/buffer.h>
 #include <arrow/io/file.h>
@@ -19,6 +20,7 @@ directory of this repository.
 #include <arrow/table.h>
 #include <arrow/type.h>
 #include <arrow/util/key_value_metadata.h>
+#include <charconv>
 #include <limits>
 #include <memory>
 #include <parquet/arrow/writer.h>
@@ -550,6 +552,72 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
        build_optional_string_array<arrow::StringBuilder>(ion_mobility_type)});
 }
 
+/******************************************************************************/
+// A `parameters` column: one list of CV parameters per row, laid out as the
+// reference writer lays it out (list<struct<value: struct<integer, float,
+// string, boolean>, accession, name, unit>>).  A value that reads in full as an
+// integer takes the `integer` arm, one that reads as a number the `float` arm,
+// any other the `string` arm; a parameter without a value has a null `value`.
+std::shared_ptr<arrow::Array>
+cv_param_lists(const std::vector<std::vector<CvParam>>& rows)
+{
+  const auto value_type =
+      arrow::struct_({arrow::field("integer", arrow::int64()),
+                      arrow::field("float", arrow::float64()),
+                      arrow::field("string", arrow::utf8()),
+                      arrow::field("boolean", arrow::boolean())});
+  const auto item_type = arrow::struct_(
+      {arrow::field("value", value_type), arrow::field("accession", arrow::utf8()),
+       arrow::field("name", arrow::utf8()), arrow::field("unit", arrow::utf8())});
+  auto made = arrow::MakeBuilder(arrow::list(item_type));
+  check(made.status(), "make parameters builder");
+  auto& list = static_cast<arrow::ListBuilder&>(**made);
+  auto& item = static_cast<arrow::StructBuilder&>(*list.value_builder());
+  auto& value = static_cast<arrow::StructBuilder&>(*item.field_builder(0));
+  auto& integer = static_cast<arrow::Int64Builder&>(*value.field_builder(0));
+  auto& real = static_cast<arrow::DoubleBuilder&>(*value.field_builder(1));
+  auto& text = static_cast<arrow::StringBuilder&>(*value.field_builder(2));
+  auto& boolean = static_cast<arrow::BooleanBuilder&>(*value.field_builder(3));
+
+  const auto put = [](arrow::ArrayBuilder& b, const std::optional<std::string>& s) {
+    auto& strings = static_cast<arrow::StringBuilder&>(b);
+    check(s ? strings.Append(*s) : strings.AppendNull(), "append parameter field");
+  };
+  for (const auto& params : rows) {
+    check(list.Append(), "append parameter list");
+    for (const CvParam& p : params) {
+      check(item.Append(), "append parameter");
+      check(value.Append(p.value.has_value()), "append parameter value");
+      std::optional<int64_t> as_integer;
+      std::optional<double> as_real;
+      if (p.value) {
+        const char* first = p.value->data();
+        const char* last = first + p.value->size();
+        int64_t i = 0;
+        double d = 0.0;
+        if (const auto r = std::from_chars(first, last, i);
+            r.ec == std::errc() && r.ptr == last && first != last) {
+          as_integer = i;
+        } else if (const auto r2 = std::from_chars(first, last, d);
+                   r2.ec == std::errc() && r2.ptr == last && first != last) {
+          as_real = d;
+        }
+      }
+      check(as_integer ? integer.Append(*as_integer) : integer.AppendNull(),
+            "append integer");
+      check(as_real ? real.Append(*as_real) : real.AppendNull(), "append float");
+      put(text, p.value && !as_integer && !as_real ? p.value : std::nullopt);
+      check(boolean.AppendNull(), "append boolean");
+      put(*item.field_builder(1), p.accession);
+      put(*item.field_builder(2), p.name);
+      put(*item.field_builder(3), p.unit);
+    }
+  }
+  std::shared_ptr<arrow::Array> array;
+  check(list.Finish(&array), "finish parameters");
+  return array;
+}
+
 /// Precursor facet: one row per (spectrum, precursor).  Column names are the
 /// ones the reference writer uses -- the reader resolves
 /// MS_1000827_isolation_window_target_mz to `isolation_window_target` through
@@ -562,7 +630,9 @@ std::shared_ptr<arrow::Table>
 precursors_table(const std::vector<SpectrumMetaRow>& rows)
 {
   std::vector<uint64_t> source_index, precursor_index;
-  std::vector<std::optional<float>> target, lower, upper;
+  std::vector<std::optional<float>> target, lower, upper, energy;
+  std::vector<std::optional<std::string>> method;
+  std::vector<std::vector<CvParam>> activation_parameters;
   for (const auto& r : rows) {
     for (std::size_t k = 0; k < r.precursors.size(); ++k) {
       const PrecursorData& p = r.precursors[k];
@@ -571,6 +641,9 @@ precursors_table(const std::vector<SpectrumMetaRow>& rows)
       target.push_back(p.isolation_target_mz);
       lower.push_back(p.isolation_lower_offset);
       upper.push_back(p.isolation_upper_offset);
+      method.push_back(p.dissociation_method);
+      energy.push_back(p.collision_energy);
+      activation_parameters.push_back(p.activation_parameters);
     }
   }
 
@@ -582,14 +655,24 @@ precursors_table(const std::vector<SpectrumMetaRow>& rows)
        "isolation_window_upper_offset"}));
   check(window.status(), "build isolation_window struct");
 
+  // The activation as the reference writer lays it out (see PrecursorData).
+  auto activation(arrow::StructArray::Make(
+      {build_optional_string_array<arrow::StringBuilder>(method),
+       build_optional_array<arrow::FloatBuilder>(energy),
+       cv_param_lists(activation_parameters)},
+      {"dissociation_method", "collision_energy", "parameters"}));
+  check(activation.status(), "build activation struct");
+
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("precursor_index", arrow::uint64(), true),
       arrow::field("isolation_window", (*window)->type(), true),
+      arrow::field("activation", (*activation)->type(), true),
   }));
-  return arrow::Table::Make(
-      schema, {build_array<arrow::UInt64Builder>(source_index),
-               build_array<arrow::UInt64Builder>(precursor_index), *window});
+  return arrow::Table::Make(schema,
+                            {build_array<arrow::UInt64Builder>(source_index),
+                             build_array<arrow::UInt64Builder>(precursor_index),
+                             *window, *activation});
 }
 
 /// Selected-ion facet: one row per (spectrum, precursor, ion), attached to its

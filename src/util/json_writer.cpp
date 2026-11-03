@@ -208,6 +208,7 @@ std::string index_json(const std::vector<IndexFileEntry>& files,
       } else {
         e["unit"] = m.unit;
       }
+      if (m.term_marker) e["term_marker"] = true;
       mapping.push_back(std::move(e));
     }
     o["column_mapping"] = std::move(mapping);

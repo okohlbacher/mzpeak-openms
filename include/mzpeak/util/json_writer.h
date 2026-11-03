@@ -59,6 +59,8 @@ struct IndexColumnMapping {
   std::string path;
   std::string accession;
   std::string unit; // empty => null
+  /// The column holds the CURIE of a child of `accession` (or flags its presence).
+  bool term_marker = false;
 };
 
 struct IndexFileEntry {
