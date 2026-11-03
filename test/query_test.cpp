@@ -40,8 +40,7 @@ BOOST_AUTO_TEST_CASE(valid_query_logic)
     return Util::Query::Result<Util::Query::value_t>(data[index]);
   };
 
-  auto expect =
-      [data](std::move_only_function<bool(int32_t)>&& f) -> std::vector<bool> {
+  auto expect = [data](Util::function_ref<bool(int32_t)> f) -> std::vector<bool> {
     std::vector<bool> res(data.size(), false);
 
     for (std::size_t i : std::views::iota(0ul, data.size())) {

@@ -587,6 +587,14 @@ void Decoder<T>::coalesced_point(const ArrayIndex::Dimension& dim,
 
   builder_for<V> builder;
 
+  // Every chunk must hold the declared type: the casts below would read another
+  // width (as in Decoders::Scalar::decode).
+  for (const auto& column : columns) {
+    for (const auto& chunk : *column) {
+      Util::Decoders::check_array_type<Util::enum_type_v<V>>(*chunk);
+    }
+  }
+
   const std::size_t n_chunks = columns.front()->size();
   for (std::size_t c = 0; c < n_chunks; ++c) {
     auto first = std::static_pointer_cast<array_type>((*columns.front())[c]);

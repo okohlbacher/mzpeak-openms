@@ -97,7 +97,8 @@ MzPeak::SpectrumData to_spectrum_data(const MzPeak::Spectrum& s)
     pd.isolation_lower_offset = p.isolation_window.lower_offset;
     pd.isolation_upper_offset = p.isolation_window.upper_offset;
     for (const auto& ion : p.selected_ions)
-      pd.selected_ions.push_back({ion.selected_ion_mz, ion.charge_state, ion.intensity});
+      pd.selected_ions.push_back(
+          {ion.selected_ion_mz, ion.charge_state, ion.intensity});
     sd.precursors.push_back(std::move(pd));
   }
   return sd;
@@ -211,11 +212,13 @@ BOOST_AUTO_TEST_CASE(reader_writer_reader_preserves_precursors)
   {
     Index index = MzPeak::open(source);
     Spectra spectra = index.spectra();
-    for (std::size_t i = 0; i < spectra.size(); ++i) ref.push_back(to_spectrum_data(spectra[i]));
+    for (std::size_t i = 0; i < spectra.size(); ++i)
+      ref.push_back(to_spectrum_data(spectra[i]));
   }
   std::size_t ions = 0;
   for (const auto& s : ref)
-    for (const auto& p : s.precursors) ions += p.selected_ions.size();
+    for (const auto& p : s.precursors)
+      ions += p.selected_ions.size();
   BOOST_TEST_REQUIRE(ions > 0u);
 
   TempDir dir;
@@ -233,13 +236,18 @@ BOOST_AUTO_TEST_CASE(reader_writer_reader_preserves_precursors)
     for (std::size_t k = 0; k < got.size(); ++k) {
       const auto& want = ref[i].precursors[k];
       BOOST_TEST((got[k].isolation_window.target_mz == want.isolation_target_mz));
-      BOOST_TEST((got[k].isolation_window.lower_offset == want.isolation_lower_offset));
-      BOOST_TEST((got[k].isolation_window.upper_offset == want.isolation_upper_offset));
+      BOOST_TEST(
+          (got[k].isolation_window.lower_offset == want.isolation_lower_offset));
+      BOOST_TEST(
+          (got[k].isolation_window.upper_offset == want.isolation_upper_offset));
       BOOST_TEST_REQUIRE(got[k].selected_ions.size() == want.selected_ions.size());
       for (std::size_t j = 0; j < want.selected_ions.size(); ++j) {
-        BOOST_TEST((got[k].selected_ions[j].selected_ion_mz == want.selected_ions[j].mz));
-        BOOST_TEST((got[k].selected_ions[j].charge_state == want.selected_ions[j].charge));
-        BOOST_TEST((got[k].selected_ions[j].intensity == want.selected_ions[j].intensity));
+        BOOST_TEST(
+            (got[k].selected_ions[j].selected_ion_mz == want.selected_ions[j].mz));
+        BOOST_TEST(
+            (got[k].selected_ions[j].charge_state == want.selected_ions[j].charge));
+        BOOST_TEST(
+            (got[k].selected_ions[j].intensity == want.selected_ions[j].intensity));
       }
     }
   }
@@ -353,4 +361,61 @@ BOOST_AUTO_TEST_CASE(reader_writer_reader_preserves_spectra)
                  boost::test_tools::tolerance(1e-6f));
     }
   }
+}
+
+/******************************************************************************/
+// Writer changes taken over from the copy vendored in OpenMS (OpenMS#10771):
+// stable order of equal m/z, scan-level ion mobility.
+BOOST_AUTO_TEST_CASE(openms_backport_round_trip)
+{
+  std::vector<MzPeak::SpectrumData> in(2);
+  // Equal m/z keep the caller's order (the sort is stable): two interleaved
+  // m/z values, numbered by the intensity in the order given.
+  constexpr int kPoints = 200;
+  for (int k = 0; k < kPoints; ++k) {
+    in[0].mz.push_back(k % 2 == 0 ? 600.0 : 500.0);
+    in[0].intensity.push_back(static_cast<float>(k));
+  }
+  in[1].mz = {200.0};
+  in[1].intensity = {1.0f};
+  in[1].ion_mobility = 0.85;
+  in[1].ion_mobility_type = "MS:1002815";
+
+  TempDir dir;
+  write_spectra_directory(dir.path, in);
+  MzPeak::Index index = MzPeak::open(dir.path.string());
+  MzPeak::Spectra spectra = index.spectra();
+  BOOST_TEST_REQUIRE(spectra.size() == in.size());
+
+  auto s0 = spectra[0];
+  const auto& intensity = s0.intensity();
+  BOOST_TEST_REQUIRE(intensity.size() == std::size_t(kPoints));
+  for (int k = 0; k < kPoints / 2; ++k) {
+    BOOST_TEST(intensity[k] == static_cast<float>(2 * k + 1));           // the 500s
+    BOOST_TEST(intensity[kPoints / 2 + k] == static_cast<float>(2 * k)); // the 600s
+  }
+
+  auto s1 = spectra[1];
+  BOOST_TEST((s1.ion_mobility() == std::optional<double>(0.85)));
+  BOOST_TEST((s1.ion_mobility_type() == std::optional<std::string>("MS:1002815")));
+}
+
+/******************************************************************************/
+// A run whose spectra all have no points still reports them (the streaming
+// writer wrote no signal table, through which the reader finds the spectra).
+BOOST_AUTO_TEST_CASE(run_without_points_reports_its_spectra)
+{
+  TempDir dir;
+  fs::create_directories(dir.path);
+  const fs::path zip = dir.path / "empty.mzpeak";
+  {
+    MzPeak::RunArchiveWriter writer(zip);
+    for (int k = 0; k < 3; ++k)
+      writer.add(MzPeak::SpectrumData{});
+    writer.finish();
+  }
+  MzPeak::Index index = MzPeak::open(zip.string());
+  MzPeak::Spectra spectra = index.spectra();
+  BOOST_TEST_REQUIRE(spectra.size() == 3u);
+  BOOST_TEST(spectra[2].mz().empty());
 }
