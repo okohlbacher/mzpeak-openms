@@ -160,8 +160,10 @@ bool entity_index_is_ascending(const arrow::Table& table)
     values = std::static_pointer_cast<arrow::StructArray>(values)->field(0);
   }
 
-  auto index = std::dynamic_pointer_cast<arrow::UInt64Array>(values);
-  if (!index) return false;
+  // (by the type id: UInt64Array is a template instance, whose type_info can differ
+  // between the images of a process; OpenMS#10771)
+  if (values->type_id() != arrow::Type::UINT64) return false;
+  auto index = std::static_pointer_cast<arrow::UInt64Array>(values);
   if (index->null_count() != 0) return false; // nulls_first=false would be a lie
 
   for (int64_t i = 1; i < index->length(); ++i) {
@@ -517,6 +519,8 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
 {
   std::vector<uint64_t> source_index, scan_index;
   std::vector<std::optional<double>> scan_start_time;
+  std::vector<std::optional<double>> ion_mobility_value;
+  std::vector<std::optional<std::string>> ion_mobility_type;
   for (const auto& r : rows) {
     source_index.push_back(r.index);
     scan_index.push_back(0);
@@ -524,16 +528,26 @@ std::shared_ptr<arrow::Table> scans_table(const std::vector<SpectrumMetaRow>& ro
                                   // Seconds -> minutes, as for `time` above.
                                   ? std::optional<double>(*r.retention_time / 60.0)
                                   : std::nullopt);
+    ion_mobility_value.push_back(r.ion_mobility);
+    ion_mobility_type.push_back(r.ion_mobility_type);
   }
+  // ion_mobility_value / ion_mobility_type: the scan-level ion mobility columns the
+  // reader joins by source_index (OpenMS addition; the reference reader ignores
+  // columns it does not know).
   auto schema(arrow::schema({
       arrow::field("source_index", arrow::uint64(), true),
       arrow::field("scan_index", arrow::uint64(), true),
       arrow::field("scan_start_time", arrow::float64(), true),
+      arrow::field("ion_mobility_value", arrow::float64(), true),
+      arrow::field("ion_mobility_type", arrow::utf8(), true),
   }));
   return arrow::Table::Make(
-      schema, {build_array<arrow::UInt64Builder>(source_index),
-               build_array<arrow::UInt64Builder>(scan_index),
-               build_optional_array<arrow::DoubleBuilder>(scan_start_time)});
+      schema,
+      {build_array<arrow::UInt64Builder>(source_index),
+       build_array<arrow::UInt64Builder>(scan_index),
+       build_optional_array<arrow::DoubleBuilder>(scan_start_time),
+       build_optional_array<arrow::DoubleBuilder>(ion_mobility_value),
+       build_optional_string_array<arrow::StringBuilder>(ion_mobility_type)});
 }
 
 /// Precursor facet: one row per (spectrum, precursor).  Column names are the

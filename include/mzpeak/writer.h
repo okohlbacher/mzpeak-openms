@@ -76,6 +76,16 @@ struct SpectrumData {
   /// selected-ion facets, keyed by this spectrum's index and the precursor's
   /// position here, which is how the reader joins them back.
   std::vector<PrecursorData> precursors;
+
+  /// Optional ion mobility of the whole spectrum (scan level; e.g. a timsTOF frame's
+  /// 1/K0 or a FAIMS compensation voltage), with the CV accession of its kind
+  /// ("MS:1002815" inverse reduced ion mobility, "MS:1002476" ion mobility drift
+  /// time, "MS:1001581" FAIMS compensation voltage). Written to the scans facet as
+  /// ion_mobility_value / ion_mobility_type, where the reader finds it
+  /// (Spectrum::ion_mobility(), ion_mobility_type()). (OpenMS addition; last, so
+  /// that positional initialisers of the members above keep their meaning.)
+  std::optional<double> ion_mobility;
+  std::optional<std::string> ion_mobility_type;
 };
 
 /**

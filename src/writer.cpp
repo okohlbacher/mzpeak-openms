@@ -16,6 +16,10 @@ directory of this repository.
 #include <numeric>
 #include <string>
 #include <zip.h>
+#ifndef ZIP_LENGTH_TO_END // libzip < 1.10.1: a length of -1 (or 0) reads the file to
+                          // its end as well
+#define ZIP_LENGTH_TO_END -1
+#endif
 
 #include "mzpeak/exception.h"
 #include "mzpeak/schema/data_kind.h"
@@ -77,7 +81,10 @@ PointColumns flatten(const std::vector<SpectrumData>& spectra, bool want_centroi
 
     std::vector<std::size_t> order(s.mz.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(
+    // stable: points of equal m/z keep the order the caller gave (OpenMS change; an
+    // unstable sort permuted them, which changed what a consumer that merges or
+    // deisotopes neighbouring peaks made of the spectrum)
+    std::ranges::stable_sort(
         order, [&](std::size_t a, std::size_t b) { return s.mz[a] < s.mz[b]; });
 
     for (std::size_t k : order) {
@@ -207,7 +214,9 @@ Util::SpectrumMetaRow metadata_row(std::size_t i, const SpectrumData& s)
           /*number_of_data_points=*/s.centroid ? uint64_t{0} : s.mz.size(),
           /*number_of_peaks=*/s.centroid ? s.mz.size() : uint64_t{0},
           /*representation=*/s.centroid ? "MS:1000127" : "MS:1000128",
-          /*precursors=*/s.precursors};
+          /*precursors=*/s.precursors,
+          /*ion_mobility=*/s.ion_mobility,
+          /*ion_mobility_type=*/s.ion_mobility_type};
 }
 
 std::vector<Util::SpectrumMetaRow>
@@ -361,8 +370,9 @@ std::vector<std::size_t> ascending_order(const std::vector<Axis>& axis)
 {
   std::vector<std::size_t> order(axis.size());
   std::iota(order.begin(), order.end(), std::size_t{0});
-  std::ranges::sort(order,
-                    [&](std::size_t a, std::size_t b) { return axis[a] < axis[b]; });
+  std::ranges::stable_sort(
+      order, // stable: equal coordinates keep their order (OpenMS change)
+      [&](std::size_t a, std::size_t b) { return axis[a] < axis[b]; });
   return order;
 }
 
@@ -1070,8 +1080,10 @@ void RunArchiveWriter::add(SpectrumData s)
   Impl::Stream& stream = s.centroid ? impl_->peaks : impl_->data;
   std::vector<std::size_t> order(s.mz.size());
   std::iota(order.begin(), order.end(), std::size_t{0});
-  std::ranges::sort(order,
-                    [&](std::size_t a, std::size_t b) { return s.mz[a] < s.mz[b]; });
+  // stable: points of equal m/z keep the caller's order (OpenMS change, see
+  // flatten())
+  std::ranges::stable_sort(
+      order, [&](std::size_t a, std::size_t b) { return s.mz[a] < s.mz[b]; });
   PointColumns& p = stream.pending;
   for (std::size_t k : order) {
     p.spectrum_index.push_back(static_cast<uint64_t>(index));
@@ -1100,6 +1112,13 @@ void RunArchiveWriter::finish()
   im.flush(im.peaks);
 
   const std::size_t total = im.rows.size();
+  // A run with spectra but no points at all gets an empty peaks table: the reader
+  // locates the spectra through a signal table and would report none without one
+  // (OpenMS change).
+  if (!im.rows.empty() && !im.data.table && !im.peaks.table) {
+    im.peaks.table =
+        std::make_unique<Util::PointTableStream>(im.peaks.path.string());
+  }
   const bool with_data = im.data.table != nullptr;
   const bool with_peaks = im.peaks.table != nullptr;
   if (with_data) im.data.table->close(point_file_kv(total, im.data.points));

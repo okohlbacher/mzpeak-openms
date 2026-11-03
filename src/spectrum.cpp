@@ -54,7 +54,8 @@ void decode_spectrum(const std::shared_ptr<Data::Signals>& signals,
                      const ImsCalibration& ims,
                      std::vector<double>& mz,
                      std::vector<float>& intensity,
-                     std::vector<double>& mobility)
+                     std::vector<double>& mobility,
+                     std::optional<Schema::PSI::ArrayType>* mobility_type)
 {
   // The delta model comes from the already-cached metadata map.  It used to be
   // re-queried per spectrum through Metadata::Spectrum, which needs a
@@ -116,6 +117,7 @@ void decode_spectrum(const std::shared_ptr<Data::Signals>& signals,
       if (mobility_dim == nullptr) {
         decoder.decimal(dim, mobility);
         mobility_dim = &dim;
+        if (mobility_type != nullptr) *mobility_type = dim.array_type;
       } else if (dim.array_type == mobility_dim->array_type) {
         // The SAME mobility array in a second physical type: its rows are
         // split between the two, so keeping one would drop the other's.
@@ -224,6 +226,7 @@ void Spectrum::decode_() const
     peaks_->mz.clear();
     peaks_->intensity.clear();
     peaks_->mobility.clear();
+    peaks_->mobility_type.reset();
 
     // The signal-file read for this spectrum happens here (not at
     // construction) so a metadata-only pass never touches the peak data.
@@ -231,7 +234,8 @@ void Spectrum::decode_() const
         signals_->select(dims_, signals_->index().eq(index_));
 
     Detail::decode_spectrum(signals_, dims_, std::move(slice), index_, metadata(),
-                            ims_, peaks_->mz, peaks_->intensity, peaks_->mobility);
+                            ims_, peaks_->mz, peaks_->intensity, peaks_->mobility,
+                            &peaks_->mobility_type);
   });
 }
 
@@ -254,6 +258,12 @@ const std::vector<double>& Spectrum::ion_mobility_array() const
 {
   decode_();
   return peaks_->mobility;
+}
+
+std::optional<Schema::PSI::ArrayType> Spectrum::ion_mobility_array_type() const
+{
+  decode_();
+  return peaks_->mobility_type;
 }
 
 /******************************************************************************/

@@ -133,6 +133,9 @@ struct SpectrumMetaRow {
   std::string representation;
   /// Precursors, written to the precursor and selected-ion facets.
   std::vector<PrecursorData> precursors;
+  /// Scan-level ion mobility (OpenMS addition, see SpectrumData).
+  std::optional<double> ion_mobility;
+  std::optional<std::string> ion_mobility_type;
 };
 
 /**
